@@ -24,6 +24,10 @@ import { DB } from './database.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
+// Blocker fix (step 6): WriteDataSource is used at createReceipt/updateReceipt/deleteReceipt
+// but was never imported → ReferenceError on every receipt save.
+import { WriteDataSource } from './services/writeDataSource.js';
+import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
 import { Money } from './money.js';
 import { RECEIPT_PAYOUT_STATUS, normalizePayoutStatus, transitionReceiptState } from './constants/payoutStatus.js';
@@ -161,43 +165,49 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
 }
 
 function _buildLedgerOpsForReceipt(receipt, receiptRows, username) {
-  const ops = [];
+  const commands = [];
 
-  // Receipt due ledger entry (net_due)
-  if (receipt.net_due !== 0) {
-    ops.push({
-      type: 'Add',
-      aggregate: 'Ledger',
-      id: _uuid(),
-      payload: {
-        username,
-        owner_id: receipt.client_id,
-        owner_name: receipt.client_name || null,
-        client_id: receipt.client_id,
-        client_type: receipt.client_type,
-        client_name: receipt.client_name || null,
-        vehicle_owner_id: null,
-        vehicle_owner_name: null,
-        vehicle_id: null,
-        vehicle_plate: null,
-        type: 'receipt_due',
-        amount: receipt.net_due,
-        reference_type: 'receipt',
-        reference_id: receipt.id,
-        date: receipt.receipt_date,
-        applied_at: DateUtils.nowLocal(),
-        is_reversed: false,
-        note: `Receipt ${receipt.receipt_number || receipt.id} — net due`,
-      },
-      meta: { username }
-    });
+  // Receipt due ledger entry (net_due, cents). The receipt argument must be
+  // the full persistence record (header + totals) — callers pass it after
+  // assembly, so net_due is always a number (previously read off the bare
+  // header entity → `undefined !== 0` fired commands with amount: undefined).
+  const netDue = Number(receipt.net_due) || 0;
+  if (netDue !== 0) {
+    commands.push(createPersistenceCommand(
+      PersistenceCommandType.ADD,
+      'Ledger',
+      _uuid(),
+      {
+        payload: {
+          username,
+          owner_id: receipt.client_id,
+          owner_name: receipt.client_name || null,
+          client_id: receipt.client_id,
+          client_type: receipt.client_type,
+          client_name: receipt.client_name || null,
+          vehicle_owner_id: null,
+          vehicle_owner_name: null,
+          vehicle_id: null,
+          vehicle_plate: null,
+          type: 'receipt_due',
+          amount: netDue,
+          reference_type: 'receipt',
+          reference_id: receipt.id,
+          date: receipt.receipt_date,
+          applied_at: DateUtils.nowLocal(),
+          is_reversed: false,
+          note: `Receipt ${receipt.receipt_number || receipt.id} — net due`,
+        },
+        meta: { username }
+      }
+    ));
   }
 
   // Company ledger synchronization (from ReceiptRows)
   const offices = {}; // In real implementation, this would come from repository or cache
   // For now, we skip complex company logic to keep the remediation focused
 
-  return ops;
+  return commands;
 }
 
 async function _getExistingReceiptRows(receiptId, tx) {
@@ -305,9 +315,11 @@ function _validate(data) {
 }
 
 // ─── PRIVATE: BUILD REVERSE OPS ───────────────────────────────────────────────
+// Emits PersistenceCommands (not raw DB ops) — WriteDataSource only accepts
+// the canonical command shape. Reverse = soft-flag update (audit trail kept).
 
 async function _buildReverseOps(referenceId, username, tx = DB) {
-  const ops = [];
+  const commands = [];
   const now = DateUtils.nowLocal();
   const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
 
@@ -315,17 +327,23 @@ async function _buildReverseOps(referenceId, username, tx = DB) {
   for (const entry of treasuryEntries) {
     if (entry.reference_type !== REF_TYPE && entry.reference_type !== 'receipt_row') continue;
     if (entry.is_reversed === true) continue;
-    ops.push({ op: 'update', store: STORE.TREASURY, id: entry.id, patch: reversePatch });
+    commands.push(createPersistenceCommand(
+      PersistenceCommandType.UPDATE, 'Treasury', entry.id,
+      { patch: reversePatch, meta: { username } }
+    ));
   }
 
   const ledgerEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', referenceId);
   for (const entry of ledgerEntries) {
     if (entry.reference_type !== REF_TYPE && entry.reference_type !== 'receipt_row') continue;
     if (entry.is_reversed === true) continue;
-    ops.push({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch });
+    commands.push(createPersistenceCommand(
+      PersistenceCommandType.UPDATE, 'Ledger', entry.id,
+      { patch: reversePatch, meta: { username } }
+    ));
   }
 
-  return ops;
+  return commands;
 }
 
 // ─── PRIVATE: DUPLICATE GUARD ─────────────────────────────────────────────────
@@ -526,11 +544,9 @@ async function createReceipt(username, data, extraOps = []) {
   // Build ReceiptRow entities
   const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId);
 
-  // Build ledger operations from ReceiptRow entities
-  const ledgerCommands = _buildLedgerOpsForReceipt(receiptHeader, receiptRows, username);
-
-  // Prepare PersistenceCommands via ReceiptRepository
-  const receiptCommand = ReceiptRepository.prepareReceiptOperation({
+  // Assemble the full persistence record ONCE — ledger command generation
+  // consumes net_due/totals from this exact object.
+  const receiptRecord = {
     ...receiptHeader,
     payout_status,
     total: clean.total,
@@ -542,7 +558,13 @@ async function createReceipt(username, data, extraOps = []) {
     net_total: clean.net_total,
     notes: data.notes ?? null,
     shipping_number: data.shipping_number ?? null,
-  }, { username });
+  };
+
+  // Build ledger operations from the full receipt record
+  const ledgerCommands = _buildLedgerOpsForReceipt(receiptRecord, receiptRows, username);
+
+  // Prepare PersistenceCommands via ReceiptRepository (Add)
+  const receiptCommand = ReceiptRepository.prepareReceiptOperation(receiptRecord, { username });
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
 
@@ -580,19 +602,12 @@ async function updateReceipt(username, id, data, extraOps = []) {
   // Build updated ReceiptRow entities
   const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
 
-  // Retrieve existing ReceiptRows
-  const existingReceiptRows = await _getExistingReceiptRows(id, null);
-
-  // Generate reverse operations for previous ledger entries
-  const reverseCommands = await _buildReverseOps(id, username, null);
-
-  // Generate new ledger operations from new ReceiptRows
-  const newLedgerCommands = _buildLedgerOpsForReceipt(receiptHeader, newReceiptRows, username);
-
-  // Prepare PersistenceCommands via ReceiptRepository
-  const receiptCommand = ReceiptRepository.prepareReceiptOperation({
+  // Assemble the full persistence record ONCE (Update semantics:
+  // payout_status/notes/shipping_number are only patched when provided,
+  // so an omitted payout_status never wipes the stored one).
+  const receiptRecord = {
     ...receiptHeader,
-    payout_status: payout_status ?? undefined,
+    ...(payout_status !== null ? { payout_status } : {}),
     total: clean.total,
     paid: clean.paid,
     previous_balance: clean.previous_balance,
@@ -602,13 +617,37 @@ async function updateReceipt(username, id, data, extraOps = []) {
     net_total: clean.net_total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
     ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),
-  }, { username });
+  };
+
+  // Retrieve existing ReceiptRows (they must be REPLACED, not appended —
+  // new row entities get fresh row_ids on every edit, so failing to delete
+  // the old set would duplicate every karta in receipt_rows).
+  const existingReceiptRows = await _getExistingReceiptRows(id);
+
+  // Generate reverse operations for previous ledger entries
+  const reverseCommands = await _buildReverseOps(id, username);
+
+  // Generate new ledger operations from the full receipt record
+  const newLedgerCommands = _buildLedgerOpsForReceipt(receiptRecord, newReceiptRows, username);
+
+  // Prepare PersistenceCommands via ReceiptRepository
+  const receiptCommand = ReceiptRepository.prepareReceiptOperation(
+    receiptRecord, { username }, PersistenceCommandType.UPDATE
+  );
+
+  const deleteRowCommands = existingReceiptRows.map(row =>
+    ReceiptRepository.prepareReceiptRowOperations(
+      [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
+    )[0]
+  );
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
 
-  // Combine all commands
+  // Combine all commands: header update → delete old rows → add new rows →
+  // reverse old ledger entries → apply new ledger entries.
   const allCommands = [
     receiptCommand,
+    ...deleteRowCommands,
     ...receiptRowCommands,
     ...reverseCommands,
     ...newLedgerCommands,
@@ -618,8 +657,8 @@ async function updateReceipt(username, id, data, extraOps = []) {
   // Execute through WriteDataSource
   const results = await WriteDataSource.execute(allCommands, { username });
 
-  const receipt = Money.decimalizeRecord(results[results.length - 1]); // Last result is the updated receipt
-  const applyResults = results;
+  const receipt = Money.decimalizeRecord(results[0]); // First command is the header update
+  const applyResults = results.slice(1);
   const { treasury, ledger_deposit, ledger_withdraw, ledger_due } = _parseApplyResults(applyResults);
 
   return {
@@ -638,35 +677,37 @@ async function deleteReceipt(username, id, extraOps = []) {
   if (!id)       throw new Error('[FinancialService:delete] id is required.');
 
   // Generate reverse ledger operations using the normalized model
-  const reverseLedgerCommands = await _buildReverseOps(id, username, null);
+  const reverseLedgerCommands = await _buildReverseOps(id, username);
 
-  // Prepare delete command for Receipt via ReceiptRepository
+  // Prepare delete command for Receipt via ReceiptRepository (Delete carries id only)
   const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
     { id },
-    { username, operation: 'delete' }
+    { username },
+    PersistenceCommandType.DELETE
   );
 
-  // Prepare delete commands for ReceiptRows (if needed)
-  const existingRows = await _getExistingReceiptRows(id, null);
+  // Prepare delete commands for ReceiptRows
+  const existingRows = await _getExistingReceiptRows(id);
   const receiptRowDeleteCommands = existingRows.map(row =>
-    ReceiptRepository.prepareReceiptRowOperations([{ row_id: row.row_id }], { username, operation: 'delete' })[0]
+    ReceiptRepository.prepareReceiptRowOperations(
+      [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
+    )[0]
   );
 
-  // Combine all commands
+  // Combine all commands: reverse financial effects → delete rows → delete header
   const allCommands = [
     ...reverseLedgerCommands,
-    receiptDeleteCommand,
     ...receiptRowDeleteCommands,
+    receiptDeleteCommand,
     ...extraOps
   ];
 
   // Execute through WriteDataSource
-  const results = await WriteDataSource.execute(allCommands, { username });
-
-  const receipt = Money.decimalizeRecord(results[results.length - 1]);
+  await WriteDataSource.execute(allCommands, { username });
 
   return {
-    receipt,
+    id,
+    deleted: true,
     reversed: {
       treasury_count: reverseLedgerCommands.filter(c => c.aggregate === 'Treasury').length,
       ledger_count: reverseLedgerCommands.filter(c => c.aggregate === 'Ledger').length,

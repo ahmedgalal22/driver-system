@@ -10,9 +10,7 @@ import { printHTML } from './printEngine.js';
 import { ExcelService } from './excelService.js';
 import { DateUtils } from './dateUtils.js';
 import { ClientRepository } from './services/clientRepository.js';
-import { DBProvider } from './services/dbProvider.js';
-import { ReceiptRepository } from './services/receiptRepository.js';
-import { TreasuryRepository } from './services/treasuryRepository.js';
+import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 
 
 // ========================================
@@ -695,16 +693,24 @@ function _sortByPriority(list) {
 }
 
 async function _getUnpaidKartaCount(clientId) {
-  const allReceipts = await ReceiptRepository.getAll(_currentUsername());
-  let count = 0;
-  for (const r of allReceipts) {
-    if (r.deleted_at !== null) continue;
-    if (String(r.client_id) !== String(clientId)) continue;
-    if (String(r.payout_status || 'unpaid') !== 'unpaid') continue;
-    const rows = Array.isArray(r.rows) ? r.rows : [];
-    count += rows.filter(row => row._type !== 'separator').length;
-  }
-  return count;
+  // Normalized read path (Step 6): persisted receipts never embed rows.
+  // Headers come from the client-scoped read-repository query; rows are
+  // loaded per receipt via ReceiptReadRepository. DB.findByFields excludes
+  // soft-deleted records by default (deleted guard is therefore implicit).
+  const clientReceipts = await ReceiptReadRepository.getReceiptsByClient(clientId);
+  const unpaid = (clientReceipts || []).filter(
+    r => String(r.payout_status || 'unpaid') === 'unpaid'
+  );
+  const rowLists = await Promise.all(
+    unpaid.map(r => ReceiptReadRepository.getReceiptRowsByReceipt(r.id))
+  );
+  // NOTE: the frozen ReceiptRow contract persists data rows only (no
+  // separators), so each persisted row counts as one karta; the row_type
+  // guard is forward-compatible if separators ever become persisted.
+  return rowLists.reduce(
+    (sum, rows) => sum + (rows || []).filter(row => row && row.row_type !== 'separator').length,
+    0
+  );
 }
 
 function _buildClientRow(client, kartaCount, kind) {

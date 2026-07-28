@@ -3,7 +3,6 @@
  * Internal structure: Constants → State → Services → Helpers → Rendering → Events → Public API → Boot
  */
 
-import { DB } from './database.js';
 import { FinancialService } from './financial.js';
 import { OfficesService } from './offices.js';
 import { AuthModule } from './auth.js';
@@ -68,13 +67,15 @@ function _validate(rawData) {
     throw new Error('[ReceiptsModule] receipt_date is required and must be a valid date.');
   }
 
-  const receiptData = await ReceiptReadRepository.getReceiptWithRows(rawData.id || rawData.receipt_id);
-
-  if (!receiptData || !Array.isArray(receiptData.rows) || receiptData.rows.length === 0) {
+  // Transient write-payload validation: rows arrive embedded in `rawData`
+  // from the UI form. Persisted storage is NOT consulted here — this
+  // function validates the incoming payload only (the FinancialService
+  // layer revalidates independently per the step-2.2 validation split).
+  if (!Array.isArray(rawData.rows) || rawData.rows.length === 0) {
     throw new Error('[ReceiptsModule] rows must be a non-empty array.');
   }
 
-  const dataRows = receiptData.rows.filter(r => r._type !== ROW_TYPES.SEPARATOR);
+  const dataRows = rawData.rows.filter(r => r._type !== ROW_TYPES.SEPARATOR);
   if (dataRows.length === 0) {
     throw new Error('[ReceiptsModule] At least one data row is required.');
   }
@@ -218,6 +219,61 @@ function _normalize(rawData) {
 
 // ─── SERVICE PAYLOAD ──────────────────────────────────────────────────────────
 
+// ── ROW FIELD-VOCABULARY BRIDGE (UI ⇄ persisted ReceiptRow) ─────────────────
+// The frozen persisted ReceiptRow contract (FinancialService._buildReceiptRowEntities)
+// stores exactly:
+//   { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate,
+//     driver_price(cents), loading, destination, office,
+//     advance(cents), net(cents), sarf(cents) }
+// The UI form speaks a different vocabulary (noloon / ohda / taktik, plus
+// columns with NO persisted slot: kartano, date, data(driver name), weight,
+// weight2, deficit, weightTotal, type, officeAmount, discount, add, separators).
+// These two helpers are the ONLY place the two vocabularies are bridged — at
+// the UI boundary. Nothing here recreates an embedded receipt.rows model:
+//   - writes bridge the transient form payload into the service contract;
+//   - reads bridge ReceiptReadRepository results back into the form.
+
+/** Transient UI row → service-command row (write boundary, in-memory only). */
+function _uiRowToPersistedShape(row) {
+  if (row._type === ROW_TYPES.SEPARATOR) return row; // separators are UI-local
+  return {
+    ...row,
+    driver_id   : row.driver_id ?? null,
+    driver_price: Number(row.noloon) || 0,   // نولون  → driver_price
+    advance     : Number(row.ohda)   || 0,   // عهدة   → advance
+    destination : row.taktik ?? null,        // الجهة  → destination
+  };
+}
+
+/**
+ * Persisted ReceiptRow → transient UI field values (read boundary).
+ * Money is converted cents → decimal. Columns with no persisted slot are
+ * returned blank — the form recalculates derived cells (weightTotal, net)
+ * from inputs; un-persisted columns cannot be restored (see step-6 report).
+ */
+function _persistedRowToUiShape(row, driverName = '') {
+  return {
+    kartano     : '',                             // not persisted
+    date        : '',                             // not persisted
+    data        : driverName || '',               // resolved via driver_id
+    car         : row.vehicle_plate || '',
+    weight      : '',                             // not persisted
+    weight2     : '',                             // not persisted
+    deficit     : '',                             // not persisted
+    office      : row.office      || '',
+    loading     : row.loading     || '',
+    taktik      : row.destination || '',          // destination → الجهة
+    type        : '',                             // not persisted
+    noloon      : Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
+    ohda        : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
+    officeAmount: '',                             // not persisted
+    discount    : '',                             // not persisted
+    add         : '',                             // not persisted
+    sarf        : Money.toDecimal(row.sarf ?? 0),
+    net         : Money.toDecimal(row.net  ?? 0),
+  };
+}
+
 function _buildServicePayload(n) {
   const firstDataRow = n.rows.find(r => r._type !== ROW_TYPES.SEPARATOR) || null;
   return {
@@ -236,7 +292,7 @@ function _buildServicePayload(n) {
     shipping_number: null,
     vehicle_id       : n.vehicle_id || firstDataRow?.vehicle_id || null,
     account_type     : n.account_type,
-    rows             : n.rows,
+    rows             : n.rows.map(_uiRowToPersistedShape), // bridge to persisted vocabulary
     row_count        : n.row_count,
     total            : n.total,
     general_discount : n.general_discount,
@@ -439,15 +495,32 @@ async function getNextReceiptNumber(username = null) {
   return allocateReceiptNumber(username);
 }
 
-async function getReceiptByNumber(receipt_number) {
-  if (!receipt_number) return null;
-  const receipts = await ReceiptRepository.findByFields({ receipt_number });
-  const receipt = receipts[0];
+/**
+ * Look up a persisted receipt by its receipt_number and return it with its rows.
+ *
+ * Read contract: returns `{ receipt, rows }` (same shape as
+ * ReceiptReadRepository.getReceiptWithRows) — rows are NEVER embedded on the
+ * receipt header object itself.
+ *
+ * Implementation note: the frozen repository surface exposes no by-number
+ * lookup, so the header is located via ReceiptRepository.getAll() and its
+ * rows are then loaded through ReceiptReadRepository (the normalized read
+ * path). This is the only receipts-module read of `receipts` that does not
+ * go through ReceiptReadRepository — documented as a frozen-API gap.
+ */
+async function getReceiptByNumber(receipt_number, username = null) {
+  if (receipt_number == null || String(receipt_number).trim() === '') return null;
+  const owner  = username || _currentUsername();
+  const wanted = String(receipt_number).trim();
+
+  const all     = await ReceiptRepository.getAll(owner);
+  const receipt = (all || []).find(
+    r => String(r?.receipt_number ?? '').trim() === wanted
+  ) || null;
   if (!receipt) return null;
 
   // Load ReceiptRows through the normalized read path
-  const receiptWithRows = await ReceiptReadRepository.getReceiptWithRows(receipt.id);
-  return receiptWithRows || receipt;
+  return ReceiptReadRepository.getReceiptWithRows(receipt.id);
 }
 
 async function getDrivers(username) {
@@ -505,9 +578,15 @@ async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
 
   let dataRows = rawData.rows;
   if (!Array.isArray(dataRows) || dataRows.length === 0) {
-    // Fallback to normalized read path if rows are not in the input
-    const receiptWithRows = await ReceiptReadRepository.getReceiptWithRows(rawData.id || rawData.receipt_id);
-    dataRows = receiptWithRows?.rows || [];
+    // Fallback: rows not supplied on the (transient) input → load the persisted
+    // ReceiptRows through the normalized read path and bridge their vocabulary.
+    // NOTE: under the frozen ReceiptRow contract, officeAmount and item type
+    // are not persisted, so the fallback yields office_amount 0 / item_type null.
+    const receiptId = rawData.id || rawData.receipt_id;
+    const receiptWithRows = receiptId
+      ? await ReceiptReadRepository.getReceiptWithRows(receiptId)
+      : null;
+    dataRows = (receiptWithRows?.rows || []).map(r => _persistedRowToUiShape(r));
   }
 
   const filteredRows = dataRows.filter(
@@ -2639,13 +2718,18 @@ async function validateBeforeSave(rawData) {
   }
 
   // ── Karta duplicate check: across saved receipts ──
+  // Reads persisted ReceiptRows through the normalized read path (headers
+  // from getAll() never embed rows).
+  // NOTE: the frozen persisted ReceiptRow contract stores no `kartano`
+  // column, so `savedKartas` currently stays empty — the check activates
+  // automatically once the contract gains a karta-number field (see step-6 report).
   const allSavedReceipts = await ReceiptsModule.getAll(_currentUsername());
   const savedKartas = new Set();
   for (const receipt of allSavedReceipts) {
     if (ReceiptState.isEditing && receipt.id === ReceiptState.editingReceiptId) continue;
-    const rRows = Array.isArray(receipt.rows) ? receipt.rows : [];
-    for (const row of rRows) {
-      if (row._type === 'separator') continue;
+    const rRows = await ReceiptReadRepository.getReceiptRowsByReceipt(receipt.id);
+    for (const row of (rRows || [])) {
+      if (!row || row.row_type === 'separator') continue;
       const k = (row.kartano || '').trim();
       if (k) savedKartas.add(k);
     }
@@ -2704,9 +2788,12 @@ async function validateBeforeSave(rawData) {
   }
 
   // receipt_number uniqueness
+  // NOTE: the frozen persisted Receipt header does not store receipt_number,
+  // so this lookup currently always returns null — it activates automatically
+  // once the header contract gains receipt_number (see step-6 report).
   if (rawData.receipt_number) {
-    const existing = await ReceiptsModule.getReceiptByNumber(rawData.receipt_number);
-    if (existing && existing.id !== rawData.id) {
+    const existing = await ReceiptsModule.getReceiptByNumber(rawData.receipt_number, username);
+    if (existing?.receipt && existing.receipt.id !== rawData.id) {
       alert(`⚠️ رقم النموذج "${rawData.receipt_number}" مستخدم بالفعل. برجاء توليد رقم جديد.`);
       return false;
     }
@@ -3090,52 +3177,65 @@ async function loadReceiptForEdit(receiptData) {
   tbody.innerHTML   = '';
   receiptRowCounter = 0;
 
-  // Use normalized ReceiptRow data from ReceiptReadRepository
-  const receiptWithRows = await ReceiptReadRepository.getReceiptWithRows(receiptData.id || receiptData.receipt_id);
+  // Load persisted ReceiptRows via the normalized read path — the receipt
+  // header passed in is a raw `receipts` record and never embeds rows.
+  const receiptId     = receiptData.id || receiptData.receipt_id || null;
+  const receiptWithRows = receiptId
+    ? await ReceiptReadRepository.getReceiptWithRows(receiptId)
+    : null;
   const rows = receiptWithRows?.rows || [];
+
+  // Resolve driver display names for rows that carry a persisted driver_id.
+  // (The frozen write contract currently persists driver_id = null because the
+  // form collects a free-text driver name — see step-6 report — so this map is
+  // usually empty; it exists for contract-correct forward compatibility.)
+  const driverIds   = [...new Set(rows.map(r => r?.driver_id).filter(Boolean))];
+  const driverNames = new Map();
+  await Promise.all(driverIds.map(async (did) => {
+    try {
+      const d = await ClientRepository.getDriverById(did);
+      if (d) driverNames.set(did, d.name || '');
+    } catch (_) { /* non-critical — name left blank */ }
+  }));
+
+  // NOTE: the frozen ReceiptRow contract persists data rows only (no
+  // separators, no row_order), so no separator rendering happens here;
+  // persisted row order is the receipt_rows insertion order.
   rows.forEach(rowData => {
-    if (rowData._type === 'separator') {
-      const sepRow = document.createElement('tr');
-      sepRow.className = `${SEPARATOR_CLASS} table-sep-row`;
-      if (rowData.isAuto) sepRow.dataset.auto = '1';
-      sepRow.innerHTML = _separatorRowInnerHTML(
-        rowData.subtotal || 0,
-        rowData.vehicleName || '',
-        rowData.notes || ''
-      );
-      tbody.appendChild(sepRow);
-      return;
-    }
+    if (!rowData || rowData.row_type === 'separator') return;
 
     receiptRowCounter++;
     const tr = document.createElement('tr');
     tr.innerHTML = _buildRowHTML();
     tbody.appendChild(tr);
 
+    // Bridge persisted vocabulary (cents) → UI field values (decimals)
+    const ui = _persistedRowToUiShape(rowData, driverNames.get(rowData.driver_id));
+
     const setF = (cls, val) => { const el = tr.querySelector('.' + cls); if (el) el.value = val ?? ''; };
-    setF('receipt-kartano',       rowData.kartano      || '');
-    setF('receipt-date',          rowData.date         || '');
-    setF('receipt-data',          rowData.data         || '');
+    setF('receipt-kartano',       ui.kartano);
+    setF('receipt-date',          ui.date);
+    setF('receipt-data',          ui.data);
     // receipt-owner removed from table
-    setF('receipt-car',           rowData.vehicle_plate || rowData.car || '');
-    setF('receipt-weight',        rowData.weight ? Money.fmt(rowData.weight) : '');
-    setF('receipt-weight2',       rowData.weight2 ? Money.fmt(rowData.weight2) : '');
-    setF('receipt-deficit',       rowData.deficit ? Money.fmt(rowData.deficit) : '');
-    const wt = (parseFloat(rowData.weight) || 0)
-         + (parseFloat(rowData.weight2) || 0)
-         - (parseFloat(rowData.deficit) || 0);
-    setF('receipt-weight-total',  Money.fmt(wt));
-    setF('receipt-type',          rowData.type         || '');
-    setF('receipt-office',        rowData.office       || '');
-    setF('receipt-loading',       rowData.loading      || '');
-    setF('receipt-taktik',        rowData.taktik       || '');
-    setF('receipt-ohda',          rowData.ohda ? Money.fmt(rowData.ohda) : '');
-    setF('receipt-noloon',        rowData.noloon ? Money.fmt(rowData.noloon) : '');
-    setF('receipt-office-amount', rowData.officeAmount ? Money.fmt(rowData.officeAmount) : '');
-    setF('receipt-discount',      rowData.discount ? Money.fmt(rowData.discount) : '');
-    setF('receipt-sarf',          rowData.sarf ? Money.fmt(rowData.sarf) : '');
-    setF('receipt-add',           rowData.add ? Money.fmt(rowData.add) : '');
-    setF('receipt-net',           Money.fmt(rowData.net || 0));
+    setF('receipt-car',           ui.car);
+    setF('receipt-weight',        ui.weight);
+    setF('receipt-weight2',       ui.weight2);
+    setF('receipt-deficit',       ui.deficit);
+    const wt = (parseFloat(ui.weight) || 0)
+         + (parseFloat(ui.weight2) || 0)
+         - (parseFloat(ui.deficit) || 0);
+    setF('receipt-weight-total',  Math.abs(wt) > 0 ? Money.fmt(wt) : '');
+    setF('receipt-type',          ui.type);
+    setF('receipt-office',        ui.office);
+    setF('receipt-loading',       ui.loading);
+    setF('receipt-taktik',        ui.taktik);
+    setF('receipt-ohda',          ui.ohda   ? Money.fmt(ui.ohda)   : '');
+    setF('receipt-noloon',        ui.noloon ? Money.fmt(ui.noloon) : '');
+    setF('receipt-office-amount', ui.officeAmount);
+    setF('receipt-discount',      ui.discount);
+    setF('receipt-sarf',          ui.sarf ? Money.fmt(ui.sarf) : '');
+    setF('receipt-add',           ui.add);
+    setF('receipt-net',           Money.fmt(ui.net || 0));
 
     tr.dataset.calcAttached = '1';
     attachRowCalculation(tr);

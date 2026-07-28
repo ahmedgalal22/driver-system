@@ -7,11 +7,10 @@ import {
   renderReceiptSnapshotRowsHtml,
   DATA_COL_COUNT,
 } from './receipts.js';
-import { DB } from './database.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
 import { ExcelService } from './excelService.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
-import { DBProvider } from './services/dbProvider.js';
+import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 import { RECEIPT_PAYOUT_STATUS, getPayoutStatusMeta } from './constants/payoutStatus.js';
 import { DateUtils } from './dateUtils.js';
 
@@ -166,8 +165,71 @@ function normalizePersistedRow(row) {
   return row;
 }
 
+// ── Read-side row projection (Step 6 — normalized Receipt/ReceiptRow) ──
+// Persisted receipts and their rows live in SEPARATE stores (receipts /
+// receipt_rows). This page renders synchronously from STATE, so rows are
+// fetched once per data load through ReceiptReadRepository and projected
+// here, keyed by receipt id. Rows are NEVER attached onto receipt header
+// objects — there is no embedded receipt.rows anywhere in this module.
+const _receiptRowsProjection = new Map();
+
+/**
+ * Bridge one persisted ReceiptRow (frozen contract, money in CENTS:
+ * { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate, driver_price,
+ *   loading, destination, office, advance, net, sarf })
+ * into the read-side vocabulary this page renders/prints (money in DECIMALS).
+ * Mirrors the receipts.js read boundary. Columns with no persisted slot
+ * (kartano, date, driver name, weights, type, officeAmount, discount, add,
+ * separators) render blank — they cannot be restored until the contract
+ * is extended (see step-6 reports).
+ */
+function _persistedRowToPageRow(row) {
+  const destination = row.destination   || '';
+  const plate       = row.vehicle_plate || '';
+  return {
+    _type        : row.row_type === 'separator' ? 'separator' : 'data', // forward-compat
+    row_id       : row.row_id     ?? null,
+    receipt_id   : row.receipt_id ?? null,
+    driver_id    : row.driver_id  ?? null,
+    vehicle_id   : row.vehicle_id ?? null,
+    vehicle_plate: plate,
+    car          : plate,
+    office       : row.office  || '',
+    loading      : row.loading || '',
+    taktik       : destination,
+    direction    : destination,
+    // ── no persisted slot (blank until the contract gains them) ──
+    kartano: '', kartaNo: '', karta: '',
+    date: '', rowdate: '', data: '', driver: '',
+    owner_name: '', notes: '', type: '',
+    weight: '', weight2: '', deficit: '', weightTotal: '', weight_total: '',
+    discount: 0, officeAmount: 0, add: 0,
+    // ── money: cents → decimals ──
+    noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
+    ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
+    sarf  : Money.toDecimal(row.sarf ?? 0),
+    net   : Money.toDecimal(row.net  ?? 0),
+  };
+}
+
+async function _loadReceiptRowsProjection(receipts) {
+  _receiptRowsProjection.clear();
+  await Promise.all((receipts || []).map(async (rec) => {
+    const key = String(rec?.id ?? '');
+    try {
+      const rows = key
+        ? await ReceiptReadRepository.getReceiptRowsByReceipt(rec.id)
+        : [];
+      _receiptRowsProjection.set(key, (rows || []).map(_persistedRowToPageRow));
+    } catch (err) {
+      console.warn('[allReceipts] row projection failed for receipt', key, err);
+      _receiptRowsProjection.set(key, []);
+    }
+  }));
+}
+
 function getReceiptRows(record) {
-  const rows = Array.isArray(record?.rows) ? record.rows : [];
+  const rows = _receiptRowsProjection.get(String(record?.id ?? '')) || [];
   return rows.map(normalizePersistedRow);
 }
 
@@ -659,6 +721,9 @@ async function loadAllReceiptsData() {
   try {
     const receipts = await ReceiptsModule.getAll(username);
     STATE.receipts = receipts.slice();
+    // Step 6: preload the normalized ReceiptRows through ReceiptReadRepository
+    // (persisted receipts are headers only — rows live in receipt_rows).
+    await _loadReceiptRowsProjection(STATE.receipts);
     renderSummaryCards('receipts');
     renderLists();
     try {
@@ -1215,7 +1280,7 @@ function printSingleReceipt(record) {
     return;
   }
 
-  const rows = Array.isArray(record.rows) ? record.rows : [];
+  const rows = getReceiptRows(record);
   if (rows.length === 0) {
     console.error('[printSingleReceipt] record has no rows — cannot print.', { id: record.id });
     return;
