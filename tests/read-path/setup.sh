@@ -12,8 +12,8 @@ rm -rf "$W"; mkdir -p "$W/services" "$W/constants"
 
 # Real production modules (same layout contract as tests/write-path)
 cp "$ROOT"/{database.js,financial.js,money.js,dateUtils.js} "$W/"
-cp "$ROOT"/{dbProvider.js,writeDataSource.js,readDataSource.js,persistenceCommand.js,receiptRepository.js,receiptReadRepository.js,clientRepository.js,officeRepository.js,treasuryRepository.js,dashboardRepository.js,authRepository.js,driverKartaReadRepository.js,financialCalculator.js} "$W/services/"
-cp "$ROOT"/payoutStatus.js "$W/constants/"
+cp "$ROOT"/services/*.js "$W/services/"
+cp "$ROOT"/constants/payoutStatus.js "$W/constants/"
 
 # Real modified UI sources — read as TEXT for static assertions (never imported:
 # they carry browser-only dependencies)
