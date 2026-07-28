@@ -7,7 +7,7 @@ import { FinancialService } from './financial.js';
 import { AuthModule } from './auth.js';
 import { Money } from './money.js';
 import { DateUtils } from './dateUtils.js';
-import { calculateRowNet, calculateWeightTotal } from './services/financialCalculator.js';
+import { calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
@@ -18,7 +18,6 @@ import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 // ========================================
 
 const STORE = 'offices';
-const RECEIPTS_STORE = 'receipts';
 
 const _hamolaCache = new Map();
 
@@ -315,10 +314,9 @@ async function deleteHamolaRow(username, office_id, row_id) {
   return updated;
 }
 
-// _calcWeight and _calcReceiptNet replaced by financialCalculator imports.
-// Aliases kept for minimal call-site diff:
+// _calcWeight replaced by financialCalculator import.
+// Alias kept for minimal call-site diff:
 const _calcWeight = calculateWeightTotal;
-const _calcReceiptNet = calculateRowNet;
 
 
 function _resolveRange(filters) {

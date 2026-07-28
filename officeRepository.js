@@ -23,13 +23,4 @@ export const OfficeRepository = {
   async transaction(ops, meta) {
     return DBProvider.transaction(ops, meta);
   },
-
-
-  // ── Receipts (read-only from offices context) ───────────────────────────
-  async getReceipts(username) {
-    return DBProvider.findByFields('receipts', { username });
-  },
-  async getReceiptById(id) {
-    return DBProvider.get('receipts', id);
-  },
 };

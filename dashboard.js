@@ -4,7 +4,6 @@
  * and maintains an independent Primary Capital Treasury store in IndexedDB.
  */
 
-import { DB } from './database.js';
 import { Money } from './money.js';
 import { AuthModule } from './auth.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
@@ -26,9 +25,6 @@ const DOMAIN_EVENT = Object.freeze({
 
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
-const STORE_MAIN_CAPITAL = 'mainCapitalTreasury';
-const STORE_RECEIPTS = 'receipts';
-const STORE_TREASURY = 'treasury';
 const STORE_OFFICES = 'offices';
 
 const STATE = {
