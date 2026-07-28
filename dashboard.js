@@ -10,6 +10,7 @@ import { AuthModule } from './auth.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
 import { DBProvider } from './services/dbProvider.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
+import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 import { TreasuryRepository } from './services/treasuryRepository.js';
 import { DashboardRepository } from './services/dashboardRepository.js';
 import { DateUtils } from './dateUtils.js';
@@ -86,12 +87,40 @@ function _setQuickFilterRange(rangeType) {
 
 // ─── AGGREGATE CALCULATIONS (DETERMINISTIC & MEMORIZED) ──────────────────────
 
+// ── Read-side ReceiptRow projection (Step 7 — normalized Receipt/ReceiptRow) ──
+// Persisted receipt HEADERS (receipts store) no longer carry row entities;
+// rows live in the separate receipt_rows store. They are fetched once per
+// refresh through the frozen ReceiptReadRepository and projected in-memory,
+// keyed by receipt id — mirroring the approved allReceipts.js Step 6 pattern.
+// Rows are NEVER attached onto receipt header objects — there is no embedded
+// receipt.rows anywhere in this module.
+async function _loadReceiptRowsProjection(receipts) {
+  const projection = new Map();
+  await Promise.all((receipts || []).map(async (rec) => {
+    const key = String(rec?.id ?? '');
+    if (!key) { projection.set(key, []); return; }
+    try {
+      const rows = await ReceiptReadRepository.getReceiptRowsByReceipt(rec.id);
+      projection.set(key, rows || []);
+    } catch (err) {
+      console.warn('[dashboard] row projection failed for receipt', key, err);
+      projection.set(key, []);
+    }
+  }));
+  return projection;
+}
+
 /**
  * Calculates Card 4: "إجمالي المحصل من الشركات"
  * Sums weight * unit_price for each company's routes from active receipts in period.
  * Optimized to run in a single pass over receipt rows using an indexed weightMap (complexity: O(R * L)).
+ *
+ * Rows are read from the ReceiptRow projection (persisted contract slots:
+ * office / loading / destination). weight/weight2 have NO persisted slot in
+ * the frozen ReceiptRow contract — the weight contribution is 0 until the
+ * contract is extended (documented B6 debt).
  */
-async function _calculateTotalCollectedFromCompanies(username, activeReceipts, offices) {
+async function _calculateTotalCollectedFromCompanies(username, activeReceipts, offices, receiptRowsProjection) {
   const weightMap = {}; // key = officeId::loadingPlace::destinationPlace -> accumulatedWeight
 
   // Helper map to quickly find officeId by its normalized name
@@ -108,9 +137,9 @@ async function _calculateTotalCollectedFromCompanies(username, activeReceipts, o
   if (Array.isArray(activeReceipts)) {
     for (const receipt of activeReceipts) {
       if (!receipt) continue;
-      const rows = Array.isArray(receipt.rows) ? receipt.rows : [];
+      const rows = (receiptRowsProjection && receiptRowsProjection.get(String(receipt.id))) || [];
       for (const row of rows) {
-        if (!row || row._type === 'separator') continue;
+        if (!row) continue; // separators are UI-local — never persisted in receipt_rows
         const rowOffice = String(row.office || '').trim().toLowerCase();
         if (!rowOffice) continue;
 
@@ -118,7 +147,8 @@ async function _calculateTotalCollectedFromCompanies(username, activeReceipts, o
         if (!officeId) continue; // Skip if office is not registered
 
         const loading = String(row.loading || '').trim().toLowerCase();
-        const dest = String(row.taktik || row.direction || '').trim().toLowerCase();
+        const dest = String(row.destination || '').trim().toLowerCase(); // persisted الجهة slot
+        // weight/weight2: no persisted slot (B6) → 0 until the contract is extended
         const w = (Number(row.weight) || 0) + (Number(row.weight2) || 0);
         if (!loading || !dest) continue;
 
@@ -977,6 +1007,11 @@ async function _refreshDashboard() {
     return true;
   });
 
+  // ─── ROW PROJECTION (normalized ReceiptRow reads — Step 7) ────────────────
+  // receipt_rows are fetched once via the frozen ReceiptReadRepository and
+  // projected by receipt id; header objects never carry embedded rows.
+  const receiptRowsProjection = await _loadReceiptRowsProjection(activeReceipts);
+
   // ─── CALCULATE STATISTICS ──────────────────────────────────────────────────
 
   // Card 1: "إجمالي صرف الكارتات" — Sum of net_due from filtered active receipts
@@ -1001,17 +1036,19 @@ async function _refreshDashboard() {
   let totalOfficeCents = 0;
   for (const r of activeReceipts) {
     if (r) {
-      const rows = Array.isArray(r.rows) ? r.rows : [];
+      const rows = receiptRowsProjection.get(String(r.id)) || [];
       for (const row of rows) {
-        if (!row || row._type === 'separator') continue;
-        totalOfficeCents += Money.toCents(row.officeAmount || row.office_amount || 0);
+        if (!row) continue; // separators are UI-local — never persisted in receipt_rows
+        // office_amount has NO persisted slot in the frozen ReceiptRow contract
+        // (B6) → contributes 0 until the contract is extended.
+        totalOfficeCents += Money.toCents(row.office_amount || 0);
       }
     }
   }
   const totalOfficeVal = Money.toDecimal(totalOfficeCents);
 
   // Card 4: "إجمالي المحصل من الشركات" — Calculated with prices map & routes weight
-  const totalCollectedFromCompanies = await _calculateTotalCollectedFromCompanies(username, activeReceipts, offices);
+  const totalCollectedFromCompanies = await _calculateTotalCollectedFromCompanies(username, activeReceipts, offices, receiptRowsProjection);
 
   // Card 5: "صافي الربح" = Companies Collected + Office Amount - Receipts Spent - Salaries/Expenses
   const netProfitCents = Money.toCents(totalCollectedFromCompanies) 

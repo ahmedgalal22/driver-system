@@ -9,6 +9,8 @@ import { Money } from './money.js';
 import { DateUtils } from './dateUtils.js';
 import { calculateRowNet, calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
+import { ReceiptRepository } from './services/receiptRepository.js';
+import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 
 
 // ========================================
@@ -354,6 +356,56 @@ function _resolveRange(filters) {
   };
 }
 
+// ── Read-side ReceiptRow projection (Step 7 — normalized Receipt/ReceiptRow) ──
+// Persisted receipt HEADERS (receipts store) no longer carry row entities;
+// rows live in the separate receipt_rows store. They are fetched through the
+// frozen ReceiptReadRepository and projected in-memory, keyed by receipt id —
+// mirroring the approved allReceipts.js Step 6 pattern. Rows are NEVER
+// attached onto receipt header objects — there is no embedded receipt.rows
+// anywhere in this module.
+async function _loadReceiptRowsProjection(receipts) {
+  const projection = new Map();
+  await Promise.all((receipts || []).map(async (rec) => {
+    const key = String(rec?.id ?? '');
+    if (!key) { projection.set(key, []); return; }
+    try {
+      const rows = await ReceiptReadRepository.getReceiptRowsByReceipt(rec.id);
+      projection.set(key, rows || []);
+    } catch (err) {
+      console.warn('[OfficesService] row projection failed for receipt', key, err);
+      projection.set(key, []);
+    }
+  }));
+  return projection;
+}
+
+/**
+ * Bridge one persisted ReceiptRow (frozen contract, money in CENTS:
+ * { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate, driver_price,
+ *   loading, destination, office, advance, net, sarf })
+ * into the office-side vocabulary the calculators/cards consume (money in
+ * DECIMALS). Mirrors the approved receipts.js / allReceipts.js read boundaries.
+ * Columns with no persisted slot (weights, deficit, type, officeAmount,
+ * discount, add) are blank/zero — they cannot be restored until the contract
+ * is extended (B6). `net` is the authoritative save-time row net, persisted
+ * in cents on the row itself.
+ */
+function _persistedRowToOfficeShape(row) {
+  return {
+    office : row.office || '',
+    loading: row.loading || '',
+    taktik : row.destination || '', // destination → الجهة
+    // ── no persisted slot (blank/zero until the contract gains them — B6) ──
+    weight: '', weight2: '', deficit: '',
+    type: '', officeAmount: 0, discount: 0, add: 0,
+    // ── money: cents → decimals ──
+    noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
+    ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
+    sarf  : Money.toDecimal(row.sarf ?? 0),
+    net   : Money.toDecimal(row.net ?? 0),          // persisted row net
+  };
+}
+
 async function getOfficeFinancialSummary(username, filters = null) {
   _requireUsername(username, 'getOfficeFinancialSummary');
 
@@ -374,7 +426,7 @@ async function getOfficeFinancialSummary(username, filters = null) {
 
   const range = _resolveRange(filters);
 
-  const receipts = await OfficeRepository.getReceipts(username);
+  const receipts = await ReceiptRepository.getAll(username);
   const filteredReceipts = range
     ? receipts.filter((r) => {
         const ts = new Date(r.receipt_date || 0).getTime();
@@ -382,19 +434,24 @@ async function getOfficeFinancialSummary(username, filters = null) {
       })
     : receipts;
 
+  // Rows live in the receipt_rows store (normalized architecture) — fetched
+  // once for the in-range receipts and projected by receipt id.
+  const rowsProjection = await _loadReceiptRowsProjection(filteredReceipts);
+
   for (const receipt of filteredReceipts) {
-    const rows = Array.isArray(receipt.rows) ? receipt.rows : [];
+    const rows = rowsProjection.get(String(receipt.id)) || [];
     for (const row of rows) {
-      if (row?._type === 'separator') continue;
-      const officeName = String(row.office || '').trim();
+      if (!row) continue; // separators are UI-local — never persisted in receipt_rows
+      const shape = _persistedRowToOfficeShape(row);
+      const officeName = shape.office.trim();
       if (!officeName) continue;
       const office = nameMap.get(officeName.toLowerCase());
       if (!office) {
         throw new Error(`[OfficesService] unknown office: ${officeName}`);
       }
       const item = summary.get(String(office.id));
-      item.weight += _calcWeight(row);
-      item.net += _calcReceiptNet(row);
+      item.weight += _calcWeight(shape); // → 0: no persisted weight slots (B6)
+      item.net += shape.net;             // persisted authoritative save-time row net
     }
   }
 
@@ -442,7 +499,10 @@ async function getOfficeLedger(username, office_id) {
 
   const receiptMap = new Map();
   for (const id of receiptIds) {
-    const receipt = await OfficeRepository.getReceiptById(id);
+    // Header-only read via the canonical repository (same receipts store).
+    // receipt_number has no persisted header slot yet (B6) → null until the
+    // contract is extended.
+    const receipt = await ReceiptRepository.getById(id);
     if (receipt && receipt.receipt_number) {
       receiptMap.set(id, String(receipt.receipt_number));
     }
@@ -1048,46 +1108,56 @@ async function showOfficeDetails(id) {
 /**
  * Get all receipt rows linked to a specific office/company.
  * Each row includes parent receipt metadata for display.
- * 
- * MySQL-ready: This will become:
+ *
+ * Normalized read (Step 7): headers come from ReceiptRepository, rows from
+ * the frozen ReceiptReadRepository projected by receipt id — the in-memory
+ * equivalent of the MySQL-ready join below (never an embedded receipt.rows):
  *   SELECT rr.*, r.receipt_number, r.client_name, r.payout_status
  *   FROM receipt_rows rr
  *   JOIN receipts r ON rr.receipt_id = r.id
  *   WHERE rr.office = ?
+ *
+ * Persisted row slots render real values (car, loading, taktik, office,
+ * noloon/ohda/sarf via cents→decimal). Columns with no persisted slot —
+ * kartano, date, driver name, weight, type, row notes, receipt_number header
+ * slot — render blank/zero until the contract is extended (B6). Driver-name
+ * resolution from persisted driver_id is deferred (no driver read repository
+ * is wired into this module yet — Step 8 candidate).
  */
 async function _getOfficeCards(office) {
   const username = _moduleSessionUsername();
   const officeName = String(office.name || '').trim().toLowerCase();
-  const allReceipts = await OfficeRepository.getReceipts(username);
+  const allReceipts = await ReceiptRepository.getAll(username);
+  const rowsProjection = await _loadReceiptRowsProjection(allReceipts);
 
   const cards = [];
   for (const receipt of allReceipts) {
-    if (receipt.deleted_at !== null) continue;
-    const rows = Array.isArray(receipt.rows) ? receipt.rows : [];
+    if (receipt.deleted_at !== null) continue; // defensive — DB.getAll already excludes
+    const rows = rowsProjection.get(String(receipt.id)) || [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || row._type === 'separator') continue;
+      if (!row) continue; // separators are UI-local — never persisted in receipt_rows
       const rowOffice = String(row.office || '').trim().toLowerCase();
       if (rowOffice !== officeName) continue;
 
       cards.push({
         receipt_id: receipt.id,
-        receipt_number: receipt.receipt_number || '',
+        receipt_number: receipt.receipt_number || '', // header slot not persisted (B6) → ''
         client_name: receipt.client_name || receipt.owner_name || '',
         payout_status: receipt.payout_status || 'unpaid',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
-        _rowId: row._rowId || null,
-        kartano: row.kartano || row.kartaNo || '',
-        date: row.date || '',
-        car: row.car || row.carNo || row.vehicle_plate || '',
-        driver: row.data || row.driver || row.driver_name || '',
-        weight: (Number(row.weight) || 0) + (Number(row.weight2) || 0),
-        noloon: Number(row.noloon) || 0,
+        _rowId: row.row_id ?? null,                     // persisted ReceiptRow PK
+        kartano: '',                                    // no persisted slot (B6)
+        date: '',                                       // no persisted slot (B6)
+        car: row.vehicle_plate || '',
+        driver: '',                                     // name not persisted; resolution deferred (Step 8)
+        weight: 0,                                      // no persisted slot (B6)
+        noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون (cents→decimal)
         loading: row.loading || '',
-        taktik: row.taktik || row.direction || '',
-        type: row.type || '',
-        notes: row.notes || '',
+        taktik: row.destination || '',                  // destination → الجهة
+        type: '',                                       // no persisted slot (B6)
+        notes: '',                                      // row notes not persisted (B6)
       });
     }
   }
