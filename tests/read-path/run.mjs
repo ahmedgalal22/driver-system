@@ -76,9 +76,11 @@ ok(liveRows.length === 3, `R1 live rows after 2→3 update = 3, NO soft-deleted 
 ok(liveRows.every(r => typeof r.driver_price === 'number' && typeof r.advance === 'number'
     && typeof r.net === 'number' && typeof r.sarf === 'number' && typeof r.row_id === 'string'
     && r.receipt_id === R1), 'rows carry persisted contract (row_id, receipt_id FK, cents money)');
-ok(liveRows.every(r => !('weight' in r) && !('weight2' in r) && !('office_amount' in r)
-    && !('officeAmount' in r) && !('noloon' in r) && !('taktik' in r) && !('_type' in r)),
-  'contract is structural: NO weight/office_amount/officeAmount/noloon/taktik/_type slots (B6 evidence)');
+ok(liveRows.every(r => 'kartano' in r && 'date' in r && 'driver_name' in r && 'type' in r
+    && 'weight' in r && 'weight2' in r && 'deficit' in r && 'weightTotal' in r
+    && 'officeAmount' in r && 'discount' in r && 'add' in r && 'row_order' in r
+    && !('office_amount' in r) && !('noloon' in r) && !('taktik' in r) && !('_type' in r)),
+  'contract is structural (Phase 5 Step 2): restored slots persisted (kartano/date/driver_name/type/weight/weight2/deficit/weightTotal/officeAmount/discount/add/row_order); UI-vocabulary aliases (office_amount/noloon/taktik/_type) still never persisted');
 ok((await ReceiptReadRepository.getReceiptRowsByReceipt(R2)).length === 0,
   'deleted receipt R2 → 0 live rows (rows soft-deleted with header)');
 
@@ -268,7 +270,7 @@ ok(c1.kartano === '' && c1.date === '' && c1.driver === '' && c1.weight === 0 &&
 ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27'
     && c1.payout_status === (headerR1.payout_status || 'unpaid'),
   'cards: header metadata propagated (client_name, receipt_date, payout_status)');
-ok(c1.receipt_number === '', 'cards: receipt_number blank — header slot not persisted (B6)');
+ok(c1.receipt_number === '1001', 'cards: receipt_number revived from persisted header (Phase 5 — Step 2)');
 
 // loud failure on unknown office — preserved semantics
 await FinancialService.createReceipt(U, hdr({ receipt_number: '1003', total: 100, net_due: 100, net_total: 100,
@@ -304,7 +306,7 @@ ok(offSrc.includes('item.net += shape.net;') && offSrc.includes('_rowId: row.row
 // ─── GROUP 5: ledger-header reroute equivalence (offices.js:445 → ReceiptRepository.getById) ──
 console.log('\n— GROUP 5: getOfficeLedger header reroute —');
 ok(!!headerR1 && headerR1.id === R1, 'ReceiptRepository.getById returns live header (same DB.getById chain as before)');
-ok(headerR1.receipt_number === undefined, 'header.receipt_number absent (B6) → reference_number stays null — same as pre-migration effective value');
+ok(headerR1.receipt_number === '1001', 'header.receipt_number persisted (Phase 5 — Step 2) → reference_number source restored');
 ok((await ReceiptRepository.getById(R2)) === null, 'getById of soft-deleted receipt → null (semantics preserved)');
 
 console.log(`\n${failures === 0 ? '✅ ALL READ-PATH ASSERTIONS PASSED' : '❌ FAILURES: ' + failures}`);

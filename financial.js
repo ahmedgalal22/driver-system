@@ -144,6 +144,9 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
     client_name: cleanHeader.client_name || null,
     receipt_date: cleanHeader.receipt_date,
     account_type: cleanHeader.account_type,
+    // Phase 5 — Step 2: sole user-visible header field the model dropped
+    // (already validated through _validate; by_number index exists in schema).
+    receipt_number: cleanHeader.receipt_number ?? null,
   };
 }
 
@@ -161,6 +164,22 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     advance: Money.toCents(row.advance ?? 0),
     net: Money.toCents(row.net ?? 0),
     sarf: Money.toCents(row.sarf ?? 0),
+    // ── Phase 5 — Step 2: restored user-entered row fields (Step 1 audit drop
+    // list). Money fields follow the existing cents convention; quantities and
+    // strings are stored in their original form. company_* fields remain
+    // intentionally excluded (form-dead, per audit).
+    kartano: row.kartano || null,
+    date: row.date || null,
+    driver_name: row.driver_name || null,
+    type: row.type || null,
+    weight: row.weight ?? null,
+    weight2: row.weight2 ?? null,
+    deficit: row.deficit ?? null,
+    weightTotal: row.weightTotal ?? null,
+    officeAmount: Money.toCents(row.officeAmount ?? 0),
+    discount: Money.toCents(row.discount ?? 0),
+    add: Money.toCents(row.add ?? 0),
+    row_order: row.row_order ?? null,
   }));
 }
 
