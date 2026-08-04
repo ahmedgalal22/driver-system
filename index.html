@@ -185,6 +185,13 @@
               <!-- Populated dynamically by JS -->
             </div>
 
+            <!-- Kartas status filter (Phase 8 — UI-only, in-memory over the loaded kartas) -->
+            <div class="tabs mb-4" role="group" aria-label="تصفية الكارتات حسب الحالة">
+              <button type="button" data-action="karta-status-filter" data-filter="all" class="tab-btn active-purple" aria-pressed="true">الكل</button>
+              <button type="button" data-action="karta-status-filter" data-filter="settled" class="tab-btn" aria-pressed="false">تمت تسويته</button>
+              <button type="button" data-action="karta-status-filter" data-filter="unsettled" class="tab-btn" aria-pressed="false">لم تتم تسويته</button>
+            </div>
+
             <!-- Kartas Table -->
             <div class="table-wrapper">
               <table class="table">

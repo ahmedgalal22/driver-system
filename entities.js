@@ -1166,19 +1166,15 @@ async function _loadDriverKartasTab(driverId) {
       <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
     `;
 
-    // Table rows
-    _renderKartaTable(kartas, tbody);
+    // Table rows — rendered through the Phase 8 in-memory status+search filter
+    // so the user's current filter selection and search text stay applied on
+    // every refresh (settlement create/edit, re-entry).
+    _applyKartaFilters(tbody, driverId);
 
-    // Client-side search
+    // Client-side search (composes with the status filter; in-memory only)
     if (searchInput && !searchInput.dataset.bound) {
       searchInput.dataset.bound = '1';
-      searchInput.addEventListener('input', () => {
-        const q = searchInput.value.trim().toLowerCase();
-        const filtered = kartas.filter(k =>
-          Object.values(k).some(v => String(v || '').toLowerCase().includes(q))
-        );
-        _renderKartaTable(filtered, tbody, driverId);
-      });
+      searchInput.addEventListener('input', () => _applyKartaFilters(tbody, driverId));
     }
   } catch (err) {
     console.error('[entities] Failed to load kartas tab', err);
@@ -1189,6 +1185,36 @@ async function _loadDriverKartasTab(driverId) {
 let _currentKartaRowId = null;
 let _kartaSettlementMode = 'create'; // 'create' (تسوية) | 'edit' (تعديل التسوية)
 let _currentKartas = []; // last kartas dataset loaded for the open Driver Details page
+let _kartaStatusFilter = 'all'; // Phase 8: 'all' | 'settled' (paid+partial) | 'unsettled' (unpaid) — preserved across tab refreshes and settlement create/edit
+
+/** Sync the status-filter buttons' active styling to the current filter state. */
+function _syncKartaFilterButtons() {
+  document.querySelectorAll('[data-action="karta-status-filter"]').forEach(btn => {
+    const active = btn.dataset.filter === _kartaStatusFilter;
+    btn.classList.toggle('active-purple', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+}
+
+/**
+ * Phase 8 — status filter + search text, composed ENTIRELY in memory over
+ * _currentKartas (no FinancialService call, no IndexedDB query, no writes).
+ * Reading the search input live keeps both status AND search text applied
+ * automatically after every tab refresh (create/edit settlement, re-entry).
+ */
+function _applyKartaFilters(tbody, driverId) {
+  const target = tbody || document.getElementById('kartaTableBody');
+  if (!target) return;
+  const q = (document.getElementById('kartaSearchInput')?.value || '').trim().toLowerCase();
+  const filtered = _currentKartas.filter(k => {
+    if (_kartaStatusFilter === 'settled' && !(k.status === 'paid' || k.status === 'partial')) return false;
+    if (_kartaStatusFilter === 'unsettled' && k.status !== 'unpaid') return false;
+    if (q && !Object.values(k).some(v => String(v || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  _renderKartaTable(filtered, target, driverId);
+  _syncKartaFilterButtons();
+}
 
 async function _openKartaSettlementModal(rowId, mode = 'create') {
   _currentKartaRowId = rowId;
@@ -1788,6 +1814,16 @@ function attachOwnersPageListeners() {
   document.body.dataset.ownersListenersBound = '1';
 
   document.addEventListener('click', async (e) => {
+    // Kartas status filter (Phase 8) — pure in-memory UI state; no queries, no writes
+    const kartaFilterBtn = e.target.closest('[data-action="karta-status-filter"]');
+    if (kartaFilterBtn) {
+      _kartaStatusFilter = ['settled', 'unsettled'].includes(kartaFilterBtn.dataset.filter)
+        ? kartaFilterBtn.dataset.filter
+        : 'all';
+      _applyKartaFilters();
+      return;
+    }
+
     // Karta settlement modal (تسوية) — enter السعر, pick the vehicle to charge
     const openKartaStl = e.target.closest('[data-action="open-karta-settlement"]');
     if (openKartaStl) {
