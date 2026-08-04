@@ -1201,12 +1201,13 @@ async function _openKartaSettlementModal(rowId) {
   const noteEl = document.getElementById('kartaSettlementNote');
   const msgEl = document.getElementById('kartaSettlementMsg');
 
-  // The user selects the vehicle to charge (workflow step 3). Options = the
-  // user's registered vehicles; preselect the karta row's own vehicle.
+  // The user selects the vehicle to charge (workflow step 3). Options = EVERY
+  // active registered vehicle (business rule: no username scoping — vehicles
+  // created through the receipt flow carry no username key); preselect the
+  // karta row's own vehicle.
   if (vehicleEl) {
-    const username = _currentUsername();
     const vehicles = (await ClientRepository.getAllVehicles())
-      .filter(v => v && v.username === username && v.deleted_at == null);
+      .filter(v => v && v.deleted_at == null);
     vehicleEl.innerHTML = '<option value="">— اختر المركبة —</option>'
       + vehicles.map(v => `<option value="${v.id}">${String(v.plate || '').replace(/</g, '&lt;')}</option>`).join('');
     const k = _currentKartas.find(k => String(k.row_id) === String(rowId));
