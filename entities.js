@@ -1499,7 +1499,7 @@ async function _renderOwnerVehicles(client) {
   return `
     <section>
       <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-bold mb-0">المركبات والسائقين</h3>
+          <h3 class="text-lg font-bold mb-0">المركبات</h3>
         <div class="flex gap-2">
           <button type="button" data-action="add-vehicle-manual" data-owner-id="${client.id}" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">➕ إضافة مركبة</button>
         </div>
