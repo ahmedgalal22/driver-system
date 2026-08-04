@@ -1628,30 +1628,24 @@ async function getDriverPaidKartas(driverId) {
 
 async function getDriverKartasSummary(driverId) {
   const kartas = await getDriverKartas(driverId);
-  let total_kartas = 0, unpaid_kartas = 0, partial_kartas = 0, paid_kartas = 0;
-  let total_price = 0, total_settled = 0, total_remaining = 0;
+  let total_kartas = 0, unpaid_kartas = 0, paid_kartas = 0;
+  let total_price = 0;
 
   for (const k of kartas) {
     total_kartas++;
     if (k.status === 'unpaid') unpaid_kartas++;
-    else if (k.status === 'partial') partial_kartas++;
     else if (k.status === 'paid') paid_kartas++;
 
     // Summed over the settlement price ONLY (نولون never enters this summary);
     // kartas with no settlement yet contribute 0.
     total_price += Money.toCents(k.price ?? 0);
-    total_settled += Money.toCents(k.settled);
-    total_remaining += Money.toCents(k.remaining ?? 0);
   }
 
   return {
     total_kartas,
     unpaid_kartas,
-    partial_kartas,
     paid_kartas,
     total_price: Money.toDecimal(total_price),
-    total_settled: Money.toDecimal(total_settled),
-    total_remaining: Money.toDecimal(total_remaining),
   };
 }
 

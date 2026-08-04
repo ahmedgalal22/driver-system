@@ -1162,11 +1162,8 @@ async function _loadDriverKartasTab(driverId) {
     summaryContainer.innerHTML = `
       <div class="card p-4"><div class="text-xs text-muted">إجمالي الكارتات</div><div class="text-2xl font-bold">${summary.total_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">غير مدفوعة</div><div class="text-2xl font-bold text-red-600">${summary.unpaid_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">مدفوعة جزئياً</div><div class="text-2xl font-bold text-yellow-600">${summary.partial_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">مدفوعة بالكامل</div><div class="text-2xl font-bold text-green-600">${summary.paid_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">إجمالي المدفوع</div><div class="text-xl font-bold">${_fmt(summary.total_settled)}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">المتبقي</div><div class="text-xl font-bold">${_fmt(summary.total_remaining)}</div></div>
     `;
 
     // Table rows
