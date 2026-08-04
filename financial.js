@@ -1531,6 +1531,10 @@ async function updateClientUnpaidBalances(clientId, username) {
 
 const KARTA_REF_TYPE = 'receipt_row';
 const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
+// Vehicle-balance leg of a karta settlement — follows the existing ledger
+// architecture (rebuildVehicleBalance reads type deposit/withdraw by_vehicle;
+// origin classification via `effect`, exactly like 'salfa' / 'receipt_payout').
+const KARTA_CHARGE_EFFECT = 'karta_settlement_charge';
 
 async function _getActiveKartaSettlements() {
   const all = await DB.findByFields(STORE.LEDGER, {
@@ -1686,11 +1690,27 @@ async function createKartaSettlement(username, data) {
   const kartaRow = await ReceiptRepository.getRowById(String(rowId));
   const settlementDriverId = kartaRow?.driver_id ?? null;
 
+  // The vehicle-to-charge must exist — validated BEFORE the atomic write
+  // transaction (guards evaluated inside DB.transaction callbacks race with
+  // transaction auto-commit in database.js; write-path failures inside the tx
+  // are what abort it reliably).
+  const chargeVehicle = await ClientRepository.getVehicleById(chargeVehicleId);
+  if (!chargeVehicle || chargeVehicle.deleted_at !== null) {
+    throw new Error('[FinancialService:createKartaSettlement] vehicle to charge not found.');
+  }
+
   // BUSINESS RULE: the manually entered amount is the SETTLEMENT PRICE — the
-  // driver's payable amount for this karta (never the receipt نولون). It is
-  // persisted on the settlement record; payments/remaining/status re-derive
-  // from it. vehicle_id records the vehicle the user chose to charge.
+  // driver's payable amount for this karta (never the receipt نولون). The
+  // settlement is a REAL financial transaction integrated into the existing
+  // vehicle-balance architecture (vehicle_ledger, by_vehicle index,
+  // rebuildVehicleBalance): ONE atomic transaction posts BOTH legs —
+  //   1. driver settlement payment (driver is paid: type driver_karta_payment)
+  //   2. vehicle charge (the selected vehicle's balance is reduced by the
+  //      settlement price: type 'withdraw' + effect tag, the exact convention
+  //      used by createDriverDeposit's vehicle leg and 'salfa'/'receipt_payout')
+  // Both legs share reference_type/reference_id → they reverse together.
   await DB.transaction(async (tx) => {
+    // Leg 1 — driver settlement payment
     await tx.add(STORE.LEDGER, {
       username,
       owner_id: settlementDriverId,
@@ -1700,13 +1720,34 @@ async function createKartaSettlement(username, data) {
       type: KARTA_SETTLEMENT_TYPE,
       amount: -amount,
       price: amount, // settlement price (cents) — the payable base
-      vehicle_id: chargeVehicleId, // the vehicle charged by this settlement
+      vehicle_id: chargeVehicle.id, // the vehicle charged by this settlement
       reference_type: KARTA_REF_TYPE,
       reference_id: rowId,
       date,
       applied_at: now,
       is_reversed: false,
       note,
+    });
+
+    // Leg 2 — vehicle balance reduction (settlement price charged to the vehicle)
+    await tx.add(STORE.LEDGER, {
+      username,
+      owner_id: String(chargeVehicle.owner_id || ''),
+      owner_name: chargeVehicle.owner_name || null,
+      client_id: String(chargeVehicle.owner_id || ''),
+      client_type: 'owner',
+      client_name: chargeVehicle.owner_name || null,
+      vehicle_id: chargeVehicle.id,
+      vehicle_plate: chargeVehicle.plate || null,
+      type: 'withdraw',
+      effect: KARTA_CHARGE_EFFECT,
+      amount, // settlement price (cents, positive — withdraw convention)
+      reference_type: KARTA_REF_TYPE,
+      reference_id: rowId,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note: `تحميل تسوية كارتة على المركبة ${chargeVehicle.plate || chargeVehicleId}`,
     });
   }, { username, stores: [STORE.LEDGER] });
 
@@ -1726,9 +1767,12 @@ async function reverseKartaSettlement(username, settlementReferenceId) {
 
   await DB.transaction(async (tx) => {
     const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
+    // Both settlement legs reverse ATOMICALLY: the driver payment
+    // (type-based, existing) and the vehicle charge leg (effect-based — the
+    // same reversal convention as 'receipt_payout' at updateReceiptStatus).
     const active = entries.filter(e =>
       e.reference_type === KARTA_REF_TYPE &&
-      e.type === KARTA_SETTLEMENT_TYPE &&
+      (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
       e.is_reversed === false
     );
     if (active.length === 0) {
