@@ -1185,7 +1185,7 @@ async function _loadDriverKartasTab(driverId) {
 let _currentKartaRowId = null;
 let _kartaSettlementMode = 'create'; // 'create' (تسوية) | 'edit' (تعديل التسوية)
 let _currentKartas = []; // last kartas dataset loaded for the open Driver Details page
-let _kartaStatusFilter = 'all'; // Phase 8: 'all' | 'settled' (paid+partial) | 'unsettled' (unpaid) — preserved across tab refreshes and settlement create/edit
+let _kartaStatusFilter = 'all'; // Phase 8: 'all' (paid+partial+unpaid) | 'settled' (status !== 'unpaid') | 'unsettled' (status === 'unpaid') — preserved across tab refreshes and settlement create/edit
 
 /** Sync the status-filter buttons' active styling to the current filter state. */
 function _syncKartaFilterButtons() {
@@ -1207,8 +1207,8 @@ function _applyKartaFilters(tbody, driverId) {
   if (!target) return;
   const q = (document.getElementById('kartaSearchInput')?.value || '').trim().toLowerCase();
   const filtered = _currentKartas.filter(k => {
-    if (_kartaStatusFilter === 'settled' && !(k.status === 'paid' || k.status === 'partial')) return false;
-    if (_kartaStatusFilter === 'unsettled' && k.status !== 'unpaid') return false;
+    if (_kartaStatusFilter === 'settled' && k.status === 'unpaid') return false; // settled = status !== 'unpaid' (future-proof: partial or any new settled-ish status appears automatically)
+    if (_kartaStatusFilter === 'unsettled' && k.status !== 'unpaid') return false; // unsettled = status === 'unpaid' only
     if (q && !Object.values(k).some(v => String(v || '').toLowerCase().includes(q))) return false;
     return true;
   });
