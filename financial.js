@@ -1606,8 +1606,6 @@ async function getDriverKartas(driverId) {
       destination: row.destination || null,
       advance: Money.toDecimal(row.advance ?? 0), // persisted cents → decimal, single conversion
       price: priceCents === null ? null : Money.toDecimal(priceCents), // settlement price only — NEVER نولون
-      settled: Money.toDecimal(settled),
-      remaining: remaining === null ? null : Money.toDecimal(remaining),
       status,
       last_settlement_date: lastDate,
     });

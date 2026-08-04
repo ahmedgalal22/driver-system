@@ -1182,7 +1182,7 @@ async function _loadDriverKartasTab(driverId) {
     }
   } catch (err) {
     console.error('[entities] Failed to load kartas tab', err);
-    tbody.innerHTML = `<tr><td colspan="10" class="text-red-600 text-center p-6">فشل تحميل الكارتات</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-red-600 text-center p-6">فشل تحميل الكارتات</td></tr>`;
   }
 }
 
@@ -1270,7 +1270,7 @@ async function _saveKartaSettlement() {
 
 function _renderKartaTable(kartas, tbody, driverId) {
   if (!Array.isArray(kartas) || kartas.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" class="text-muted text-center p-6">لا توجد كارتات</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-muted text-center p-6">لا توجد كارتات</td></tr>`;
     return;
   }
 
@@ -1289,8 +1289,6 @@ function _renderKartaTable(kartas, tbody, driverId) {
         <td>${k.destination || '—'}</td>
         <td>${_fmt(k.advance)}</td>
         <td class="font-semibold">${k.price == null ? '—' : _fmt(k.price)}</td>
-        <td>${_fmt(k.settled)}</td>
-        <td>${k.remaining == null ? '—' : _fmt(k.remaining)}</td>
         <td>
           <span class="px-2 py-0.5 rounded text-xs font-medium ${k.status === 'paid' ? 'bg-green-100 text-green-700' : k.status === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}">${k.status}</span>
           ${settleBtn}
