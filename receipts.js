@@ -224,10 +224,12 @@ function _normalize(rawData) {
 // stores exactly:
 //   { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate,
 //     driver_price(cents), loading, destination, office,
-//     advance(cents), net(cents), sarf(cents) }
-// The UI form speaks a different vocabulary (noloon / ohda / taktik, plus
-// columns with NO persisted slot: kartano, date, data(driver name), weight,
-// weight2, deficit, weightTotal, type, officeAmount, discount, add, separators).
+//     advance(cents), net(cents), sarf(cents), kartano, date, driver_name,
+//     weight, weight2, deficit, weightTotal, type,
+//     officeAmount(cents), discount(cents), add(cents), row_order }
+// The UI form speaks a different vocabulary (noloon / ohda / taktik). Every
+// user-entered column is persisted (Phase 5 — Step 2); only separators remain
+// UI-local by design.
 // These two helpers are the ONLY place the two vocabularies are bridged — at
 // the UI boundary. Nothing here recreates an embedded receipt.rows model:
 //   - writes bridge the transient form payload into the service contract;
@@ -247,28 +249,30 @@ function _uiRowToPersistedShape(row) {
 
 /**
  * Persisted ReceiptRow → transient UI field values (read boundary).
- * Money is converted cents → decimal. Columns with no persisted slot are
- * returned blank — the form recalculates derived cells (weightTotal, net)
- * from inputs; un-persisted columns cannot be restored (see step-6 report).
+ * Money is converted cents → decimal. Every user-entered column is persisted
+ * (Phase 5 — Step 2) and restored here; the form's derived cells (weightTotal,
+ * net) are recomputed from the reconstructed inputs by the unchanged
+ * calculation rules. Rows saved before Step 2 carry null for these columns →
+ * they render blank (no fabrication).
  */
 function _persistedRowToUiShape(row, driverName = '') {
   return {
-    kartano     : '',                             // not persisted
-    date        : '',                             // not persisted
-    data        : driverName || '',               // resolved via driver_id
+    kartano     : row.kartano ?? '',
+    date        : row.date    ?? '',
+    data        : row.driver_name || driverName || '', // persisted free-text name; driver_id map = fallback
     car         : row.vehicle_plate || '',
-    weight      : '',                             // not persisted
-    weight2     : '',                             // not persisted
-    deficit     : '',                             // not persisted
+    weight      : row.weight  ?? '',
+    weight2     : row.weight2 ?? '',
+    deficit     : row.deficit ?? '',
     office      : row.office      || '',
     loading     : row.loading     || '',
     taktik      : row.destination || '',          // destination → الجهة
-    type        : '',                             // not persisted
+    type        : row.type    ?? '',
     noloon      : Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
     ohda        : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
-    officeAmount: '',                             // not persisted
-    discount    : '',                             // not persisted
-    add         : '',                             // not persisted
+    officeAmount: Money.toDecimal(row.officeAmount ?? 0), // مكتب (cents → decimal)
+    discount    : Money.toDecimal(row.discount ?? 0),
+    add         : Money.toDecimal(row.add ?? 0),
     sarf        : Money.toDecimal(row.sarf ?? 0),
     net         : Money.toDecimal(row.net  ?? 0),
   };
@@ -580,8 +584,8 @@ async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
   if (!Array.isArray(dataRows) || dataRows.length === 0) {
     // Fallback: rows not supplied on the (transient) input → load the persisted
     // ReceiptRows through the normalized read path and bridge their vocabulary.
-    // NOTE: under the frozen ReceiptRow contract, officeAmount and item type
-    // are not persisted, so the fallback yields office_amount 0 / item_type null.
+    // officeAmount and item type are persisted (Phase 5 — Step 2) and flow
+    // through the bridge into office_amount / item_type below.
     const receiptId = rawData.id || rawData.receipt_id;
     const receiptWithRows = receiptId
       ? await ReceiptReadRepository.getReceiptWithRows(receiptId)
@@ -2720,9 +2724,8 @@ async function validateBeforeSave(rawData) {
   // ── Karta duplicate check: across saved receipts ──
   // Reads persisted ReceiptRows through the normalized read path (headers
   // from getAll() never embed rows).
-  // NOTE: the frozen persisted ReceiptRow contract stores no `kartano`
-  // column, so `savedKartas` currently stays empty — the check activates
-  // automatically once the contract gains a karta-number field (see step-6 report).
+  // kartano is persisted on ReceiptRows (Phase 5 — Step 2), so this duplicate
+  // check is fully active against all previously saved receipts.
   const allSavedReceipts = await ReceiptsModule.getAll(_currentUsername());
   const savedKartas = new Set();
   for (const receipt of allSavedReceipts) {
@@ -3186,9 +3189,9 @@ async function loadReceiptForEdit(receiptData) {
   const rows = receiptWithRows?.rows || [];
 
   // Resolve driver display names for rows that carry a persisted driver_id.
-  // (The frozen write contract currently persists driver_id = null because the
-  // form collects a free-text driver name — see step-6 report — so this map is
-  // usually empty; it exists for contract-correct forward compatibility.)
+  // Rows saved through the form persist the free-text driver_name (restored in
+  // Phase 5 — Step 2), which the read bridge prefers; this map is the fallback
+  // for rows linked to a real driver record.
   const driverIds   = [...new Set(rows.map(r => r?.driver_id).filter(Boolean))];
   const driverNames = new Map();
   await Promise.all(driverIds.map(async (did) => {
@@ -3198,10 +3201,14 @@ async function loadReceiptForEdit(receiptData) {
     } catch (_) { /* non-critical — name left blank */ }
   }));
 
-  // NOTE: the frozen ReceiptRow contract persists data rows only (no
-  // separators, no row_order), so no separator rendering happens here;
-  // persisted row order is the receipt_rows insertion order.
-  rows.forEach(rowData => {
+  // The persisted contract stores data rows only — separators are UI-local by
+  // design and are not re-created on edit. Rendering order comes from the
+  // persisted row_order (0-based index over the original form rows, separator
+  // gaps included). Rows saved before Step 2 carry row_order = null; the
+  // stable sort keeps their repository order unchanged.
+  const orderedRows = [...rows].sort((a, b) =>
+    (a?.row_order ?? Number.MAX_SAFE_INTEGER) - (b?.row_order ?? Number.MAX_SAFE_INTEGER));
+  orderedRows.forEach(rowData => {
     if (!rowData || rowData.row_type === 'separator') return;
 
     receiptRowCounter++;

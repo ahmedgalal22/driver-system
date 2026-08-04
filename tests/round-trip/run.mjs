@@ -1,4 +1,5 @@
-// run.mjs — ROUND-TRIP DIAGNOSTIC (read-only investigation; NO fix).
+// run.mjs — ROUND-TRIP VERIFICATION (Phase 5 — after Steps 2+3; created as the
+// read-only diagnostic of the original regression, now asserts the FIXED behavior).
 //
 // Traces ONE fully-populated Receipt (2 data rows + 1 separator, every form
 // field populated) through the REAL production code path:
@@ -15,8 +16,8 @@
 //
 // UI modules are browser-coupled; their pure mapping functions are EXTRACTED
 // VERBATIM from the production source text and executed — nothing is
-// hand-copied. Assertions describe the CURRENT (regressed) behavior; a PASS
-// means the field-by-field analysis in the report reproduces exactly.
+// hand-copied. Assertions describe the CURRENT behavior (Phase 5 Steps 2+3
+// applied): a PASS means every user-entered field survives the full cycle.
 import { readFileSync } from 'node:fs';
 import { installIDB } from './idb-shim.mjs';
 installIDB();
@@ -200,8 +201,8 @@ const rowKeys = Object.keys(persistedRows[0]).sort();
 console.log('persisted header keys:', headerKeys.join(', '));
 console.log('persisted row keys   :', rowKeys.join(', '));
 
-// Header losses
-ok(persistedHeader.receipt_number === undefined, 'LOST: header.receipt_number NOT persisted (entered "42")');
+// Header fields
+ok(persistedHeader.receipt_number === '42', `KEPT (Phase 5 — Step 2): header.receipt_number persisted (got ${J(persistedHeader.receipt_number)})`);
 ok(persistedHeader.owner_name === undefined, 'LOST: header.owner_name NOT persisted (display falls back to client_name)');
 ok(persistedHeader.row_count === undefined, 'LOST: header.row_count NOT persisted (card falls back to counting rows)');
 ok(persistedHeader.vehicle_id === undefined, 'LOST: header.vehicle_id NOT persisted');
@@ -217,17 +218,23 @@ ok(persistedHeader.payout_status === 'unpaid', 'KEPT: payout_status');
 // Row losses / survivors
 ok(persistedRows.length === 2, `LOST: separator row dropped — only 2 data rows persisted (3 pushed incl. separator)`);
 const pA = persistedRows.find(r => r.driver_price === 2000) || persistedRows[0];
-const lostRowFields = ['kartano', 'date', 'data', 'driver_name', 'weight', 'weight2', 'deficit', 'weightTotal', 'type', 'officeAmount', 'discount', 'add', 'row_order'];
-ok(lostRowFields.every(f => pA[f] === undefined),
-   `LOST from every row: ${lostRowFields.join(', ')} (all undefined in store)`);
-ok(pA.driver_id === null, 'LOST: driver name — driver_id persisted as null, name never stored on the row');
+const restoredRowFields = ['kartano', 'date', 'driver_name', 'weight', 'weight2', 'deficit', 'weightTotal', 'type', 'officeAmount', 'discount', 'add', 'row_order'];
+ok(restoredRowFields.every(f => f in pA),
+   `KEPT (Phase 5 — Step 2): all restored row columns present in store: [${restoredRowFields.join(', ')}]`);
+ok(pA.kartano === 'K-100' && pA.date === '2026-07-29' && pA.driver_name === 'السائق أحمد' && pA.type === 'قمح'
+   && pA.weight === 50 && pA.weight2 === 10 && pA.deficit === 2 && pA.weightTotal === 58
+   && pA.officeAmount === 7500 && pA.discount === 2500 && pA.add === 4000 && pA.row_order === 0
+   && !('data' in pA),
+   'KEPT: entered values exact — strings/quantities raw, officeAmount/discount/add integer cents (7500/2500/4000); UI-alias "data" intentionally not stored');
+ok(pA.driver_id === null && pA.driver_name === 'السائق أحمد',
+   'KEPT: driver_id null (form collects free text) + driver_name persisted on the row');
 ok(pA.vehicle_plate === 'أ ب ج 1234' && pA.office === 'شركة الأمل' && pA.loading === 'طنطا'
    && pA.destination === 'القاهرة', 'KEPT: vehicle_plate / office / loading / destination');
 ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 92000 && pA.sarf === 3000,
    `KEPT: money in cents (driver_price=${pA.driver_price}, advance=${pA.advance}, net=${pA.net}, sarf=${pA.sarf})`);
 const ledger = await DB.getByIndex('vehicle_ledger', 'by_reference_id', rid);
 ok(ledger.length === 1 && ledger[0].amount === 127000 && ledger[0].type === 'receipt_due',
-   `KEPT: ledger entry (amount=${ledger[0]?.amount}) — NOTE embeds UUID not number (receipt_number lost): ${J(ledger[0]?.note)}`);
+   `KEPT: ledger entry (amount=${ledger[0]?.amount}) — note text still built from receipt id (FinancialService untouched by Phase 5): ${J(ledger[0]?.note)}`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE D — What ReceiptReadRepository returns (REAL)
@@ -263,19 +270,19 @@ ok(dmap.car === 'أ ب ج 1234' && dmap.office === 'شركة الأمل' && dmap
    'AllForms OK: car / office / loading / taktik(الجهة)');
 ok(dmap.noloon === '20' && dmap.ohda === '150', `AllForms OK: نولون=${dmap.noloon} عهدة=${dmap.ohda} (cents→decimal)`);
 ok(dmap.sarf === '30.00' && dmap.net === '920.00', `AllForms OK: sarf=${dmap.sarf} net=${dmap.net} (persisted net displays CORRECTLY)`);
-// Blank despite being entered
-ok(dmap.kartano === '' && dmap.date === '' && dmap.data === '' && dmap.type === '',
-   'AllForms BLANK (never persisted): رقم الكارتة / التاريخ / اسم السائق / النوع');
-ok(dmap.weight === '' && dmap.weight2 === '' && dmap.deficit === '' && dmap.weightTotal === '',
-   'AllForms BLANK (never persisted): وزن وش / وزن م / عجز / الوزن');
-ok(dmap.officeAmount === '0' && dmap.add === '' && dmap.discount === '',
-   `AllForms: officeAmount renders "0", إضافة/خصم blank (never persisted)`);
+// Restored columns render the entered values (Phase 5 — Step 3 read bridges)
+ok(dmap.kartano === 'K-100' && dmap.date === '2026-07-29' && dmap.data === 'السائق أحمد' && dmap.type === 'قمح',
+   `AllForms RESTORED: رقم الكارتة=${J(dmap.kartano)} / التاريخ=${J(dmap.date)} / اسم السائق=${J(dmap.data)} / النوع=${J(dmap.type)}`);
+ok(Number(dmap.weight) === 50 && Number(dmap.weight2) === 10 && Number(dmap.deficit) === 2 && Number(dmap.weightTotal) === 58,
+   `AllForms RESTORED: وزن وش=${J(dmap.weight)} / وزن م=${J(dmap.weight2)} / عجز=${J(dmap.deficit)} / الوزن=${J(dmap.weightTotal)}`);
+ok(Number(dmap.officeAmount) === 75 && Number(dmap.add) === 40 && Number(dmap.discount) === 25,
+   `AllForms RESTORED: مكتب=${J(dmap.officeAmount)} / إضافة=${J(dmap.add)} / خصم=${J(dmap.discount)} (cents→decimal)`);
 // Card header
 fingerprint(ALLRECEIPTS_SRC, "${esc(record.receipt_number || '—')}", 'card إذن الصرف reads record.receipt_number');
 fingerprint(ALLRECEIPTS_SRC, "${esc(record.owner_name || record.client_name || '—')}", 'card owner falls back to client_name');
 const cardIzn = read.receipt.receipt_number || '—';
 const cardOwner = read.receipt.owner_name || read.receipt.client_name || '—';
-ok(cardIzn === '—', `AllForms card: إذن الصرف shows ${J(cardIzn)} although "42" was entered (receipt_number not persisted)`);
+ok(cardIzn === '42', `AllForms card: إذن الصرف displays the persisted number ${J(cardIzn)} (Phase 5)`);
 ok(cardOwner === 'مالك الاختبار', 'AllForms card: owner displays via client_name fallback (OK)');
 ok((read.receipt.row_count != null ? read.receipt.row_count : read.rows.filter(r => r._type !== 'separator').length) === 2,
    'AllForms card: عدد الكارتات survives via row-count fallback (OK)');
@@ -293,7 +300,7 @@ console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══'
   "setF('receipt-noloon',        ui.noloon ? Money.fmt(ui.noloon) : '');",
   "setF('receipt-net',           Money.fmt(ui.net || 0));",
 ].forEach((s) => fingerprint(RECEIPTS_SRC, s, 'loadReceiptForEdit mapping: ' + s.slice(0, 44)));
-fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver names resolve ONLY via driver_id');
+fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver-name fallback resolution via driver_id (bridge prefers persisted driver_name)');
 fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="text" readonly tabindex="-1"', 'receiptNumber input is readonly');
 
 const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id=null → */ '');
@@ -315,11 +322,13 @@ ok(editFields['receipt-car'] === 'أ ب ج 1234' && editFields['receipt-office']
 ok(editFields['receipt-noloon'] === '20.00' && editFields['receipt-ohda'] === '150.00'
    && editFields['receipt-sarf'] === '30.00' && editFields['receipt-net'] === '920.00',
    'Edit OK: نولون / عهدة / sarf / net reconstructed from persisted cents');
-ok(editFields['receipt-kartano'] === '' && editFields['receipt-date'] === '' && editFields['receipt-data'] === ''
-   && editFields['receipt-type'] === '' && editFields['receipt-weight'] === '' && editFields['receipt-office-amount'] === '',
-   'Edit BLANK (never persisted): kartano / row date / driver name / type / weights / officeAmount (+discount, add)');
+ok(editFields['receipt-kartano'] === 'K-100' && editFields['receipt-date'] === '2026-07-29'
+   && editFields['receipt-data'] === 'السائق أحمد' && editFields['receipt-type'] === 'قمح'
+   && editFields['receipt-weight'] === 50 && editFields['receipt-weight2'] === 10 && editFields['receipt-deficit'] === 2
+   && editFields['receipt-office-amount'] === 75 && editFields['receipt-discount'] === 25 && editFields['receipt-add'] === 40,
+   'Edit RESTORED (Phase 5 — Step 3): kartano / row date / driver name / type / weights / officeAmount / discount / add reconstructed exactly as entered');
 const editReceiptNumber = read.receipt.receipt_number || read.receipt.receiptNumber || '';
-ok(editReceiptNumber === '', 'Edit header: receiptNumber input reconstructed as EMPTY (receipt_number not persisted)');
+ok(editReceiptNumber === '42', `Edit header: receiptNumber input reconstructed from persisted ${J(editReceiptNumber)} — save gate unblocked`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE G — Edit-save consequences (REAL validation gate + REAL calculator on
@@ -330,11 +339,12 @@ fingerprint(RECEIPTS_SRC, "    alert('رقم النموذج مطلوب');", 'val
 fingerprint(RECEIPTS_SRC, '  if (!rawData.receipt_number) {', 'gate condition: !rawData.receipt_number');
 fingerprint(RECEIPTS_SRC, '  if (!el || ReceiptState.isEditing) return;', 'generateReceiptNumber refuses in edit mode');
 const gateBlocks = !(editReceiptNumber); // validateBeforeSave: if (!rawData.receipt_number) → alert + return false
-ok(gateBlocks === true,
-   'EDIT SAVE HARD-BLOCKED: reconstructed receipt_number="" → validateBeforeSave alerts «رقم النموذج مطلوب» and aborts — for EVERY receipt saved through the current architecture');
+ok(gateBlocks === false,
+   'EDIT SAVE UNBLOCKED: reconstructed receipt_number "42" passes validateBeforeSave (Phase 5 — Steps 2+3)');
 
-// Even if the gate were bypassed: calculateTotals()/update would recompute row nets
-// from the BLANK weight/officeAmount/discount/add inputs (REAL calculateRowNet).
+// calculateTotals()/recompute now runs on the RECONSTRUCTED inputs (REAL
+// calculateRowNet) — the unchanged business calculator must reproduce the
+// persisted net exactly.
 const recomputedA = calculateRowNet({
   weight: parseFloat(editFields['receipt-weight']) || 0,
   weight2: parseFloat(editFields['receipt-weight2']) || 0,
@@ -347,23 +357,27 @@ const recomputedA = calculateRowNet({
   sarf: parseFloat(editFields['receipt-sarf']) || 0,
 });
 console.log(`   row A: persisted net=920  →  recomputed after reconstruction=${recomputedA}`);
-ok(recomputedA === -(150 + 30) && recomputedA !== 920,
-   `Edit re-save would CORRUPT row net 920 → ${recomputedA} (weights/officeAmount/add/discount blank at recompute)`);
+ok(recomputedA === 920 && recomputedA === Money.toDecimal(pA.net),
+   `Edit re-save recompute = ${recomputedA} == persisted net (${Money.toDecimal(pA.net)}) — NO corruption; unchanged calculator + reconstructed inputs`);
 const rebuiltTotals = calculateReceiptTotals(
   [
-    { weight: 0, weight2: 0, deficit: 0, noloon: 20, ohda: 150, officeAmount: 0, discount: 0, add: 0, sarf: 30 },
-    { weight: 0, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
+    // row A — built from the REAL reconstructed bridge output (uiA)
+    { weight: Number(uiA.weight) || 0, weight2: Number(uiA.weight2) || 0, deficit: Number(uiA.deficit) || 0,
+      noloon: uiA.noloon, ohda: uiA.ohda, officeAmount: uiA.officeAmount, discount: uiA.discount,
+      add: uiA.add, sarf: uiA.sarf },
+    // row B — entered values (same reconstruction established)
+    { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
   ], 100, 500, 0);
 console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, net_due=${rebuiltTotals.net_due}, net_total=${rebuiltTotals.net_total}`);
-ok(rebuiltTotals.total === -230 && rebuiltTotals.total !== 1270,
-   `Edit view totals frame is WRONG on load: total ${rebuiltTotals.total} instead of 1270 (negative)`);
+ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_due === 1270 && rebuiltTotals.net_total === 1770,
+   `Edit view totals frame correct on load: total=${rebuiltTotals.total}, net_due=${rebuiltTotals.net_due}, net_total=${rebuiltTotals.net_total} — matches persisted header (1170/1270/1770)`);
 fingerprint(FINANCIAL_SRC, "throw new Error('[FinancialService] total must be a non-negative number.');",
   'FinancialService would reject negative total on save (if the number gate were bypassed)');
 
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n══ SUMMARY ══');
-console.log('Round trip verified: Create→Persist→Read→AllForms→Edit→Reconstruct');
-console.log('LOSS LAYER: persistence assembly in FinancialService (entity builders).');
-console.log('Read repo / read bridges / snapshot readers / edit bridge = faithful to stored data.');
-if (failures > 0) { console.error(`\n❌ ${failures} diagnostic assertion(s) FAILED`); process.exit(1); }
-console.log('\n✅ DIAGNOSTIC COMPLETE — every reported symptom reproduced against real code');
+console.log('Round trip verified: Create→Persist→Read→AllForms→Edit→Reconstruct→Re-save');
+console.log('Former loss layer (persistence entity builders) — fixed in Phase 5 Step 2.');
+console.log('Read bridges (All Forms page + edit reconstruction) — fixed in Phase 5 Step 3.');
+if (failures > 0) { console.error(`\n❌ ${failures} round-trip assertion(s) FAILED`); process.exit(1); }
+console.log('\n✅ ROUND-TRIP COMPLETE — every entered field survives the full cycle against real code');

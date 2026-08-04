@@ -174,22 +174,27 @@ function normalizePersistedRow(row) {
 const _receiptRowsProjection = new Map();
 
 /**
- * Bridge one persisted ReceiptRow (frozen contract, money in CENTS:
+ * Bridge one persisted ReceiptRow (persisted contract, money in CENTS:
  * { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate, driver_price,
- *   loading, destination, office, advance, net, sarf })
+ *   loading, destination, office, advance, net, sarf, kartano, date,
+ *   driver_name, weight, weight2, deficit, weightTotal, type, officeAmount,
+ *   discount, add, row_order })
  * into the read-side vocabulary this page renders/prints (money in DECIMALS).
- * Mirrors the receipts.js read boundary. Columns with no persisted slot
- * (kartano, date, driver name, weights, type, officeAmount, discount, add,
- * separators) render blank — they cannot be restored until the contract
- * is extended (see step-6 reports).
+ * Mirrors the receipts.js read boundary. Every user-entered column is
+ * persisted (Phase 5 — Step 2) and restored here; rows saved before Step 2
+ * carry null for these columns → they render blank (no fabrication).
  */
 function _persistedRowToPageRow(row) {
   const destination = row.destination   || '';
   const plate       = row.vehicle_plate || '';
+  const kartano     = row.kartano ?? '';
+  const rowDate     = row.date    ?? '';
+  const driverName  = row.driver_name || '';
   return {
     _type        : row.row_type === 'separator' ? 'separator' : 'data', // forward-compat
     row_id       : row.row_id     ?? null,
     receipt_id   : row.receipt_id ?? null,
+    row_order    : row.row_order  ?? null,
     driver_id    : row.driver_id  ?? null,
     vehicle_id   : row.vehicle_id ?? null,
     vehicle_plate: plate,
@@ -198,13 +203,18 @@ function _persistedRowToPageRow(row) {
     loading      : row.loading || '',
     taktik       : destination,
     direction    : destination,
-    // ── no persisted slot (blank until the contract gains them) ──
-    kartano: '', kartaNo: '', karta: '',
-    date: '', rowdate: '', data: '', driver: '',
-    owner_name: '', notes: '', type: '',
-    weight: '', weight2: '', deficit: '', weightTotal: '', weight_total: '',
-    discount: 0, officeAmount: 0, add: 0,
+    // ── restored user-entered columns (persisted — Phase 5 Step 2) ──
+    kartano, kartaNo: kartano, karta: kartano,
+    date: rowDate, rowdate: rowDate,
+    data: driverName, driver: driverName,
+    owner_name: '', notes: '',
+    type: row.type ?? '',
+    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
+    weightTotal: row.weightTotal ?? '', weight_total: row.weightTotal ?? '',
     // ── money: cents → decimals ──
+    discount: Money.toDecimal(row.discount ?? 0),
+    officeAmount: Money.toDecimal(row.officeAmount ?? 0),
+    add: Money.toDecimal(row.add ?? 0),
     noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
     ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
     sarf  : Money.toDecimal(row.sarf ?? 0),
@@ -220,7 +230,11 @@ async function _loadReceiptRowsProjection(receipts) {
       const rows = key
         ? await ReceiptReadRepository.getReceiptRowsByReceipt(rec.id)
         : [];
-      _receiptRowsProjection.set(key, (rows || []).map(_persistedRowToPageRow));
+      // Render in the persisted row_order sequence (stable sort; pre-Step-2
+      // rows carry null and keep repository order).
+      const ordered = [...(rows || [])].sort((a, b) =>
+        (a?.row_order ?? Number.MAX_SAFE_INTEGER) - (b?.row_order ?? Number.MAX_SAFE_INTEGER));
+      _receiptRowsProjection.set(key, ordered.map(_persistedRowToPageRow));
     } catch (err) {
       console.warn('[allReceipts] row projection failed for receipt', key, err);
       _receiptRowsProjection.set(key, []);

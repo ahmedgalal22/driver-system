@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Round-trip DIAGNOSTIC harness (investigation only — no fix).
+# Round-trip harness (Phase 5 verification; originally the read-only diagnostic).
 # Verifies Create → Persist → Read → All Forms → Edit → Reconstruct for one
 # fully-populated Receipt using the REAL production modules on the idb shim,
 # plus the REAL bridge/mapping functions extracted verbatim from the
