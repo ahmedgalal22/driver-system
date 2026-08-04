@@ -1562,36 +1562,48 @@ async function getDriverKartas(driverId) {
   for (const { row, receipt } of projectionData) {
     if (!row || !row.row_id || row.driver_id !== driverId) continue;
 
-    const driverPrice = Number(row.driver_price) || 0; // already persisted cents — no re-conversion
-    if (driverPrice <= 0) continue;
-
+    // BUSINESS RULE: the receipt's driver_price (نولون) is IRRELEVANT on this
+    // screen — never used as the payable base, never displayed, never a
+    // filter. The driver's payable amount (السعر) is the settlement price
+    // entered manually in Driver Details; kartas appear regardless of نولون.
     const rowSettlements = settlementMap.get(row.row_id) || [];
     let settled = 0;
     let lastDate = null;
+    let priceCents = null;   // settlement price (cents) from the LATEST active settlement
+    let latestSettledAt = -Infinity;
 
     for (const s of rowSettlements) {
       settled += Math.abs(Number(s.amount) || 0); // ledger amounts are persisted cents
       if (!lastDate || new Date(s.date) > new Date(lastDate)) lastDate = s.date;
+      const enteredAt = new Date(s.applied_at || s.date || 0).getTime() || 0;
+      if (typeof s.price === 'number' && enteredAt >= latestSettledAt) {
+        latestSettledAt = enteredAt;
+        priceCents = s.price;
+      }
     }
 
-    const remaining = driverPrice - settled;
+    // Payments / remaining / status are anchored ONLY to the settlement price.
+    const remaining = priceCents === null ? null : Math.max(0, priceCents - settled);
     let status = 'unpaid';
-    if (settled > 0 && remaining > 0) status = 'partial';
-    else if (remaining <= 0) status = 'paid';
+    if (priceCents !== null && settled > 0) {
+      if (remaining > 0) status = 'partial';
+      else status = 'paid';
+    }
 
     result.push({
       row_id: row.row_id,
       receipt_id: row.receipt_id,
       receipt_number: receipt?.receipt_number || null,
       date: receipt?.receipt_date || null,
+      vehicle_id: row.vehicle_id || null,
       vehicle_plate: row.vehicle_plate || null,
       company: row.office || null,
       loading: row.loading || null,
       destination: row.destination || null,
       advance: Money.toDecimal(row.advance ?? 0), // persisted cents → decimal, single conversion
-      driver_price: Money.toDecimal(driverPrice),
+      price: priceCents === null ? null : Money.toDecimal(priceCents), // settlement price only — NEVER نولون
       settled: Money.toDecimal(settled),
-      remaining: Money.toDecimal(Math.max(0, remaining)),
+      remaining: remaining === null ? null : Money.toDecimal(remaining),
       status,
       last_settlement_date: lastDate,
     });
@@ -1613,7 +1625,7 @@ async function getDriverPaidKartas(driverId) {
 async function getDriverKartasSummary(driverId) {
   const kartas = await getDriverKartas(driverId);
   let total_kartas = 0, unpaid_kartas = 0, partial_kartas = 0, paid_kartas = 0;
-  let total_driver_price = 0, total_settled = 0, total_remaining = 0;
+  let total_price = 0, total_settled = 0, total_remaining = 0;
 
   for (const k of kartas) {
     total_kartas++;
@@ -1621,9 +1633,11 @@ async function getDriverKartasSummary(driverId) {
     else if (k.status === 'partial') partial_kartas++;
     else if (k.status === 'paid') paid_kartas++;
 
-    total_driver_price += Money.toCents(k.driver_price);
+    // Summed over the settlement price ONLY (نولون never enters this summary);
+    // kartas with no settlement yet contribute 0.
+    total_price += Money.toCents(k.price ?? 0);
     total_settled += Money.toCents(k.settled);
-    total_remaining += Money.toCents(k.remaining);
+    total_remaining += Money.toCents(k.remaining ?? 0);
   }
 
   return {
@@ -1631,7 +1645,7 @@ async function getDriverKartasSummary(driverId) {
     unpaid_kartas,
     partial_kartas,
     paid_kartas,
-    total_driver_price: Money.toDecimal(total_driver_price),
+    total_price: Money.toDecimal(total_price),
     total_settled: Money.toDecimal(total_settled),
     total_remaining: Money.toDecimal(total_remaining),
   };
@@ -1651,13 +1665,15 @@ async function getKartaSettlementHistory(rowId) {
 
 async function createKartaSettlement(username, data) {
   if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required');
-  if (!data?.row_id || typeof data.amount !== 'number') {
-    throw new Error('[FinancialService:createKartaSettlement] row_id and amount are required');
+  if (!data?.row_id || typeof data.amount !== 'number' || !data?.vehicle_id) {
+    throw new Error('[FinancialService:createKartaSettlement] row_id, amount and vehicle_id are required');
   }
 
   const rowId = data.row_id;
   const amount = Money.toCents(data.amount);
   if (amount <= 0) throw new Error('[FinancialService:createKartaSettlement] amount must be positive');
+  const chargeVehicleId = String(data.vehicle_id).trim();
+  if (!chargeVehicleId) throw new Error('[FinancialService:createKartaSettlement] vehicle_id (the vehicle to charge) is required');
 
   const referenceId = _uuid();
   const now = DateUtils.nowLocal();
@@ -1670,6 +1686,10 @@ async function createKartaSettlement(username, data) {
   const kartaRow = await ReceiptRepository.getRowById(String(rowId));
   const settlementDriverId = kartaRow?.driver_id ?? null;
 
+  // BUSINESS RULE: the manually entered amount is the SETTLEMENT PRICE — the
+  // driver's payable amount for this karta (never the receipt نولون). It is
+  // persisted on the settlement record; payments/remaining/status re-derive
+  // from it. vehicle_id records the vehicle the user chose to charge.
   await DB.transaction(async (tx) => {
     await tx.add(STORE.LEDGER, {
       username,
@@ -1679,6 +1699,8 @@ async function createKartaSettlement(username, data) {
       client_type: 'driver',
       type: KARTA_SETTLEMENT_TYPE,
       amount: -amount,
+      price: amount, // settlement price (cents) — the payable base
+      vehicle_id: chargeVehicleId, // the vehicle charged by this settlement
       reference_type: KARTA_REF_TYPE,
       reference_id: rowId,
       date,

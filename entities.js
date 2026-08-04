@@ -1156,6 +1156,7 @@ async function _loadDriverKartasTab(driverId) {
       FinancialService.getDriverKartas(driverId),
       FinancialService.getDriverKartasSummary(driverId)
     ]);
+    _currentKartas = kartas; // stashed for the settlement modal (row vehicle preselect)
 
     // Summary cards
     summaryContainer.innerHTML = `
@@ -1163,7 +1164,7 @@ async function _loadDriverKartasTab(driverId) {
       <div class="card p-4"><div class="text-xs text-muted">غير مدفوعة</div><div class="text-2xl font-bold text-red-600">${summary.unpaid_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">مدفوعة جزئياً</div><div class="text-2xl font-bold text-yellow-600">${summary.partial_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">مدفوعة بالكامل</div><div class="text-2xl font-bold text-green-600">${summary.paid_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div class="text-xl font-bold">${_fmt(summary.total_driver_price)}</div></div>
+      <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">إجمالي المدفوع</div><div class="text-xl font-bold">${_fmt(summary.total_settled)}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">المتبقي</div><div class="text-xl font-bold">${_fmt(summary.total_remaining)}</div></div>
     `;
@@ -1189,14 +1190,30 @@ async function _loadDriverKartasTab(driverId) {
 }
 
 let _currentKartaRowId = null;
+let _currentKartas = []; // last kartas dataset loaded for the open Driver Details page
 
-function _openKartaSettlementModal(rowId) {
+async function _openKartaSettlementModal(rowId) {
   _currentKartaRowId = rowId;
   const modal = document.getElementById('kartaSettlementModal');
   const amountEl = document.getElementById('kartaSettlementAmount');
+  const vehicleEl = document.getElementById('kartaSettlementVehicle');
   const dateEl = document.getElementById('kartaSettlementDate');
   const noteEl = document.getElementById('kartaSettlementNote');
   const msgEl = document.getElementById('kartaSettlementMsg');
+
+  // The user selects the vehicle to charge (workflow step 3). Options = the
+  // user's registered vehicles; preselect the karta row's own vehicle.
+  if (vehicleEl) {
+    const username = _currentUsername();
+    const vehicles = (await ClientRepository.getAllVehicles())
+      .filter(v => v && v.username === username && v.deleted_at == null);
+    vehicleEl.innerHTML = '<option value="">— اختر المركبة —</option>'
+      + vehicles.map(v => `<option value="${v.id}">${String(v.plate || '').replace(/</g, '&lt;')}</option>`).join('');
+    const k = _currentKartas.find(k => String(k.row_id) === String(rowId));
+    if (k?.vehicle_id && [...vehicleEl.options].some(o => o.value === String(k.vehicle_id))) {
+      vehicleEl.value = String(k.vehicle_id);
+    }
+  }
 
   if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
   if (amountEl) amountEl.value = '';
@@ -1214,12 +1231,17 @@ function _closeKartaSettlementModal() {
 async function _saveKartaSettlement() {
   const msgEl = document.getElementById('kartaSettlementMsg');
   const amount = parseFloat(document.getElementById('kartaSettlementAmount')?.value) || 0;
+  const chargeVehicleId = document.getElementById('kartaSettlementVehicle')?.value || '';
   const date = document.getElementById('kartaSettlementDate')?.value;
   const note = document.getElementById('kartaSettlementNote')?.value || '';
 
   if (!_currentKartaRowId) return;
   if (amount <= 0) {
-    if (msgEl) { msgEl.textContent = '❌ المبلغ يجب أن يكون أكبر من صفر'; msgEl.classList.add('is-visible'); }
+    if (msgEl) { msgEl.textContent = '❌ السعر يجب أن يكون أكبر من صفر'; msgEl.classList.add('is-visible'); }
+    return;
+  }
+  if (!chargeVehicleId) {
+    if (msgEl) { msgEl.textContent = '❌ يجب اختيار المركبة المحمَّل عليها'; msgEl.classList.add('is-visible'); }
     return;
   }
   if (!date) {
@@ -1231,7 +1253,8 @@ async function _saveKartaSettlement() {
   try {
     await FinancialService.createKartaSettlement(username, {
       row_id: _currentKartaRowId,
-      amount,
+      amount, // enters the settlement AND becomes the karta's settlement price (السعر)
+      vehicle_id: chargeVehicleId,
       date,
       note: note || undefined
     });
@@ -1267,9 +1290,9 @@ function _renderKartaTable(kartas, tbody, driverId) {
         <td>${k.loading || '—'}</td>
         <td>${k.destination || '—'}</td>
         <td>${_fmt(k.advance)}</td>
-        <td class="font-semibold">${_fmt(k.driver_price)}</td>
+        <td class="font-semibold">${k.price == null ? '—' : _fmt(k.price)}</td>
         <td>${_fmt(k.settled)}</td>
-        <td>${_fmt(k.remaining)}</td>
+        <td>${k.remaining == null ? '—' : _fmt(k.remaining)}</td>
         <td>
           <span class="px-2 py-0.5 rounded text-xs font-medium ${k.status === 'paid' ? 'bg-green-100 text-green-700' : k.status === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}">${k.status}</span>
           ${settleBtn}
@@ -1723,6 +1746,21 @@ function attachOwnersPageListeners() {
   document.body.dataset.ownersListenersBound = '1';
 
   document.addEventListener('click', async (e) => {
+    // Karta settlement modal (تسوية) — enter السعر, pick the vehicle to charge
+    const openKartaStl = e.target.closest('[data-action="open-karta-settlement"]');
+    if (openKartaStl) {
+      await _openKartaSettlementModal(openKartaStl.dataset.rowId);
+      return;
+    }
+    if (e.target.closest('[data-action="close-karta-settlement"]')) {
+      _closeKartaSettlementModal();
+      return;
+    }
+    if (e.target.closest('[data-action="save-karta-settlement"]')) {
+      await _saveKartaSettlement();
+      return;
+    }
+
     // Open driver deposit modal
     if (e.target.closest('[data-action="open-driver-deposit"]')) {
       await _openDriverDepositModal(null);
