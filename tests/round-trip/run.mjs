@@ -107,15 +107,17 @@ const { _persistedRowToPageRow } = allReceiptsScope;
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE A — What the form actually submits
-// Payload shape mirrors collectRawData() (receipts.js:2653) + collectReceiptRows()
-// (receipts.js:2564). Fingerprint the collector mappings so this payload is
+// Payload shape mirrors collectRawData() (receipts.js:2664) + collectReceiptRows()
+// (receipts.js:2566). Fingerprint the collector mappings so this payload is
 // provably faithful to production code.
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n══ STAGE A — form payload (collector fingerprints) ══');
 [
   ["kartano      : normalizeOptionalString(_field(row, 'receipt-kartano'))", 'collector maps kartano'],
   ["date         : normalizeOptionalString(_field(row, 'receipt-date'))", 'collector maps row date'],
-  ["data         : normalizeOptionalString(_field(row, 'receipt-data'))", 'collector maps driver name (data)'],
+  ["const rowDriverId = normalizeOptionalString(_field(row, 'receipt-data')); // select value = driver id", 'collector reads the row driver SELECT value (id) — Phase 6: driver per receipt row'],
+  ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
+  ["driver_id    : rowDriverId || null, // authoritative relationship: THIS row → driver (no selected driver → null)", 'collector persists row.driver_id (Receipt Row → Driver; vehicle carries no driver)'],
   ["weight       : _num(row, 'receipt-weight')", 'collector maps weight'],
   ["weight2      : _num(row, 'receipt-weight2')", 'collector maps weight2'],
   ["deficit      : _num(row, 'receipt-deficit')", 'collector maps deficit'],
@@ -150,16 +152,20 @@ const FORM_PAYLOAD = {
   previous_balance: 500, general_discount: 0, general_add: 100,
   paid: 0, total: 0, net_due: 0, net_total: 0,
   rows: [
+    // Row A: driver selected on the row (id-keyed) — collector output shape after
+    // Phase 6 (driver per receipt row): driver_id = select value, driver_name =
+    // display denorm resolved from the driver record (id → name, D3).
     { _type: 'data', owner_id: 'owner-1', owner_name: 'مالك الاختبار',
-      kartano: 'K-100', date: '2026-07-29', data: 'السائق أحمد', driver_name: 'السائق أحمد',
+      kartano: 'K-100', date: '2026-07-29', data: 'السائق أحمد', driver_name: 'السائق أحمد', driver_id: 'drv-1',
       car: 'أ ب ج 1234', vehicle_id: 'veh-1', vehicle_plate: 'أ ب ج 1234',
       loading: 'طنطا', taktik: 'القاهرة', type: 'قمح', office: 'شركة الأمل',
       weight: 50, weight2: 10, deficit: 2, weightTotal: 58,
       noloon: 20, ohda: 150, officeAmount: 75, discount: 25, sarf: 30, add: 40,
       net: rowA_net },
     { _type: 'separator', vehicleName: 'أ ب ج 1234', subtotal: rowA_net, notes: 'ملاحظة الفاصل', isAuto: false },
+    // Row B: NO driver selected («— بدون سائق —», D1) → driver_id/driver_name null.
     { _type: 'data', owner_id: 'owner-1', owner_name: 'مالك الاختبار',
-      kartano: 'K-101', date: '2026-07-29', data: 'السائق أحمد', driver_name: 'السائق أحمد',
+      kartano: 'K-101', date: '2026-07-29', data: null, driver_name: null, driver_id: null,
       car: 'أ ب ج 1234', vehicle_id: 'veh-1', vehicle_plate: 'أ ب ج 1234',
       loading: 'طنطا', taktik: 'الإسكندرية', type: 'ذرة', office: 'شركة الأمل',
       weight: 30, weight2: 0, deficit: 0, weightTotal: 30,
@@ -185,7 +191,10 @@ ok(payloadRowKeys.includes('kartano') && payloadRowKeys.includes('weight') && pa
 ok(servicePayload.rows[0].driver_price === 20 && servicePayload.rows[0].advance === 150
    && servicePayload.rows[0].destination === 'القاهرة',
    'write bridge maps نولون→driver_price, عهدة→advance, الجهة→destination');
-ok(servicePayload.rows[0].driver_id === null, `driver_id is null (form collects free-text name, never an id)`);
+ok(servicePayload.rows[0].driver_id === 'drv-1',
+   `driver_id flows from the row's driver select (Phase 6 — driver per receipt row; got ${J(servicePayload.rows[0].driver_id)})`);
+ok(servicePayload.rows[2].driver_id === null,
+   `driver-less row («— بدون سائق —») keeps driver_id = null (D1: optional per row; got ${J(servicePayload.rows[2].driver_id)})`);
 console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload.rows[2].net}, total=${servicePayload.total}, net_due=${servicePayload.net_due}, net_total=${servicePayload.net_total}`);
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -226,8 +235,11 @@ ok(pA.kartano === 'K-100' && pA.date === '2026-07-29' && pA.driver_name === 'ا�
    && pA.officeAmount === 7500 && pA.discount === 2500 && pA.add === 4000 && pA.row_order === 0
    && !('data' in pA),
    'KEPT: entered values exact — strings/quantities raw, officeAmount/discount/add integer cents (7500/2500/4000); UI-alias "data" intentionally not stored');
-ok(pA.driver_id === null && pA.driver_name === 'السائق أحمد',
-   'KEPT: driver_id null (form collects free text) + driver_name persisted on the row');
+ok(pA.driver_id === 'drv-1' && pA.driver_name === 'السائق أحمد',
+   `KEPT: row-selected driver_id persisted as the authoritative link + driver_name denorm from the driver record (D3) [driver_id=${J(pA.driver_id)}]`);
+const pB = persistedRows.find(r => r.driver_price === 1000);
+ok(pB && pB.driver_id === null && pB.driver_name === null,
+   `driver-less row persisted with driver_id=null → excluded from every driver's Details (driver_id=${J(pB?.driver_id)}, driver_name=${J(pB?.driver_name)})`);
 ok(pA.vehicle_plate === 'أ ب ج 1234' && pA.office === 'شركة الأمل' && pA.loading === 'طنطا'
    && pA.destination === 'القاهرة', 'KEPT: vehicle_plate / office / loading / destination');
 ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 92000 && pA.sarf === 3000,
@@ -295,17 +307,21 @@ console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══'
 [
   "setV('receiptNumber',     receiptData.receipt_number || receiptData.receiptNumber || '');",
   "setF('receipt-kartano',       ui.kartano);",
-  "setF('receipt-data',          ui.data);",
+  "setF('receipt-data',          ui.driver_id || '');",
   "setF('receipt-car',           ui.car);",
   "setF('receipt-noloon',        ui.noloon ? Money.fmt(ui.noloon) : '');",
   "setF('receipt-net',           Money.fmt(ui.net || 0));",
 ].forEach((s) => fingerprint(RECEIPTS_SRC, s, 'loadReceiptForEdit mapping: ' + s.slice(0, 44)));
 fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver-name fallback resolution via driver_id (bridge prefers persisted driver_name)');
+fingerprint(RECEIPTS_SRC, '_receiptApplyDriverOptions(tr); // options must exist before restoring the selection',
+  'loadReceiptForEdit injects driver select options BEFORE restoring the selection');
+fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver select value (authoritative link)",
+  'edit bridge surfaces persisted driver_id for the row select');
 fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="text" readonly tabindex="-1"', 'receiptNumber input is readonly');
 
-const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id=null → */ '');
+const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id map */ '');
 const editFields = {
-  'receipt-kartano': uiA.kartano, 'receipt-date': uiA.date, 'receipt-data': uiA.data,
+  'receipt-kartano': uiA.kartano, 'receipt-date': uiA.date, 'receipt-data': uiA.driver_id || '',
   'receipt-car': uiA.car, 'receipt-weight': uiA.weight, 'receipt-weight2': uiA.weight2,
   'receipt-deficit': uiA.deficit, 'receipt-type': uiA.type, 'receipt-office': uiA.office,
   'receipt-loading': uiA.loading, 'receipt-taktik': uiA.taktik,
@@ -323,10 +339,12 @@ ok(editFields['receipt-noloon'] === '20.00' && editFields['receipt-ohda'] === '1
    && editFields['receipt-sarf'] === '30.00' && editFields['receipt-net'] === '920.00',
    'Edit OK: نولون / عهدة / sarf / net reconstructed from persisted cents');
 ok(editFields['receipt-kartano'] === 'K-100' && editFields['receipt-date'] === '2026-07-29'
-   && editFields['receipt-data'] === 'السائق أحمد' && editFields['receipt-type'] === 'قمح'
+   && editFields['receipt-data'] === 'drv-1' && editFields['receipt-type'] === 'قمح'
    && editFields['receipt-weight'] === 50 && editFields['receipt-weight2'] === 10 && editFields['receipt-deficit'] === 2
    && editFields['receipt-office-amount'] === 75 && editFields['receipt-discount'] === 25 && editFields['receipt-add'] === 40,
-   'Edit RESTORED (Phase 5 — Step 3): kartano / row date / driver name / type / weights / officeAmount / discount / add reconstructed exactly as entered');
+   `Edit RESTORED (Phase 5 — Step 3 + Phase 6): kartano / row date / driver select restored by persisted driver_id (${J(editFields['receipt-data'])}) / type / weights / officeAmount / discount / add reconstructed exactly as entered`);
+ok(uiA.data === 'السائق أحمد',
+   `Edit display denorm: ui.data still resolves the driver NAME from the persisted denorm (got ${J(uiA.data)}) — print/snapshots keep showing names`);
 const editReceiptNumber = read.receipt.receipt_number || read.receipt.receiptNumber || '';
 ok(editReceiptNumber === '42', `Edit header: receiptNumber input reconstructed from persisted ${J(editReceiptNumber)} — save gate unblocked`);
 
