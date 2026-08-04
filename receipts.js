@@ -2630,6 +2630,7 @@ async function collectReceiptRows() {
       date         : normalizeOptionalString(_field(row, 'receipt-date')),
       data         : normalizeOptionalString(_field(row, 'receipt-data')),
       driver_name  : normalizeOptionalString(_field(row, 'receipt-data')) || vehicle.driver_name || null,
+      driver_id    : vehicle.driver_id ?? null, // Phase 6 fix — permanent relationship key: row → vehicle.driver_id → driver (ids only)
       car          : vehicle.plate,
       vehicle_id   : vehicle.id,
       vehicle_plate: vehicle.plate,

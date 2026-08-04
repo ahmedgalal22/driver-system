@@ -1562,7 +1562,7 @@ async function getDriverKartas(driverId) {
   for (const { row, receipt } of projectionData) {
     if (!row || !row.row_id || row.driver_id !== driverId) continue;
 
-    const driverPrice = Money.toCents(row.driver_price ?? 0);
+    const driverPrice = Number(row.driver_price) || 0; // already persisted cents — no re-conversion
     if (driverPrice <= 0) continue;
 
     const rowSettlements = settlementMap.get(row.row_id) || [];
@@ -1570,7 +1570,7 @@ async function getDriverKartas(driverId) {
     let lastDate = null;
 
     for (const s of rowSettlements) {
-      settled += Math.abs(Money.toCents(s.amount));
+      settled += Math.abs(Number(s.amount) || 0); // ledger amounts are persisted cents
       if (!lastDate || new Date(s.date) > new Date(lastDate)) lastDate = s.date;
     }
 
@@ -1588,7 +1588,7 @@ async function getDriverKartas(driverId) {
       company: row.office || null,
       loading: row.loading || null,
       destination: row.destination || null,
-      advance: Money.toDecimal(Money.toCents(row.advance ?? 0)),
+      advance: Money.toDecimal(row.advance ?? 0), // persisted cents → decimal, single conversion
       driver_price: Money.toDecimal(driverPrice),
       settled: Money.toDecimal(settled),
       remaining: Money.toDecimal(Math.max(0, remaining)),
@@ -1664,10 +1664,16 @@ async function createKartaSettlement(username, data) {
   const date = data.date || DateUtils.todayLocal();
   const note = data.note || 'تسوية كارتة سائق';
 
+  // Attribute the settlement to the karta's driver via the permanent id key
+  // (row.driver_id) — getDriverKartas matches settlements to drivers by it.
+  // No name-based matching anywhere in this chain.
+  const kartaRow = await ReceiptRepository.getRowById(String(rowId));
+  const settlementDriverId = kartaRow?.driver_id ?? null;
+
   await DB.transaction(async (tx) => {
     await tx.add(STORE.LEDGER, {
       username,
-      owner_id: null,
+      owner_id: settlementDriverId,
       owner_name: null,
       client_id: null,
       client_type: 'driver',

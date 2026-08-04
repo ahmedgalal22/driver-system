@@ -1440,8 +1440,8 @@ function _ensureVehicleModal() {
             <input id="vehicleModalPlate" type="text" class="input input-sm" placeholder="أدخل رقم المركبة">
           </div>
           <div>
-            <label class="label mb-1" for="vehicleModalDriver">اسم السائق</label>
-            <input id="vehicleModalDriver" type="text" class="input input-sm" placeholder="اسم السائق (اختياري)">
+            <label class="label mb-1" for="vehicleModalDriver">السائق</label>
+            <select id="vehicleModalDriver" class="input input-sm"></select>
           </div>
         </div>
         <div class="flex gap-2">
@@ -1457,7 +1457,7 @@ function _ensureVehicleModal() {
 let _vehicleEditId = null;
 let _vehicleOwnerId = null;
 
-function _openVehicleModal(title, plate, driver, ownerId, editId) {
+async function _openVehicleModal(title, plate, driverId, ownerId, editId) {
   _ensureVehicleModal();
   _vehicleOwnerId = ownerId || null;
   _vehicleEditId = editId || null;
@@ -1468,7 +1468,16 @@ function _openVehicleModal(title, plate, driver, ownerId, editId) {
   const msg = document.getElementById('vehicleModalMsg');
   if (titleEl) titleEl.textContent = title;
   if (plateEl) plateEl.value = plate || '';
-  if (driverEl) driverEl.value = driver || '';
+  // Driver assignment is id-keyed (Phase 6 fix): the vehicle stores driver_id
+  // pointing at a registered driver record (driver_name stays a display denorm).
+  if (driverEl) {
+    const username = _currentUsername();
+    const drivers = (await ClientRepository.getDriversForUser(username))
+      .filter(d => d && d.deleted_at == null);
+    driverEl.innerHTML = '<option value="">— بدون سائق —</option>'
+      + drivers.map(d => `<option value="${d.id}">${String(d.name || '').replace(/</g, '&lt;')}</option>`).join('');
+    driverEl.value = driverId ? String(driverId) : '';
+  }
   if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
   modal?.classList.remove('hidden');
 }
@@ -1499,7 +1508,7 @@ async function _renderOwnerVehicles(client) {
                 <td>${v.plate || '-'}</td>
                 <td>${v.driver_name || '—'}</td>
                 <td>
-                  <button type="button" data-action="edit-vehicle" data-vehicle-id="${v.id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
+                  <button type="button" data-action="edit-vehicle" data-vehicle-id="${v.id}" data-plate="${v.plate || ''}" data-driver-id="${v.driver_id || ''}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
                   <button type="button" data-action="delete-vehicle" data-vehicle-id="${v.id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
                 </td>
               </tr>
@@ -2008,12 +2017,12 @@ function attachOwnersPageListeners() {
     // Vehicles
     if (e.target.closest('[data-action="add-vehicle-manual"]')) {
       if (!_selectedClient) return;
-      _openVehicleModal('إضافة مركبة', '', '', _selectedClient.id, null);
+      await _openVehicleModal('إضافة مركبة', '', '', _selectedClient.id, null);
       return;
     }
     const editVeh = e.target.closest('[data-action="edit-vehicle"]');
     if (editVeh) {
-      _openVehicleModal('تعديل مركبة', editVeh.dataset.plate || '', editVeh.dataset.driver || '', editVeh.dataset.ownerId || _selectedClient?.id, editVeh.dataset.id);
+      await _openVehicleModal('تعديل مركبة', editVeh.dataset.plate || '', editVeh.dataset.driverId || '', editVeh.dataset.ownerId || _selectedClient?.id, editVeh.dataset.id);
       return;
     }
     const delVeh = e.target.closest('[data-action="delete-vehicle"]');
@@ -2035,7 +2044,7 @@ function attachOwnersPageListeners() {
       const modal = document.getElementById('vehicleModal');
       if (!modal) return;
       const plate = document.getElementById('vehicleModalPlate')?.value?.trim() || '';
-      const driver = document.getElementById('vehicleModalDriver')?.value?.trim() || '';
+      const driverId = document.getElementById('vehicleModalDriver')?.value || '';
       const ownerId = modal.dataset.ownerId || _selectedClient?.id;
       const editId = modal.dataset.editId || null;
       if (!plate || !ownerId) {
@@ -2044,10 +2053,18 @@ function attachOwnersPageListeners() {
       }
       try {
         const username = _currentUsername();
+        // Id-keyed driver link (Phase 6 fix): persist driver_id; driver_name is
+        // kept only as a display denorm taken from the selected driver record.
+        let driverName = null;
+        if (driverId) {
+          const d = await ClientRepository.getDriverById(String(driverId));
+          driverName = d?.name || null;
+        }
+        const vehiclePayload = { plate, driver_id: driverId || null, driver_name: driverName, owner_id: String(ownerId) };
         if (editId) {
-          await ClientRepository.updateVehicle(editId, { plate, driver_name: driver || null, owner_id: String(ownerId) }, { username });
+          await ClientRepository.updateVehicle(editId, vehiclePayload, { username });
         } else {
-          await ClientRepository.saveVehicle({ username, plate, driver_name: driver || null, owner_id: String(ownerId) }, { username });
+          await ClientRepository.saveVehicle({ username, ...vehiclePayload }, { username });
         }
         modal.classList.add('hidden');
         if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner');
