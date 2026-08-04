@@ -985,6 +985,26 @@ async function _saveDriverSalfa() {
 
 let _driverLedgerCache = [];
 
+// ── Phase 6: Driver Details tab separation (UI only) ─────────────────────────
+// kartas    → Receipts/Kartas panel (driverTabKartas)
+// ledger    → Financial Transactions panel (driverTabLedger)
+// Pure visual switch: both datasets are already loaded by showDriverDetails;
+// nothing is re-fetched or recalculated here.
+let _driverDetailsTab = 'kartas';
+
+function _setDriverDetailsTab(tab) {
+  _driverDetailsTab = tab === 'ledger' ? 'ledger' : 'kartas';
+  const kartasPanel = document.getElementById('driverTabKartas');
+  const ledgerPanel = document.getElementById('driverTabLedger');
+  const kartasBtn = document.getElementById('driverTabBtnKartas');
+  const ledgerBtn = document.getElementById('driverTabBtnLedger');
+  const isKartas = _driverDetailsTab === 'kartas';
+  if (kartasPanel) kartasPanel.classList.toggle('hidden', !isKartas);
+  if (ledgerPanel) ledgerPanel.classList.toggle('hidden', isKartas);
+  if (kartasBtn) { kartasBtn.classList.toggle('active-purple', isKartas); kartasBtn.setAttribute('aria-selected', String(isKartas)); }
+  if (ledgerBtn) { ledgerBtn.classList.toggle('active-purple', !isKartas); ledgerBtn.setAttribute('aria-selected', String(!isKartas)); }
+}
+
 function _renderDriverLedgerTable(entries) {
   const tbody = document.getElementById('driverTransactionsBody');
   if (!tbody) return;
@@ -1080,6 +1100,10 @@ async function showDriverDetails(id) {
   if (typeof window.showPage === 'function') {
     await window.showPage('driverDetailsPage');
   }
+
+  // Apply the active tab view (Phase 6) — preserved across re-entry and
+  // post-mutation refreshes (deposit/salfa/karta settlement/tx delete).
+  _setDriverDetailsTab(_driverDetailsTab);
 
   // Load Kartas tab (Phase 7A)
   await _loadDriverKartasTab(id);
@@ -1899,6 +1923,16 @@ function attachOwnersPageListeners() {
       if (toEl) toEl.value = '';
       if (searchEl) searchEl.value = '';
       _renderDriverLedgerTable(_driverLedgerCache);
+      return;
+    }
+
+    // Driver details tabs (Phase 6 — UI separation)
+    if (e.target.closest('[data-action="driver-tab-kartas"]')) {
+      _setDriverDetailsTab('kartas');
+      return;
+    }
+    if (e.target.closest('[data-action="driver-tab-ledger"]')) {
+      _setDriverDetailsTab('ledger');
       return;
     }
 

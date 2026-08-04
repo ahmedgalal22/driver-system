@@ -167,8 +167,14 @@
             </div>
           </div>
 
-          <!-- Kartas Tab -->
-          <div class="mb-8">
+          <!-- Driver details tabs (Phase 6 — UI separation: kartas vs financial transactions) -->
+          <div class="tabs mb-6" role="tablist">
+            <button type="button" role="tab" id="driverTabBtnKartas" data-action="driver-tab-kartas" class="tab-btn active-purple" aria-selected="true">الكارتات / النماذج</button>
+            <button type="button" role="tab" id="driverTabBtnLedger" data-action="driver-tab-ledger" class="tab-btn" aria-selected="false">الحركات المالية</button>
+          </div>
+
+          <!-- Receipts / Kartas panel -->
+          <div id="driverTabKartas" class="mb-8" role="tabpanel">
             <div class="flex items-center justify-between mb-4">
               <h3 class="text-lg font-bold">الكارتات</h3>
               <input id="kartaSearchInput" type="text" class="input input-sm" placeholder="🔍 ابحث في الكارتات..." style="max-width:280px;">
@@ -203,7 +209,8 @@
             </div>
           </div>
 
-          <section class="mb-8">
+          <!-- Financial Transactions panel -->
+          <section id="driverTabLedger" class="mb-8 hidden" role="tabpanel">
             <h3 class="text-lg font-bold mb-4">حركات السائق</h3>
             <div class="filter-row mb-6 flex-wrap" style="display:flex;gap:12px;align-items:flex-end;">
               <div class="form-group mb-0">
