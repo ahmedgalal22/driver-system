@@ -1187,16 +1187,24 @@ async function _loadDriverKartasTab(driverId) {
 }
 
 let _currentKartaRowId = null;
+let _kartaSettlementMode = 'create'; // 'create' (تسوية) | 'edit' (تعديل التسوية)
 let _currentKartas = []; // last kartas dataset loaded for the open Driver Details page
 
-async function _openKartaSettlementModal(rowId) {
+async function _openKartaSettlementModal(rowId, mode = 'create') {
   _currentKartaRowId = rowId;
+  _kartaSettlementMode = mode === 'edit' ? 'edit' : 'create';
   const modal = document.getElementById('kartaSettlementModal');
   const amountEl = document.getElementById('kartaSettlementAmount');
   const vehicleEl = document.getElementById('kartaSettlementVehicle');
   const dateEl = document.getElementById('kartaSettlementDate');
   const noteEl = document.getElementById('kartaSettlementNote');
   const msgEl = document.getElementById('kartaSettlementMsg');
+  const titleEl = document.getElementById('kartaSettlementTitle');
+  const saveBtnEl = document.getElementById('kartaSettlementSaveBtn');
+
+  // Same dialog, two modes: create (تسوية) vs edit (تعديل التسوية).
+  if (titleEl) titleEl.textContent = _kartaSettlementMode === 'edit' ? 'تعديل التسوية' : 'تسوية كارتة';
+  if (saveBtnEl) saveBtnEl.textContent = _kartaSettlementMode === 'edit' ? '💾 حفظ التعديل' : '💾 حفظ التسوية';
 
   // The user selects the vehicle to charge (workflow step 3). Options = EVERY
   // active registered vehicle (business rule: no username scoping — vehicles
@@ -1218,12 +1226,32 @@ async function _openKartaSettlementModal(rowId) {
   if (dateEl) dateEl.value = DateUtils.todayLocal();
   if (noteEl) noteEl.value = '';
 
+  if (_kartaSettlementMode === 'edit') {
+    // Prefill from the CURRENT active settlement (the same logical settlement
+    // being edited) — price, charged vehicle, date, note.
+    const history = await FinancialService.getKartaSettlementHistory(rowId);
+    const active = (history || []).filter(e => e.is_reversed === false);
+    const cur = active[active.length - 1];
+    if (!cur) {
+      if (msgEl) { msgEl.textContent = '❌ لا توجد تسوية نشطة لهذه الكارتة'; msgEl.classList.add('is-visible'); }
+      modal?.classList.remove('hidden');
+      return;
+    }
+    if (amountEl) amountEl.value = typeof cur.price === 'number' ? cur.price : Math.abs(Number(cur.amount) || 0);
+    if (vehicleEl && cur.vehicle_id && [...vehicleEl.options].some(o => o.value === String(cur.vehicle_id))) {
+      vehicleEl.value = String(cur.vehicle_id);
+    }
+    if (dateEl && cur.date) dateEl.value = cur.date;
+    if (noteEl) noteEl.value = cur.note || '';
+  }
+
   modal?.classList.remove('hidden');
 }
 
 function _closeKartaSettlementModal() {
   document.getElementById('kartaSettlementModal')?.classList.add('hidden');
   _currentKartaRowId = null;
+  _kartaSettlementMode = 'create';
 }
 
 async function _saveKartaSettlement() {
@@ -1248,20 +1276,37 @@ async function _saveKartaSettlement() {
   }
 
   const username = _currentUsername();
+  const mode = _kartaSettlementMode;
   try {
-    await FinancialService.createKartaSettlement(username, {
+    const payload = {
       row_id: _currentKartaRowId,
       amount, // enters the settlement AND becomes the karta's settlement price (السعر)
       vehicle_id: chargeVehicleId,
       date,
       note: note || undefined
-    });
+    };
+    if (mode === 'edit') {
+      // Updates the EXISTING settlement (same logical settlement, one active) —
+      // never creates a second one.
+      await FinancialService.updateKartaSettlement(username, payload);
+    } else {
+      await FinancialService.createKartaSettlement(username, payload);
+    }
 
     _closeKartaSettlementModal();
 
     const driverId = _getCurrentDriverId();
     if (driverId) {
-      await _loadDriverKartasTab(driverId);
+      if (mode === 'edit') {
+        // Full refresh, no manual reload: driver balance, driver ledger,
+        // settlement history, kartas table + summary cards (active tab kept);
+        // then emit owners:changed so any open vehicle/owner balance view
+        // re-derives from the updated ledger.
+        await showDriverDetails(driverId);
+        window.dispatchEvent(new CustomEvent('owners:changed'));
+      } else {
+        await _loadDriverKartasTab(driverId);
+      }
     }
   } catch (err) {
     if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ التسوية'; msgEl.classList.add('is-visible'); }
@@ -1275,10 +1320,11 @@ function _renderKartaTable(kartas, tbody, driverId) {
   }
 
   tbody.innerHTML = kartas.map(k => {
-    const canSettle = k.status === 'unpaid' || k.status === 'partial';
-    const settleBtn = canSettle
+    // Unpaid → create (تسوية). Paid/Partial → edit the existing settlement
+    // (تعديل التسوية) — the settlement stays one logical settlement.
+    const settleBtn = k.status === 'unpaid'
       ? `<button type="button" data-action="open-karta-settlement" data-row-id="${k.row_id}" class="btn btn-primary btn-sm">تسوية</button>`
-      : '—';
+      : `<button type="button" data-action="edit-karta-settlement" data-row-id="${k.row_id}" class="btn btn-primary btn-sm">تعديل التسوية</button>`;
 
     return `
       <tr data-row-id="${k.row_id}">
@@ -1745,7 +1791,13 @@ function attachOwnersPageListeners() {
     // Karta settlement modal (تسوية) — enter السعر, pick the vehicle to charge
     const openKartaStl = e.target.closest('[data-action="open-karta-settlement"]');
     if (openKartaStl) {
-      await _openKartaSettlementModal(openKartaStl.dataset.rowId);
+      await _openKartaSettlementModal(openKartaStl.dataset.rowId, 'create');
+      return;
+    }
+    // Edit an existing settlement (تعديل التسوية) — same modal, prefill mode
+    const editKartaStl = e.target.closest('[data-action="edit-karta-settlement"]');
+    if (editKartaStl) {
+      await _openKartaSettlementModal(editKartaStl.dataset.rowId, 'edit');
       return;
     }
     if (e.target.closest('[data-action="close-karta-settlement"]')) {
