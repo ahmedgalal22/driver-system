@@ -167,11 +167,8 @@ function _normalize(rawData) {
   });
   const dataRows = rows.filter(r => r.row_type !== ROW_TYPES.SEPARATOR);
 
-  const previous_balance = Number(rawData.previous_balance) || 0;
-
-  const calcs = calculateReceiptTotals(rows, previous_balance);
+  const calcs = calculateReceiptTotals(rows);
   const total = calcs.total;
-  const balance = calcs.balance;
   const row_count        = dataRows.length;
   const general_discount = 0; // removed from system
 
@@ -193,9 +190,7 @@ function _normalize(rawData) {
     rows,
     row_count,
     total,
-    previous_balance,
     general_discount,
-    balance,
   };
 }
 
@@ -283,8 +278,6 @@ function _buildServicePayload(n) {
     row_count        : n.row_count,
     total            : n.total,
     general_discount : n.general_discount,
-    previous_balance : n.previous_balance,
-    balance          : n.balance,
   };
 }
 
@@ -386,16 +379,6 @@ async function getAll(username) {
   if (!username) throw new Error('[ReceiptsModule:getAll] username is required.');
 
   return await ReceiptRepository.getAll(username);
-}
-
-// ─── PUBLIC: getClientBalance ─────────────────────────────────────────────
-
-async function getClientBalance(client_id) {
-  return FinancialService.getClientBalance(client_id);
-}
-
-async function getClientLedger(client_id) {
-  return FinancialService.getClientLedger(client_id);
 }
 
 async function _receiptNumberExistsInTx(tx, number) {
@@ -637,8 +620,6 @@ const ReceiptsModule = Object.freeze({
   update,
   delete : remove,
   getAll,
-  getClientBalance,
-  getClientLedger,
   peekNextReceiptNumber,
   allocateReceiptNumber,
   getNextReceiptNumber,
@@ -1183,17 +1164,6 @@ function renderTotals() {
           </tr>
         </table>
       </div>
-      <div class="totals-frame totals-frame--side"
-        style="flex:1;min-width:340px;border:1px solid #d1d5db;border-radius:8px;background:#fff;overflow:hidden;">
-        <table class="totals-table" style="width:100%;border-collapse:collapse;table-layout:fixed;">
-          <tr>
-            <td class="totals-cell" style="background:#2563eb;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
-              <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">رصيد العميل</div>
-              <div style="font-size:18px;font-weight:bold;margin:0;" id="receiptBalance" data-previous="0">0.00</div>
-            </td>
-          </tr>
-        </table>
-      </div>
     </div>`;
 }
 
@@ -1446,55 +1416,6 @@ function _selectedClient() {
   const value = document.getElementById('clientInput')?.value.trim() || '';
   if (!value) return null;
   return _clientsCache.find(c => c.label === value || (c.name === value && _clientsCache.filter(x => x.name === value).length === 1)) || null;
-}
-
-async function updateSelectedClientBalanceExcluding(excludeReceiptId) {
-  const client = _selectedClient();
-  const balEl = document.getElementById('receiptBalance');
-  if (!balEl) return;
-  if (!client) {
-    balEl.dataset.previous = '0';
-    calculateTotals();
-    return;
-  }
-  // Get full client ledger, then exclude this receipt's own entries
-  const ledger = await ReceiptsModule.getClientLedger(client.id);
-  let balance = 0;
-  for (const entry of ledger) {
-    const cents = Money.toCents(entry.amount);
-    // Skip entries belonging to the receipt being edited
-    if (excludeReceiptId && entry.reference_id === String(excludeReceiptId) && entry.reference_type === 'receipt') {
-      continue;
-    }
-    if (entry.type === 'deposit') {
-      balance += cents;
-    } else if (entry.type === 'withdraw') {
-      balance -= cents;
-    } else if (entry.entity_type === 'office' || entry.type === 'OFFICE_DEPOSIT' || entry.type === 'OFFICE_WITHDRAW_AUTO') {
-      if (cents >= 0) balance += cents;
-      else balance -= Math.abs(cents);
-    }
-  }
-  balEl.dataset.previous = String(Money.toDecimal(balance));
-  calculateTotals();
-  await refreshVehicleWarnings();
-}
-
-async function updateSelectedClientBalance() {
-  const client = _selectedClient();
-  const balEl = document.getElementById('receiptBalance');
-  if (!balEl) return;
-  if (!client) {
-    balEl.dataset.previous = '0';
-    calculateTotals();
-    return;
-  }
-  const snapshot = await ReceiptsModule.getClientBalance(client.id);
-  balEl.dataset.previous = String(snapshot.balance || 0);
-  calculateTotals();
-  await refreshVehicleWarnings();
-  // Populate vehicle/driver datalists from client's data
-  await _receiptPopulateClientVehicles();
 }
 
 async function loadOfficesForReceipt() {
@@ -2006,11 +1927,8 @@ function calculateTotals() {
       add: parseFloat(row.querySelector('.receipt-add')?.value) || 0,
     }));
 
-  const balEl = document.getElementById('receiptBalance');
-  const previousBalance = parseFloat(balEl?.dataset.previous || '0') || 0;
-
   // Calculate using our unified financial calculator!
-  const calcs = calculateReceiptTotals(rowObjs, previousBalance);
+  const calcs = calculateReceiptTotals(rowObjs);
   const total = calcs.total;
 
   const totalEl = document.getElementById('totalAmount');
@@ -2031,15 +1949,6 @@ function calculateTotals() {
       sectionTotal += parseFloat(row.querySelector('.receipt-net')?.value) || 0;
     }
   });
-
-  // رصيد العميل المعروض: الرصيد السابق ما لم توجد صفوف، وإلا الرصيد المتوقع (الإجمالي + السابق)
-  if (balEl) {
-    if (total === 0 && previousBalance !== 0) {
-      balEl.textContent = Money.fmt(previousBalance);
-    } else {
-      balEl.textContent = Money.fmt(calcs.balance);
-    }
-  }
 }
 
 // ─── FILL COLUMN DOWN ─────────────────────────────────────────────────────────
@@ -2250,7 +2159,9 @@ async function _onClientChange(input) {
     document.getElementById('receiptClientFieldWrap')?.appendChild(warn);
   }
 
-  await updateSelectedClientBalance();
+  // Populate vehicle datalist from the selected owner's vehicles
+  await refreshVehicleWarnings();
+  await _receiptPopulateClientVehicles();
 }
 
 async function _getVehicleAnalysis(vehicleId) {
@@ -2275,8 +2186,7 @@ async function _getVehicleAnalysis(vehicleId) {
       owner = client;
     }
   }
-  const balance = await ReceiptsModule.getClientBalance(String(vehicle.owner_id));
-  const analysis = { vehicle, owner, balance };
+  const analysis = { vehicle, owner };
   _vehicleAnalysisCache.set(key, analysis);
   return analysis;
 }
@@ -2301,11 +2211,10 @@ async function _onVehicleCrossOwnerWarning(row) {
 
   const analysis = await _getVehicleAnalysis(vehicle.id);
   const ownerId = analysis?.vehicle?.owner_id ? String(analysis.vehicle.owner_id) : '';
-  const balance = analysis?.balance?.balance || 0;
-  if (!ownerId || ownerId === String(selectedClient.id) || balance >= 0) return;
+  if (!ownerId || ownerId === String(selectedClient.id)) return;
 
   const ownerName = analysis?.owner?.name || analysis?.vehicle?.owner_name || 'المالك';
-  warnEl.textContent = `⚠️ هذه المركبة تخص العميل (${ownerName}) عليه مديونية ${Money.fmt(Math.abs(balance))} جنيه`;
+  warnEl.textContent = `⚠️ هذه المركبة تخص العميل (${ownerName})`;
   warnEl.classList.add('is-visible');
 }
 
@@ -2600,7 +2509,6 @@ async function collectReceiptRows() {
 }
 
 async function collectRawData() {
-  const previousBalance = parseFloat(document.getElementById('receiptBalance')?.dataset.previous || '0') || 0;
   const receiptDateInput = document.getElementById('receiptDate')?.value;
   const receiptNumberInput = document.getElementById('receiptNumber')?.value;
   const client = _selectedClient();
@@ -2617,7 +2525,6 @@ async function collectRawData() {
     owner_name       : client?.type === 'owner' ? client.name : null,
     company_name     : normalizeOptionalString(companyName),
     company_phone    : normalizeOptionalString(companyPhone),
-    previous_balance : previousBalance,
     general_discount : generalDiscount,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
     rows             : await collectReceiptRows(),
@@ -2930,7 +2837,6 @@ function printReceipt() {
   if (totalsContainer) {
     const rowCount   = document.getElementById('rowCount')?.textContent || '0';
     const total      = document.getElementById('totalAmount')?.textContent || '0.00';
-    const balance    = document.getElementById('receiptBalance')?.textContent || '0.00';
 
     totalsHTML = `
       <table style="width:100%;border-collapse:collapse;margin-top:10px;page-break-inside:avoid;">
@@ -2938,14 +2844,12 @@ function printReceipt() {
           <tr>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">عدد الكارتات</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الإجمالي</th>
-            <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">رصيد العميل</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${rowCount}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${total}</td>
-            <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${balance}</td>
           </tr>
         </tbody>
       </table>`;
@@ -3021,9 +2925,6 @@ function clearReceiptSilent() {
   const tbody = document.getElementById('receiptTableBody');
   if (tbody) tbody.innerHTML = '';
   
-  const balEl = document.getElementById('receiptBalance');
-  if (balEl) { balEl.textContent = '0.00'; balEl.dataset.previous = '0'; }
-  
   receiptRowCounter = 0;
   setCurrentDate();
   ensureReceiptArrowRow();
@@ -3069,13 +2970,7 @@ async function loadReceiptForEdit(receiptData) {
   setV('companyName',       receiptData.company_name   || receiptData.companyName   || '');
   setV('companyPhone',      receiptData.company_phone  || receiptData.companyPhone  || '');
 
-  // Financial fields are stored as cents in DB — convert to decimals for UI
   // general_discount removed from system
-  const balEl           = document.getElementById('receiptBalance');
-  // Use the saved previous_balance as-is
-  const previousBalance = Money.fmtCents(receiptData.previous_balance);
-  if (balEl) balEl.dataset.previous = String(previousBalance);
-
 
   const tbody       = document.getElementById('receiptTableBody');
   tbody.innerHTML   = '';
@@ -3158,8 +3053,6 @@ async function loadReceiptForEdit(receiptData) {
 
   ensureReceiptArrowRow();
 
-  // Edit prefill uses the saved previous_balance as-is;
-  // editing a receipt does NOT recalculate the client balance.
   calculateTotals();
 
   const saveBtn = document.querySelector('#receiptPage button[data-action="save-receipt"]');

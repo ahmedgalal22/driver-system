@@ -240,7 +240,6 @@ function _validate(data) {
   }
 
   const general_discount = 0; // removed from system
-  const previous_balance = Money.toCents(data.previous_balance ?? data.previousBalance ?? 0);
 
   const groups = [...clientVehicleGroups.values()].filter(g => g.total !== 0);
   if (groups.length === 0) {
@@ -252,7 +251,6 @@ function _validate(data) {
     receipt_date,
     total,
     general_discount,
-    previous_balance,
     groups,
     client_id: header.client_id,
     client_type: header.client_type,
@@ -319,7 +317,6 @@ async function createReceipt(username, data) {
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
-    previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
     notes: data.notes ?? null,
     shipping_number: data.shipping_number ?? null,
@@ -360,7 +357,6 @@ async function updateReceipt(username, id, data) {
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
-    previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
     ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),

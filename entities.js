@@ -202,18 +202,6 @@ async function getClientByType(type, id) {
 }
 
 
-async function getClientBalance(client_id) {
-  return FinancialService.getClientBalance(client_id);
-}
-
-async function getClientLedger(client_id) {
-  return FinancialService.getClientLedger(client_id);
-}
-
-async function createClientBalanceEntry(username, payload) {
-  return FinancialService.createClientBalanceEntry(username, payload);
-}
-
 async function getOwnerVehicles(owner_id) {
   const vehicles = await ClientRepository.getAllVehicles();
   return vehicles.filter(v => String(v.owner_id || '') === String(owner_id));
@@ -234,25 +222,14 @@ async function addAccount(username, kind, payload) {
 
 
 
-// ─── DEPRECATED PROXIES (delegate to FinancialService) ─────────────────────
-// getOwnerBalance was removed — it returned wrong results.
-// These proxies maintain backward compatibility for any external callers.
-const getOwnerBalance = (id) => FinancialService.getClientBalance(id).then(s => s.balance);
-const getOwnerLedger = (id) => FinancialService.getClientLedger(id);
-
 const OwnersModule = Object.freeze({
   createOwner,
   getAllOwners,
   updateOwner,
   deleteOwner,
   getOwnerById,
-  getOwnerBalance,
-  getOwnerLedger,
   getClientsByTab,
   getClientByType,
-  getClientBalance,
-  getClientLedger,
-  createClientBalanceEntry,
   getOwnerVehicles,
   addAccount,
 });
@@ -268,7 +245,6 @@ window.OwnersModule = OwnersModule;
 let _activeAccountTab = 'customers';
 let _ownersActiveSubTab = 'vehicles';
 let _selectedClient = null;
-let _balanceActionType = 'deposit';
 let _editingDriverId = null;
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 function _getCurrentDriverId() {
@@ -306,11 +282,6 @@ function _ledgerNote(entry) {
   const type = entry.type || '';
   const note = entry.note || '';
 
-  // Client balance — manual deposit/withdraw
-  if (refType === 'client_balance') {
-    if (type === 'deposit') return note || 'إيداع رصيد يدوي';
-    if (type === 'withdraw') return note || 'سحب رصيد يدوي';
-  }
   // Salfa
   if (refType === 'salfa') {
     return note || 'سلفة';
@@ -341,26 +312,6 @@ function _kindLabel(type) {
   return 'مركبة';
 }
 
-
-async function _clientSnapshot(client) {
-  const balance = await OwnersModule.getClientBalance(client.id);
-  // last_activity = most recent of: entity update OR financial transaction
-  const entityTime = Number(client.updated_at || client.created_at || 0);
-  const txTime = balance.last_transaction_date
-    ? new Date(balance.last_transaction_date).getTime() || 0
-    : 0;
-  const lastActivity = Math.max(entityTime, txTime);
-  return {
-    ...client,
-    name: client.vehicle_name || client.name || '',
-    vehicle_name: client.vehicle_name || client.name || '',
-    vehicle_number: client.vehicle_number || '',
-    balance: balance.balance,
-    last_transaction_date: balance.last_transaction_date,
-    updated_at: entityTime,
-    last_activity: lastActivity,
-  };
-}
 
 async function _loadTabClients() {
   return OwnersModule.getClientsByTab(_activeAccountTab);
@@ -401,9 +352,6 @@ function _renderShell() {
 
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;" class="ent-search-wrap">
           <input id="ownerSearchInput" type="text" class="ent-search-input" placeholder="${_ownersActiveSubTab === 'vehicles' ? '🔍 ابحث عن اسم أو رقم المركبة...' : '🔍 ابحث عن اسم أو رقم هاتف السائق...'}" style="flex:1;min-width:200px;">
-          <div style="background:linear-gradient(135deg,#1e40af,#3b82f6);color:#fff;padding:8px 20px;border-radius:12px;font-weight:700;font-size:0.875rem;white-space:nowrap;">
-            الرصيد الكلي: <span id="totalBalanceDisplay">0.00</span>
-          </div>
         </div>
       </div>
 
@@ -418,7 +366,6 @@ function _renderShell() {
                 <tr>
                   <th style="color:#fff;">اسم المركبة</th>
                   <th style="color:#fff;">رقم المركبة</th>
-                  <th style="color:#fff;">الرصيد</th>
                   <th style="color:#fff;">كارتات</th>
                   <th style="color:#fff;">إجراءات</th>
                 </tr>
@@ -592,33 +539,16 @@ async function _saveFromAddModal() {
 
 
 
-function _updateTotalBalance() {
-  let total = 0;
-  const selector = _ownersActiveSubTab === 'vehicles' ? '#ownersTableBody tr' : '#driversTableBody tr';
-  document.querySelectorAll(selector).forEach(tr => {
-    if (tr.style.display === 'none') return;
-    const cells = tr.querySelectorAll('td');
-    if (cells.length >= 3) {
-      const val = parseFloat(cells[2]?.textContent) || 0;
-      total += val;
-    }
-  });
-  const el = document.getElementById('totalBalanceDisplay');
-  if (el) el.textContent = Money.fmt(total);
-}
-
-
 function _printEntities(mode) {
   let rows = [];
   const ownerRows = document.querySelectorAll('#ownersTableBody tr');
   ownerRows.forEach(tr => {
     if (tr.style.display === 'none') return;
     const cells = tr.querySelectorAll('td');
-    if (cells.length < 3) return;
+    if (cells.length < 2) return;
     const name = (cells[0]?.textContent || '').trim();
     const number = (cells[1]?.textContent || '').trim();
-    const balance = (cells[2]?.textContent || '').trim();
-    rows.push({ name, number, balance });
+    rows.push({ name, number });
   });
 
   if (rows.length === 0) {
@@ -630,7 +560,6 @@ function _printEntities(mode) {
     <tr>
       <td style="border:1px solid #d1d5db;padding:8px 12px;text-align:right;">${r.name}</td>
       <td style="border:1px solid #d1d5db;padding:8px 12px;text-align:center;">${r.number}</td>
-      <td style="border:1px solid #d1d5db;padding:8px 12px;text-align:center;font-weight:700;">${r.balance}</td>
     </tr>
   `).join('');
 
@@ -656,7 +585,6 @@ function _printEntities(mode) {
       <tr>
         <th>اسم المركبة</th>
         <th>رقم المركبة</th>
-        <th>الرصيد</th>
       </tr>
     </thead>
     <tbody>${tableRows}</tbody>
@@ -667,19 +595,6 @@ function _printEntities(mode) {
   printHTML(html);
 }
 
-
-function _sortByPriority(list) {
-  return list.slice().sort((a, b) => {
-    // 1. Negative balance first
-    const aNeg = (a.balance || 0) < 0 ? 1 : 0;
-    const bNeg = (b.balance || 0) < 0 ? 1 : 0;
-    if (aNeg !== bNeg) return bNeg - aNeg;
-    // 2. Then by last activity (entity update OR financial transaction)
-    const aTime = a.last_activity || a.updated_at || 0;
-    const bTime = b.last_activity || b.updated_at || 0;
-    return bTime - aTime;
-  });
-}
 
 async function _getKartaCount(clientId) {
   // Normalized read path (Step 6): persisted receipts never embed rows.
@@ -708,7 +623,6 @@ function _buildClientRow(client, kartaCount, kind) {
         ${vName}
       </td>
       <td>${vNumber || '—'}</td>
-      <td class="${_balanceClass(client.balance)}">${_fmt(client.balance)}</td>
       <td class="text-center">${kartaCount > 0 ? '<span class="ent-karta-badge">' + kartaCount + '</span>' : '—'}</td>
       <td>
         <button type="button" data-action="edit-account" data-id="${client.id}" data-kind="owner" class="ent-action-btn ent-action-btn--edit" title="تعديل">✏️</button>
@@ -760,16 +674,16 @@ async function loadOwners() {
       name: o.vehicle_name || o.name || '',
       vehicle_name: o.vehicle_name || o.name || '',
       vehicle_number: o.vehicle_number || '',
+      updated_at: o.updated_at ?? o.created_at ?? 0,
     }));
-    const ownerSnaps = await Promise.all(ownerList.map(_clientSnapshot));
     const ownerKartas = await Promise.all(ownerList.map(o => _getKartaCount(o.id)));
-    const sortedOwners = _sortByPriority(ownerSnaps);
+    const sortedOwners = [...ownerList].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 
     if (sortedOwners.length === 0) {
-      ownersTbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
+      ownersTbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
     } else {
       ownersTbody.innerHTML = sortedOwners.map((client) => {
-        const idx = ownerSnaps.indexOf(client);
+        const idx = ownerList.indexOf(client);
         return _buildClientRow(client, ownerKartas[idx], 'owner');
       }).join('');
     }
@@ -821,11 +735,8 @@ async function loadOwners() {
           tr.style.display = (!q || name.includes(q) || phone.includes(q)) ? '' : 'none';
         });
       }
-      _updateTotalBalance();
     });
   }
-
-  _updateTotalBalance();
 }
 
 let _editingDriverRefId = null;
@@ -1447,60 +1358,6 @@ async function _getClient(type, id) {
   return OwnersModule.getClientByType(type, id);
 }
 
-async function _renderLedger(client) {
-  const ledger = await OwnersModule.getClientLedger(client.id);
-  return `
-    <section class="mb-8">
-      <h3 class="text-lg font-bold mb-4">الحركات</h3>
-      <div class="filter-row mb-6 flex-wrap">
-        <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientFromDate">من</label>
-          <input id="clientFromDate" type="date" class="input input-sm">
-        </div>
-        <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientToDate">إلى</label>
-          <input id="clientToDate" type="date" class="input input-sm">
-        </div>
-        <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-primary btn-sm mb-4">
-          تطبيق
-        </button>
-        <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-secondary btn-sm mb-4">
-          مسح التحديد
-        </button>
-      </div>
-      <div class="table-wrapper">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>التاريخ</th>
-              <th>المبلغ</th>
-              <th>المركبة</th>
-              <th>ملاحظة</th>
-            </tr>
-          </thead>
-          <tbody id="clientLedgerBody">
-            ${ledger.length ? ledger.map(e => `
-              <tr>
-                <td>${_dateLabel(e.date || e.applied_at)}</td>
-                <td class="font-semibold">${_fmt(e.amount)}</td>
-                <td>${e.vehicle_plate || '-'}</td>
-                <td>${_ledgerNote(e)}</td>
-              </tr>
-            `).join('') : `
-              <tr>
-                <td colspan="4" class="text-muted text-center">لا توجد حركات</td>
-              </tr>
-            `}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-
 function _ensureVehicleModal() {
   if (document.getElementById('vehicleModal')) return;
   const div = document.createElement('div');
@@ -1598,8 +1455,6 @@ async function showOwnerDetails(id, type = 'owner') {
     ownerType: type,
   }));
 
-  const balance = await OwnersModule.getClientBalance(client.id);
-  const ledgerHtml = await _renderLedger(client);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
@@ -1613,112 +1468,13 @@ async function showOwnerDetails(id, type = 'owner') {
         <span class="ent-details-type">مركبة</span>
       </div>
 
-      <div class="stat-grid mb-8">
-        <div class="card">
-          <p class="text-muted text-xs mb-2">الرصيد الحالي</p>
-          <div class="text-3xl font-bold ${_balanceClass(balance.balance)} mb-6">${_fmt(balance.balance)}</div>
-          <div class="flex gap-2 flex-wrap justify-end">
-            <button type="button" data-action="open-balance-entry" data-entry-type="deposit"
-              class="btn btn-success btn-sm">
-              إيداع رصيد
-            </button>
-            <button type="button" data-action="open-balance-entry" data-entry-type="withdraw"
-              class="btn btn-danger btn-sm">
-              سحب رصيد
-            </button>
-          </div>
-        </div>
-      </div>
-
-      ${ledgerHtml}
       ${relatedHtml}
-
-      <div id="balanceEntryModal" class="modal-overlay hidden">
-        <div class="modal">
-          <div class="modal-body">
-            <div class="flex items-center justify-between mb-6">
-              <button type="button" data-action="close-balance-entry" class="btn btn-secondary btn-sm">إغلاق</button>
-              <h3 id="balanceEntryTitle" class="text-lg font-bold mb-0">إيداع رصيد</h3>
-            </div>
-
-            <div class="grid gap-4">
-              <div class="form-group mb-0">
-                <label class="label mb-2" for="balanceEntryDate">التاريخ</label>
-                <input id="balanceEntryDate" type="date" class="input input-sm">
-              </div>
-              <div class="form-group mb-0">
-                <label class="label mb-2" for="balanceEntryAmount">المبلغ</label>
-                <input id="balanceEntryAmount" type="number" min="0" step="0.01" class="input input-sm" placeholder="0.00">
-              </div>
-              <div class="form-group mb-0">
-                <label class="label mb-2" for="balanceEntryNote">ملاحظة</label>
-                <input id="balanceEntryNote" type="text" class="input input-sm" placeholder="اختياري">
-              </div>
-              <button type="button" data-action="save-balance-entry" class="btn btn-primary btn-full mt-4">
-                حفظ الحركة
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   `;
 
   if (typeof window.showPage === 'function') {
     await window.showPage('ownerDetailsPage');
   }
-}
-
-function _openBalanceEntryModal(type) {
-  if (!_selectedClient) return;
-  _balanceActionType = type === 'withdraw' ? 'withdraw' : 'deposit';
-
-  const modal = document.getElementById('balanceEntryModal');
-  const title = document.getElementById('balanceEntryTitle');
-  const dateEl = document.getElementById('balanceEntryDate');
-  const amountEl = document.getElementById('balanceEntryAmount');
-  const noteEl = document.getElementById('balanceEntryNote');
-
-  if (title) title.textContent = _balanceActionType === 'deposit' ? 'إيداع رصيد' : 'سحب رصيد';
-  if (dateEl) dateEl.value = DateUtils.todayLocal();
-  if (amountEl) amountEl.value = '';
-  if (noteEl) noteEl.value = '';
-  modal?.classList.remove('hidden');
-}
-
-function _closeBalanceEntryModal() {
-  document.getElementById('balanceEntryModal')?.classList.add('hidden');
-}
-
-async function _saveBalanceEntry() {
-  if (!_selectedClient) return;
-
-  const date = document.getElementById('balanceEntryDate')?.value;
-  const amount = parseFloat(document.getElementById('balanceEntryAmount')?.value) || 0;
-  const note = document.getElementById('balanceEntryNote')?.value || '';
-
-  if (!date) {
-    alert('التاريخ مطلوب');
-    return;
-  }
-  if (amount <= 0) {
-    alert('المبلغ يجب أن يكون أكبر من صفر');
-    return;
-  }
-
-  await OwnersModule.createClientBalanceEntry(_currentUsername(), {
-    client_id: _selectedClient.id,
-    client_type: _selectedClient.type,
-    client_name: _selectedClient.name,
-    type: _balanceActionType,
-    amount,
-    date,
-    note,
-  });
-
-  _closeBalanceEntryModal();
-  await showOwnerDetails(_selectedClient.id, _selectedClient.type);
-  await loadOwners();
 }
 
 // ─── EXCEL HANDLERS ───────────────────────────────────────────────────────────
@@ -2083,31 +1839,6 @@ function attachOwnersPageListeners() {
       return;
     }
 
-    // Balance entry modal
-    const openBal = e.target.closest('[data-action="open-balance-entry"]');
-    if (openBal) {
-      _openBalanceEntryModal(openBal.dataset.entryType || 'deposit');
-      return;
-    }
-    if (e.target.closest('[data-action="close-balance-entry"]')) {
-      _closeBalanceEntryModal();
-      return;
-    }
-    if (e.target.closest('[data-action="save-balance-entry"]')) {
-      await _saveBalanceEntry();
-      return;
-    }
-
-    // Client ledger date filter
-    if (e.target.closest('[data-action="client-apply-filter"]') && _selectedClient) {
-      await showOwnerDetails(_selectedClient.id, 'owner');
-      return;
-    }
-    if (e.target.closest('[data-action="client-clear-filter"]') && _selectedClient) {
-      await showOwnerDetails(_selectedClient.id, 'owner');
-      return;
-    }
-
     // Vehicles
     if (e.target.closest('[data-action="add-vehicle-manual"]')) {
       if (!_selectedClient) return;
@@ -2185,13 +1916,8 @@ export {
   updateOwner,
   deleteOwner,
   getOwnerById,
-  getOwnerBalance,
-  getOwnerLedger,
   getClientsByTab,
   getClientByType,
-  getClientBalance,
-  getClientLedger,
-  createClientBalanceEntry,
   getOwnerVehicles,
   addAccount,
   loadOwners,

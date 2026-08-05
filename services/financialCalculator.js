@@ -55,9 +55,9 @@ export function calculateWeightTotal(row) {
 
 /**
  * Calculates totals for a full receipt based on its rows.
- * Returns: { total, balance }
+ * Returns: { total }
  */
-export function calculateReceiptTotals(rows, previous_balance = 0) {
+export function calculateReceiptTotals(rows) {
   const dataRows = (rows || []).filter(r => r && r._type !== 'separator' && r.type !== 'separator' && r.row_type !== 'separator');
   
   let totalCents = 0;
@@ -66,13 +66,8 @@ export function calculateReceiptTotals(rows, previous_balance = 0) {
   }
   const total = Money.toDecimal(totalCents);
 
-  const prevBalCents = Money.toCents(previous_balance);
-
-  const balance = Money.toDecimal(totalCents + prevBalCents);
-
   return {
-    total,
-    balance
+    total
   };
 }
 

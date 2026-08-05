@@ -589,7 +589,6 @@ function buildReceiptCardHtml(record, opts = {}) {
       <div class="record-card__footer">
         <div><span>عدد الكارتات</span><strong>${kartaCount}</strong></div>
         <div><span>الإجمالي</span><strong>${Money.fmtCents(record.total)}</strong></div>
-        <div><span>رصيد العميل</span><strong>${Money.fmtCents(record.previous_balance)}</strong></div>
       </div>
       ${noteHtml}
     </article>
@@ -817,7 +816,6 @@ function buildReceiptPrintBlock(record) {
       <div class="print-footer">
         <span>عدد الكارتات: <strong>${kartaCount}</strong></span>
         <span>الإجمالي: <strong>${Money.fmtCents(record.total)}</strong></span>
-        <span>رصيد العميل: <strong>${Money.fmtCents(record.previous_balance)}</strong></span>
       </div>
     </section>
   `;
@@ -830,8 +828,7 @@ function buildReceiptPrintBlock(record) {
 //
 // Design contract:
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
-//   • Top-level money fields (total,
-//     previous_balance) are stored as CENTS  → Money.fmtCents().
+//   • Top-level money field (total) is stored as CENTS → Money.fmtCents().
 //   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
 //     weight2, deficit, weightTotal) are stored as DECIMALS → Money.fmt().
 //   • Separator rows (_type === 'separator') carry vehicleName, subtotal, notes.
@@ -1052,7 +1049,6 @@ function _receiptPrintBuildTableBody(rows, activeCols) {
  */
 function _receiptPrintBuildTotalsRow(record, kartaCount) {
   const total           = Money.fmtCents(record.total           ?? 0);
-  const previousBalance = Money.fmtCents(record.previous_balance ?? 0);
 
   const th = (label) => `<th style="background:#fff;color:#000;padding:4px 6px;border:1.5px solid #000;text-align:center;font-size:7pt;font-weight:700;">${label}</th>`;
   const td = (value) => `<td style="background:#fff;color:#000;padding:5px 6px;border:1.5px solid #000;text-align:center;font-size:11pt;font-weight:800;">${esc(value)}</td>`;
@@ -1063,14 +1059,12 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
         <tr>
           ${th('عدد الكارتات')}
           ${th('الإجمالي')}
-          ${th('رصيد العميل')}
         </tr>
       </thead>
       <tbody>
         <tr>
           ${td(String(kartaCount))}
           ${td(total)}
-          ${td(previousBalance)}
         </tr>
       </tbody>
     </table>`;

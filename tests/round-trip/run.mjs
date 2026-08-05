@@ -149,7 +149,7 @@ const FORM_PAYLOAD = {
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك الاختبار',
   owner_name: 'مالك الاختبار',
   company_name: null, company_phone: null,
-  previous_balance: 500, general_discount: 0,
+  general_discount: 0,
   total: 0,
   rows: [
     // Row A: driver selected on the row (id-keyed) — collector output shape after
@@ -173,7 +173,7 @@ const FORM_PAYLOAD = {
       net: rowB_net },
   ],
 };
-console.log(`entered rows: data A net=${rowA_net}, separator, data B net=${rowB_net}; total=${rowA_net + rowB_net}, prev_balance=500`);
+console.log(`entered rows: data A net=${rowA_net}, separator, data B net=${rowB_net}; total=${rowA_net + rowB_net}`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE B — What ReceiptsModule.create() constructs (REAL _normalize +
@@ -220,8 +220,8 @@ ok(persistedHeader.client_id === 'owner-1' && persistedHeader.client_name === '�
    && persistedHeader.receipt_date === '2026-07-29', 'KEPT: client_id / client_name / receipt_date');
 ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === undefined
    && persistedHeader.net_due === undefined && persistedHeader.net_total === undefined
-   && persistedHeader.previous_balance === Money.toCents(500) && persistedHeader.paid === undefined,
-   `REMOVED (General Add + Net Due + Net Total + Paid phases): header.general_add / header.net_due / header.net_total / header.paid not persisted (total=${persistedHeader.total}, previous_balance=${persistedHeader.previous_balance})`);
+   && persistedHeader.previous_balance === undefined && persistedHeader.paid === undefined,
+   `REMOVED (General Add + Net Due + Net Total + Paid + Client Balance phases): header.general_add / header.net_due / header.net_total / header.paid / header.previous_balance not persisted (total=${persistedHeader.total})`);
 ok(persistedHeader.payout_status === undefined && persistedHeader.paid_at === undefined,
    `REMOVED-CONTRACT (Paid phase): payout_status / paid_at never persisted (payout_status=${persistedHeader.payout_status})`);
 
@@ -386,10 +386,10 @@ const rebuiltTotals = calculateReceiptTotals(
       add: uiA.add, sarf: uiA.sarf },
     // row B — entered values (same reconstruction established)
     { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
-  ], 500);
-console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance}`);
-ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === 1670,
-   `REMOVED-CONTRACT (Net Due + Net Total phases): calculator returns {total, balance} only — total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance} (1170/1670)`);
+  ]);
+console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}`);
+ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === undefined,
+   `REMOVED-CONTRACT (Net Due + Net Total + Client Balance phases): calculator returns {total} only — total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance}`);
 fingerprint(FINANCIAL_SRC, "throw new Error('[FinancialService] total must be a non-negative number.');",
   'FinancialService would reject negative total on save (if the number gate were bypassed)');
 

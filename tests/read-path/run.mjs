@@ -54,14 +54,14 @@ const rowX = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_
 const hdr = (over = {}) => ({
   receipt_date: '2026-07-27', receipt_number: '1001',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
-  account_type: null, total: 1150, previous_balance: 0,
+  account_type: null, total: 1150,
   ...over,
 });
 
 const R1 = (await FinancialService.createReceipt(U, hdr({ rows: [row1(), row2()] }))).receipt.id;
 // update 2→3 rows (same arithmetic family as the proven write-path harness)
 await FinancialService.updateReceipt(U, R1, hdr({
-  total: 1800, previous_balance: 500,
+  total: 1800,
   rows: [row1(), row2(), row3()],
 }));
 const R2 = (await FinancialService.createReceipt(U, hdr({

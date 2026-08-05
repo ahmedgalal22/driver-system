@@ -22,7 +22,7 @@ function makePayload(over = {}) {
     receipt_number: '1001',
     client_id, client_type: 'owner', client_name: 'مالك اختبار',
     account_type: null,
-    total: 1150, previous_balance: 0,
+    total: 1150,
     rows: [
       { row_id: uuid(), _type: 'data', owner_id: client_id, owner_name: 'مالك اختبار',
         vehicle_id: 'veh-1', vehicle_plate: '111 أ ب', driver_id: null,
@@ -50,7 +50,7 @@ const header1 = await DB.getById('receipts', rid);
 const rows1 = await rowsOf(rid);
 const ledger1 = await ledgerOf(rid);
 ok(!!header1 && header1.username === U, 'receipt header persisted with username');
-ok(header1.total === 115000 && header1.net_due === undefined && header1.paid === undefined && header1.payout_status === undefined, `header money in cents; net_due/paid/payout_status NOT persisted (total=${header1.total})`);
+ok(header1.total === 115000 && header1.net_due === undefined && header1.previous_balance === undefined && header1.paid === undefined && header1.payout_status === undefined, `header money in cents; net_due/previous_balance/paid/payout_status NOT persisted (total=${header1.total})`);
 ok(rows1.length === 2, `exactly 2 receipt_rows persisted (got ${rows1.length})`);
 ok(rows1.every(r => r.receipt_id === rid && typeof r.driver_price === 'number'), 'rows carry receipt_id FK + cents money');
 ok(ledger1.length === 0,
@@ -68,7 +68,7 @@ ok(before === 2, `2 receipts visible after two creates (got ${before})`);
 console.log('\n— STEP 2: updateReceipt (replace rows 2→3, reverse old ledger) —');
 const oldRowIds = rows1.map(r => r.row_id);
 const p1u = makePayload({
-  id: rid, receipt_number: '1001', total: 1800, previous_balance: 500,
+  id: rid, receipt_number: '1001', total: 1800,
   rows: [ ...makePayload().rows,
     { row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
       vehicle_id: 'veh-3', vehicle_plate: '333 هـ و', driver_id: null,
@@ -80,7 +80,7 @@ const header2 = await DB.getById('receipts', rid);
 const rows2 = await rowsOf(rid);
 const rows2All = await rowsOf(rid, true);
 const ledger2 = await ledgerOf(rid);
-ok(header2.total === 180000 && header2.net_due === undefined && header2.net_total === undefined && header2.paid === undefined && header2.payout_status === undefined, `header updated in place; net_due/net_total/paid/payout_status never persisted (total=${header2.total})`);
+ok(header2.total === 180000 && header2.net_due === undefined && header2.net_total === undefined && header2.previous_balance === undefined && header2.paid === undefined && header2.payout_status === undefined, `header updated in place; net_due/net_total/previous_balance/paid/payout_status never persisted (total=${header2.total})`);
 ok(rows2.length === 3, `rows replaced: exactly 3 live rows (got ${rows2.length}) — NO duplication`);
 ok(rows2.every(r => !oldRowIds.includes(r.row_id)), 'old row_ids gone from live set (fresh ids)');
 ok(rows2All.length === 5, `audit trail: 2 old rows soft-deleted retained (got ${rows2All.length})`);
@@ -89,7 +89,7 @@ ok(!!updRes.receipt && updRes.receipt.total === 1800, 'updateReceipt returns dec
 
 // ─── STEP 3: updateReceipt with minimal payload still succeeds ───────────────
 // rows with FRESH row_ids (production-realistic: the form mints new ids on every save — reusing ids would collide with the soft-deleted audit rows by design)
-const p1v = makePayload({ id: rid, total: 1800, previous_balance: 0 });
+const p1v = makePayload({ id: rid, total: 1800 });
 await FinancialService.updateReceipt(U, rid, p1v);
 const header3 = await DB.getById('receipts', rid);
 ok(header3.payout_status === undefined && header3.paid === undefined, `REMOVED-CONTRACT (Paid phase): no payout/payment fields on updated header (payout_status=${header3.payout_status}, paid=${header3.paid})`);
