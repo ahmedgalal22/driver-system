@@ -116,6 +116,10 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["kartano      : normalizeOptionalString(_field(row, 'receipt-kartano'))", 'collector maps kartano'],
   ["date         : normalizeOptionalString(_field(row, 'receipt-date'))", 'collector maps row date'],
   ["const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));", 'collector reads the row driver NAME text (autocomplete input) — exact name → id resolution at save'],
+  ["hit = await _promptCreateDriverForRow(row, rowDriverText);", 'unknown driver name → «add driver?» prompt at save (replaces the old rejection)'],
+  ["driverNameById.set(String(hit.name || '').trim(), hit);", 'prompt-resolved driver cached for later rows in the same save (no double prompt)'],
+  ["await ClientRepository.createDriverUnique(_currentUsername(), driverName);", 'quick-create reuses the drivers-store creation path (duplicate-safe normalized lookup)'],
+  ["input.value = String(record.name || driverName);", 'newly created driver is auto-selected on the row before the save continues'],
   ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
   ["driver_id    : rowDriverId || null, // authoritative relationship: THIS row → driver (no selected driver → null)", 'collector persists row.driver_id (Receipt Row → Driver; vehicle carries no driver)'],
   ["weight       : _num(row, 'receipt-weight')", 'collector maps weight'],
@@ -132,6 +136,34 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["receiptRows.push({ _type: 'separator', vehicleName, subtotal, notes, isAuto })", 'collector emits separator rows'],
   ["receipt_number   : (receiptNumberInput || '').trim(),", 'header collector maps receipt_number'],
 ].forEach(([s, l]) => fingerprint(RECEIPTS_SRC, s, l));
+
+// UX upgrade (driver quick-create): non-listed driver names are no longer
+// rejected at save — the user is asked to add the driver instead.
+ok(!RECEIPTS_SRC.includes('اسم السائق "${rowDriverText}" غير موجود في القائمة'),
+  'REMOVED-CONTRACT (UX upgrade): the «driver not in the list» save-time rejection is gone — quick-create prompt instead (kept client/office «غير موجود في القائمة» warnings untouched)');
+fingerprint(RECEIPTS_SRC, 'السائق غير موجود. هل تريد إضافته؟',
+  'quick-create prompt asks «السائق غير موجود. هل تريد إضافته؟» (إضافة / إلغاء)');
+fingerprint(RECEIPTS_SRC, 'err.code = DRIVER_CREATE_CANCELLED;',
+  'إلغاء throws the DRIVER_CREATE_CANCELLED sentinel (save aborts, no error alert)');
+fingerprint(RECEIPTS_SRC, 'err?.code === DRIVER_CREATE_CANCELLED',
+  'saveReceipt catches the cancel sentinel — focus returns to the row driver field, nothing persisted');
+fingerprint(RECEIPTS_SRC, 'await _receiptLoadDriverOptions();',
+  'autocomplete source refreshed immediately after quick-create');
+
+// REAL repository on the shim DB: duplicate-safe driver quick-create —
+// a second attempt with the same (trim-normalized) name returns the SAME
+// record instead of persisting a duplicate.
+const { ClientRepository } = await import('./services/clientRepository.js');
+const createdDrv = await ClientRepository.createDriverUnique(U, '  السائق أحمد  ');
+ok(createdDrv && createdDrv.id != null && createdDrv.name === 'السائق أحمد',
+  `quick-create: driver created via the shared repository path (name trimmed → ${J(createdDrv.name)}, id=${J(createdDrv.id)})`);
+const dupDrv = await ClientRepository.createDriverUnique(U, 'السائق أحمد');
+ok(String(dupDrv.id) === String(createdDrv.id),
+  'duplicate prevention: normalized (trim) lookup returns the existing driver — no second record persisted');
+const drvStoreRows = (await ClientRepository.getDriversForUser(U))
+  .filter(d => d && d.deleted_at == null && String(d.name || '').trim() === 'السائق أحمد');
+ok(drvStoreRows.length === 1,
+  `drivers store holds exactly ONE «السائق أحمد» after two quick-create attempts (got ${drvStoreRows.length})`);
 
 const rowA_net = calculateRowNet({
   weight: 50, weight2: 10, deficit: 2, noloon: 20, ohda: 150,
@@ -314,10 +346,12 @@ console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══'
   "setF('receipt-net',           Money.fmt(ui.net || 0));",
 ].forEach((s) => fingerprint(RECEIPTS_SRC, s, 'loadReceiptForEdit mapping: ' + s.slice(0, 44)));
 fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver-name fallback resolution via driver_id (bridge prefers persisted driver_name)');
-fingerprint(RECEIPTS_SRC, '<datalist id="receiptDriversList"></datalist>',
-  'shared drivers datalist mounted in the form shell');
-fingerprint(RECEIPTS_SRC, '<input type="text" list="receiptDriversList"',
-  'row driver control is an autocomplete input bound to the shared datalist');
+fingerprint(RECEIPTS_SRC, "el.id = 'driverACList';",
+  'one shared custom driver autocomplete dropdown mounted on the page (replaces the native datalist)');
+fingerprint(RECEIPTS_SRC, 'placeholder="— بدون سائق —"',
+  'row driver control is a text input feeding the custom dropdown, keeping the «— بدون سائق —» placeholder');
+ok(!RECEIPTS_SRC.includes('receiptDriversList'),
+  'REMOVED-CONTRACT (UX upgrade): native <datalist> binding gone — the shared custom dropdown drives suggestions');
 fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)",
   'edit bridge surfaces persisted driver_id for the row driver autocomplete');
 fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="text" readonly tabindex="-1"', 'receiptNumber input is readonly');

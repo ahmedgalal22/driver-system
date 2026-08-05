@@ -2798,3 +2798,40 @@ input[type="number"] {
   .ent-details-header { gap: 10px; }
   .ent-details-name { font-size: 1.25rem; text-align: right; flex-basis: 100%; order: -1; }
 }
+
+/* ── Receipt Row Driver Autocomplete (custom dropdown — one shared popup) ── */
+.driver-ac-list {
+  position: fixed;
+  z-index: 1000;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  font-size: 0.75rem;
+}
+
+.driver-ac-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.driver-ac-item:hover,
+.driver-ac-item--active { background: #dbeafe; color: #1e40af; }
+
+.driver-ac-empty {
+  padding: 6px 10px;
+  color: #9ca3af;
+  cursor: default;
+  white-space: nowrap;
+}
+
+@media print {
+  .driver-ac-list { display: none !important; }
+}

@@ -66,6 +66,24 @@ export const ClientRepository = {
   async addDriver(payload, meta) {
     return DBProvider.save('drivers', payload, meta);
   },
+  /**
+   * Duplicate-safe driver creation (quick-add flows, e.g. the receipt-row
+   * driver autocomplete). Performs a normalized (leading/trailing-space
+   * insensitive) lookup among the user's non-deleted drivers; an existing
+   * record with the same name is returned as-is — a new driver is saved ONLY
+   * when no match exists. Uses the exact saveDriver payload the owners/drivers
+   * page uses (phone: null) — one creation path for the whole system.
+   */
+  async createDriverUnique(username, name) {
+    const trimmed = String(name ?? '').trim();
+    if (!username) throw new Error('[ClientRepository:createDriverUnique] username is required.');
+    if (!trimmed)  throw new Error('[ClientRepository:createDriverUnique] name is required.');
+    const existing = (await this.getDriversForUser(username))
+      .filter(d => d && d.deleted_at == null)
+      .find(d => String(d.name || '').trim() === trimmed);
+    if (existing) return existing;
+    return this.saveDriver({ username, name: trimmed, phone: null }, { username });
+  },
   async updateDriver(id, patch, meta) {
     const normId = typeof id === 'string' && !isNaN(Number(id)) ? Number(id) : id;
     return DBProvider.update('drivers', normId, patch, meta);

@@ -806,7 +806,6 @@ function renderMetaFields() {
             autocomplete="off">
           <datalist id="clientsList"></datalist>
           <datalist id="officesList"></datalist>
-          <datalist id="receiptDriversList"></datalist>
         </div>
       </div>
       <div>
@@ -1272,12 +1271,14 @@ async function loadOfficesForReceipt() {
 // The driver relationship lives on each receipt row (receipt_rows.driver_id).
 // Vehicles have NO permanent driver. Ids are the only relationship key; the
 // driver name is resolved id → name (display denorm), never name → id.
-// UI: a shared <datalist id="receiptDriversList"> holds one option per driver
-// (option value = driver NAME); each row's .receipt-data input types/filters
-// names natively. Selection is committed exactly like the old <select>: only a
-// listed driver or «no driver» can ever be persisted (enforced at save).
+// UI: a lightweight CUSTOM dropdown (see below) suggests drivers — the native
+// <datalist> was replaced: it can't open on focus/click, can't be styled, and
+// its keyboard filtering varies across browsers. The cache below is the single
+// suggestion source; selection still commits the driver NAME as text and the
+// authoritative driver_id is resolved from the store at save time. Unknown
+// names trigger the quick-create prompt at save (never a silent persist).
 
-let _receiptDriversCache = []; // [{ id, name }] — refreshed at page boot
+let _receiptDriversCache = []; // [{ id, name }] — refreshed at page boot / after quick-create
 
 async function _receiptLoadDriverOptions() {
   const username = _currentUsername();
@@ -1285,16 +1286,16 @@ async function _receiptLoadDriverOptions() {
   _receiptDriversCache = (await ClientRepository.getDriversForUser(username))
     .filter(d => d && d.deleted_at == null)
     .map(d => ({ id: String(d.id), name: String(d.name || '') }));
-  const dl = document.getElementById('receiptDriversList');
-  if (dl) {
-    dl.innerHTML = _receiptDriversCache
-      .map(d => `<option value="${d.name.replace(/</g, '&lt;')}">`)
-      .join('');
+  // Keep an open-dropdown view in sync with the refreshed source.
+  if (_driverAC.open && _driverAC.input) {
+    _driverAC.items  = _driverACMatches(_driverAC.input.value);
+    if (_driverAC.active >= _driverAC.items.length) _driverAC.active = -1;
+    _driverACRender();
   }
 }
 
-/** Reload drivers from the store into the shared datalist; drop stale row picks. */
-async function _receiptRefreshDriverSelects() {
+/** Reload drivers from the store into the cache; drop stale row picks. */
+async function _receiptRefreshDriverOptions() {
   await _receiptLoadDriverOptions();
   const names = new Set(_receiptDriversCache.map(d => d.name.trim()));
   document.querySelectorAll('#receiptTableBody .receipt-data').forEach(el => {
@@ -1307,6 +1308,207 @@ async function _receiptRefreshDriverSelects() {
 /** Display name of the driver picked on a form row ('' when none picked). */
 function _receiptRowDriverName(tr) {
   return tr?.querySelector('.receipt-data')?.value || '';
+}
+
+// ─── DRIVER DROPDOWN AUTOCOMPLETE (custom, shared by all rows) ───────────────
+// ONE shared popup lists the cached drivers under the focused .receipt-data
+// input. Focus/click opens it (suggestions one click away), typing filters by
+// substring, ↑/↓ highlight, Enter/Tab commit the highlighted driver, Esc
+// dismisses without touching the text. The popup only writes the input's TEXT
+// value — the authoritative driver_id is resolved from the store at save time,
+// exactly like the old <select> contract.
+
+const _driverAC = { input: null, items: [], active: -1, open: false };
+
+function _driverACListEl() {
+  let el = document.getElementById('driverACList');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'driverACList';
+    el.className = 'driver-ac-list';
+    el.setAttribute('role', 'listbox');
+    el.style.display = 'none';
+    // Keep focus on the input while an option is clicked (click still fires).
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', (e) => {
+      const item = e.target.closest('.driver-ac-item');
+      if (item && _driverAC.open) _driverACCommit(_driverAC.items[Number(item.dataset.idx)]);
+    });
+    el.addEventListener('mouseover', (e) => {
+      const item = e.target.closest('.driver-ac-item');
+      if (item && _driverAC.open) {
+        const i = Number(item.dataset.idx);
+        if (i !== _driverAC.active) { _driverAC.active = i; _driverACRender(); }
+      }
+    });
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function _driverACMatches(query) {
+  const q = String(query || '').trim();
+  if (!q) return _receiptDriversCache.slice();
+  return _receiptDriversCache.filter(d => d.name.includes(q));
+}
+
+function _driverACRender() {
+  const el = _driverACListEl();
+  el.innerHTML = '';
+  if (!_driverAC.items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'driver-ac-empty';
+    empty.textContent = _driverAC.input?.value.trim()
+      ? 'لا يوجد سائق مطابق — سيُطلب إضافته عند الحفظ'
+      : 'لا يوجد سائقون مسجلون بعد';
+    el.appendChild(empty);
+    return;
+  }
+  _driverAC.items.forEach((d, i) => {
+    const opt = document.createElement('div');
+    opt.className = 'driver-ac-item' + (i === _driverAC.active ? ' driver-ac-item--active' : '');
+    opt.setAttribute('role', 'option');
+    opt.dataset.idx = String(i);
+    opt.textContent = d.name; // textContent — driver names are never injected as HTML
+    el.appendChild(opt);
+  });
+}
+
+function _driverACPosition() {
+  const { input } = _driverAC;
+  if (!input || !input.isConnected) { _driverACClose(); return; }
+  const el    = _driverACListEl();
+  const rect  = input.getBoundingClientRect();
+  const maxH  = 220;
+  const below = window.innerHeight - rect.bottom;
+  el.style.width = Math.max(rect.width, 140) + 'px';
+  el.style.left  = rect.left + 'px';
+  if (below < maxH + 20 && rect.top > below) {
+    el.style.top = Math.max(4, rect.top - Math.min(maxH, el.scrollHeight || maxH) - 2) + 'px';
+  } else {
+    el.style.top = rect.bottom + 2 + 'px';
+  }
+}
+
+function _driverACOpen(input) {
+  _driverAC.input  = input;
+  _driverAC.items  = _driverACMatches(input.value);
+  _driverAC.active = -1;
+  _driverAC.open   = true;
+  const el = _driverACListEl();
+  el.style.display = 'block';
+  _driverACRender();
+  _driverACPosition();
+  window.addEventListener('scroll', _driverACPosition, true);
+  window.addEventListener('resize', _driverACPosition);
+}
+
+function _driverACClose() {
+  if (!_driverAC.open) return;
+  _driverAC.open   = false;
+  _driverAC.input  = null;
+  _driverAC.items  = [];
+  _driverAC.active = -1;
+  _driverACListEl().style.display = 'none';
+  window.removeEventListener('scroll', _driverACPosition, true);
+  window.removeEventListener('resize', _driverACPosition);
+}
+
+function _driverACMove(delta) {
+  const n = _driverAC.items.length;
+  if (!n) return;
+  _driverAC.active = (_driverAC.active + delta + n) % n;
+  _driverACRender();
+  _driverACListEl().children[_driverAC.active]?.scrollIntoView({ block: 'nearest' });
+}
+
+function _driverACCommit(driver) {
+  if (!driver || !_driverAC.input) { _driverACClose(); return; }
+  const input = _driverAC.input;
+  input.value = driver.name; // text only — id resolved at save (exact name match)
+  _driverACClose();
+  input.focus();
+}
+
+/**
+ * keydown handler — wired in CAPTURE phase so it pre-empts the row's
+ * bubble-phase table navigation while the dropdown is open.
+ */
+function _driverACKeydown(e) {
+  if (!_driverAC.open || e.target !== _driverAC.input) return;
+  const key = e.key;
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    e.preventDefault(); e.stopPropagation();
+    _driverACMove(key === 'ArrowDown' ? 1 : -1);
+  } else if (key === 'Escape') {
+    e.preventDefault(); e.stopPropagation();
+    _driverACClose();
+  } else if (key === 'Enter' && _driverAC.active >= 0) {
+    e.preventDefault(); e.stopPropagation();
+    _driverACCommit(_driverAC.items[_driverAC.active]); // pick — stay in the field
+  } else if (key === 'Tab' && _driverAC.active >= 0) {
+    _driverACCommit(_driverAC.items[_driverAC.active]); // pick — default Tab moves on
+  } else if (key === 'Enter' || key === 'Tab') {
+    _driverACClose(); // no highlight: row nav (Enter) / default focus move (Tab)
+  }
+}
+
+// ─── QUICK-CREATE DRIVER AT SAVE (unknown driver name → prompt) ──────────────
+// Old <select>-era behavior REJECTED non-listed names at save; now the user is
+// asked «السائق غير موجود. هل تريد إضافته؟». إضافة creates the driver through
+// the SAME repository path the owners/drivers page uses (duplicate-safe),
+// refreshes the autocomplete cache, auto-selects the new driver on the row and
+// the save continues. إلغاء aborts the save via a sentinel error and focus
+// returns to the row's driver field — nothing is persisted.
+
+const DRIVER_CREATE_CANCELLED = 'DRIVER_CREATE_CANCELLED';
+
+async function _promptCreateDriverForRow(row, driverName) {
+  const wantsCreate = await _confirmDriverCreate(driverName);
+  if (!wantsCreate) {
+    const err = new Error('تم إلغاء إضافة السائق');
+    err.code = DRIVER_CREATE_CANCELLED;
+    err.focusEl = row.querySelector('.receipt-data');
+    throw err;
+  }
+  // Normalized (trim) lookup happens INSIDE createDriverUnique — an existing
+  // driver with the same name is reused, never duplicated.
+  const record = await ClientRepository.createDriverUnique(_currentUsername(), driverName);
+  // Immediately refresh the autocomplete source so the new driver is suggested.
+  await _receiptLoadDriverOptions();
+  // Auto-select the newly created driver on this row.
+  const input = row.querySelector('.receipt-data');
+  if (input) input.value = String(record.name || driverName);
+  return record;
+}
+
+/** Promise-based confirm: «السائق غير موجود. هل تريد إضافته؟» → إضافة / إلغاء. */
+function _confirmDriverCreate(driverName) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4';
+    overlay.innerHTML = `
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm" role="dialog" aria-modal="true">
+        <h3 class="text-lg font-bold mb-3">➕ إضافة سائق</h3>
+        <p class="mb-1 text-gray-700">السائق غير موجود. هل تريد إضافته؟</p>
+        <p class="driver-create-name mb-5 font-bold text-blue-700"></p>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-driver-create="cancel" class="btn btn-secondary btn-sm">إلغاء</button>
+          <button type="button" data-driver-create="add" class="btn btn-primary btn-sm">إضافة</button>
+        </div>
+      </div>`;
+    overlay.querySelector('.driver-create-name').textContent = `«${driverName}»`;
+    const done = (val) => { overlay.remove(); resolve(val); };
+    overlay.querySelector('[data-driver-create="add"]').addEventListener('click', () => done(true));
+    overlay.querySelector('[data-driver-create="cancel"]').addEventListener('click', () => done(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); }); // backdrop = إلغاء
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      if (e.key === 'Enter')  { e.preventDefault(); done(true);  }
+    });
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-driver-create="add"]').focus();
+  });
 }
 
 // ─── ROW TEMPLATE (from COL_DEFS) ────────────────────────────────────────────
@@ -1373,13 +1575,13 @@ function _buildRowHTML() {
     // owner column removed — warning moved to car column
 
     if (col.key === 'data') {
-      // Driver is picked PER RECEIPT ROW (Receipt Row → driver_id) via a
-      // searchable autocomplete: the input types/filters the driver NAME
-      // (native <datalist> substring filtering); the id link is resolved from
-      // the drivers store at save time (name → id on an exact match).
+      // Driver is picked PER RECEIPT ROW (Receipt Row → driver_id) via the
+      // shared custom autocomplete dropdown: the input holds the driver NAME;
+      // the id link is resolved from the drivers store at save time (name → id
+      // on an exact match; unknown names trigger the quick-create prompt).
       return `
         <td class="px-1 py-1 text-center${printClass}">
-          <input type="text" list="receiptDriversList"
+          <input type="text"
             class="${col.cls} w-full px-1 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none"
             placeholder="— بدون سائق —"
             autocomplete="off">
@@ -1435,7 +1637,7 @@ function addReceiptRow(count = 1) {
     fillFromPreviousRow(newRow);
     attachKeyboardNav(newRow);
     attachInputRestrictions(newRow);
-    // Apply client's vehicle datalist to the new row (driver datalist is shared)
+    // Apply client's vehicle datalist to the new row (driver autocomplete dropdown is shared)
     const clientCarsDL = document.getElementById('receiptClientCarsDL');
     if (clientCarsDL) newRow.querySelector('.receipt-car')?.setAttribute('list', 'receiptClientCarsDL');
   }
@@ -2137,7 +2339,7 @@ async function collectReceiptRows() {
   const rows        = document.querySelectorAll('#receiptTableBody tr');
   const receiptRows = [];
   const owners = await OwnersModule.getAllOwners();
-  let driverNameById = null; // lazy (trimmed) name → driver record map (drivers store), loaded on first non-empty pick
+  let driverNameById = null; // lazy (trimmed) name → driver record map (drivers store), loaded on first non-empty pick; quick-created drivers are added so repeated names prompt once
 
   for (const row of rows) {
     if (row.id === 'receiptFillArrowRow') continue;
@@ -2166,12 +2368,12 @@ async function collectReceiptRows() {
       throw new Error('يجب أن تكون كل مركبة مرتبطة بمالك مركبة مسجل');
     }
     // Driver comes from THIS ROW's autocomplete input (Receipt Row → Driver),
-    // never from the vehicle. The input types/filters the driver NAME; the
-    // authoritative id is resolved here from the drivers store (exact name →
-    // id), and driver_name is denormalized from that record (id → name). This
-    // enforces the exact set the old <select> could submit: a listed driver or
-    // «no driver» — non-listed text is rejected. Vehicles are never written
-    // with any driver attribute.
+    // never from the vehicle. The input holds the driver NAME; the authoritative
+    // id is resolved here from the drivers store (exact trimmed name → id), and
+    // driver_name is denormalized from that record (id → name). Unknown names
+    // are NOT rejected (old <select>-era behavior): the user is asked to
+    // quick-create the driver (duplicate-safe) or cancel back to the field.
+    // Vehicles are never written with any driver attribute.
     const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));
     let rowDriverId = null;
     let rowDriverName = null;
@@ -2182,9 +2384,11 @@ async function collectReceiptRows() {
           .filter(d => d && d.deleted_at == null);
         ds.forEach(d => driverNameById.set(String(d.name || '').trim(), d));
       }
-      const hit = driverNameById.get(rowDriverText);
+      let hit = driverNameById.get(rowDriverText);
       if (!hit) {
-        throw new Error(`اسم السائق "${rowDriverText}" غير موجود في القائمة — اختر من القائمة أو اترك الحقل فارغًا`);
+        hit = await _promptCreateDriverForRow(row, rowDriverText);
+        // Later rows carrying the same new name resolve without prompting again.
+        driverNameById.set(String(hit.name || '').trim(), hit);
       }
       rowDriverId   = String(hit.id);
       rowDriverName = hit.name || null;
@@ -2390,6 +2594,14 @@ async function saveReceipt() {
   try {
     rawData = await collectRawData();
   } catch (err) {
+    if (err?.code === DRIVER_CREATE_CANCELLED) {
+      // User declined the quick-create prompt: silently abort the save and
+      // return focus to the offending Driver Name field — nothing persisted.
+      _isSaving = false;
+      const el = err.focusEl;
+      if (el) { el.focus(); try { el.select(); } catch (_) {} }
+      return;
+    }
     alert(err.message || '❌ حدث خطأ أثناء تجهيز بيانات الحفظ');
     _isSaving = false;
     return;
@@ -2434,8 +2646,8 @@ async function saveReceipt() {
     const saveResult = await ReceiptsModule.create(username, rawData);
 
     _vehicleAnalysisCache.clear();
-    // No driver-name registry: drivers are selected (id-keyed) per row from the
-    // drivers store — free-text names are never auto-registered anymore.
+    // Drivers stay id-keyed per row; unknown names were already quick-created
+    // (with user consent, duplicate-safe) during collection above.
 
     if (typeof updateDashboardStats === 'function') updateDashboardStats();
     window.dispatchEvent(new CustomEvent('receipts:changed'));
@@ -2720,7 +2932,7 @@ async function loadReceiptForEdit(receiptData) {
     } catch (_) { /* non-critical — name left blank */ }
   }));
 
-  // Load the drivers datalist BEFORE restoring rows so each persisted
+  // Load the drivers cache BEFORE restoring rows so each persisted
   // driver_id can be resolved to its record name on the row's autocomplete.
   await _receiptLoadDriverOptions();
 
@@ -3076,7 +3288,7 @@ function initReceiptPage() {
   setCurrentDate();
   loadClientsList();
   loadOfficesForReceipt();
-  _receiptRefreshDriverSelects();
+  _receiptRefreshDriverOptions();
 
   const tbody = document.getElementById('receiptTableBody');
   const dataRows = tbody ? [...tbody.querySelectorAll('tr')].filter(r => r.id !== 'receiptFillArrowRow') : [];
@@ -3096,6 +3308,32 @@ document.addEventListener('focusin', function (e) {
   if (!el.closest('#receiptTableBody')) return;
   setTimeout(function () { try { el.select(); } catch (_) {} }, 0);
 });
+
+// ── Driver row autocomplete wiring (document-level — immune to table re-renders) ──
+function _isDriverRowInput(el) {
+  return !!el && el.classList?.contains('receipt-data') && !!el.closest('#receiptTableBody');
+}
+document.addEventListener('focusin', function (e) {
+  // Clicking/tabbing into the field opens the suggestions immediately.
+  if (_isDriverRowInput(e.target)) _driverACOpen(e.target);
+});
+document.addEventListener('focusout', function (e) {
+  if (_driverAC.open && e.target === _driverAC.input) _driverACClose();
+});
+document.addEventListener('click', function (e) {
+  // Re-open on click when the field stayed focused (e.g. after Esc).
+  if (_isDriverRowInput(e.target) && !_driverAC.open) _driverACOpen(e.target);
+});
+document.addEventListener('input', function (e) {
+  // Typing filters the suggestion list naturally (substring match).
+  if (_driverAC.open && e.target === _driverAC.input) {
+    _driverAC.items  = _driverACMatches(e.target.value);
+    _driverAC.active = -1;
+    _driverACRender();
+    _driverACPosition();
+  }
+});
+document.addEventListener('keydown', _driverACKeydown, true); // capture: pre-empts row table nav
 
 window.addEventListener('owners:changed', () => {
   loadClientsList();
