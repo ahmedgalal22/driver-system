@@ -314,12 +314,6 @@ async function create(username, rawData) {
       const payloadWithNumber = assignReceiptNumber(servicePayload, String(nextNumber));
       const result = await FinancialService.createReceipt(username, payloadWithNumber);
 
-      try {
-        await _syncCompanyLoadDetailsFromReceipt(username, normalized);
-      } catch (syncErr) {
-        console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
-      }
-
       return { result, normalized };
     } catch (err) {
       if (isConstraintError(err) && attempt < MAX_RETRIES) {
@@ -346,12 +340,6 @@ async function update(username, id, rawData) {
   const servicePayload = _buildServicePayload(normalized);
 
   const result = await FinancialService.updateReceipt(username, id, servicePayload);
-
-  try {
-    await _syncCompanyLoadDetailsFromReceipt(username, normalized);
-  } catch (syncErr) {
-    console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
-  }
 
   return { result, normalized };
 }
@@ -522,92 +510,6 @@ async function getOffices(username) {
   return getOfficesForUser(username);
 }
 
-
-// ─── SYNC company load details (hamola) from receipt rows ───────────────────
-// After a successful receipt save: create missing company hamola rows only.
-// Never fails the receipt save. Skips rows without company. No duplicates.
-
-function _hamolaKey(row) {
-  const loading = String(row?.loading_place ?? row?.loading ?? '').trim().toLowerCase();
-  const destination = String(row?.destination_place ?? row?.direction ?? row?.taktik ?? '').trim().toLowerCase();
-  const itemType = String(row?.item_type ?? row?.type ?? '').trim().toLowerCase();
-  const officeAmt = Number(row?.office_amount ?? row?.maktab ?? row?.officeAmount ?? 0) || 0;
-  const nolon = Number(row?.nolon ?? row?.noloon ?? 0) || 0;
-  return [loading, destination, itemType, String(officeAmt), String(nolon)].join('|');
-}
-
-async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
-  if (!username || !rawData) return;
-
-  let dataRows = rawData.rows;
-  if (!Array.isArray(dataRows) || dataRows.length === 0) {
-    // Fallback: rows not supplied on the (transient) input → load the persisted
-    // ReceiptRows through the normalized read path and bridge their vocabulary.
-    // officeAmount and item type are persisted (Phase 5 — Step 2) and flow
-    // through the bridge into office_amount / item_type below.
-    const receiptId = rawData.id || rawData.receipt_id;
-    const receiptWithRows = receiptId
-      ? await ReceiptReadRepository.getReceiptWithRows(receiptId)
-      : null;
-    dataRows = (receiptWithRows?.rows || []).map(r => _persistedRowToUiShape(r));
-  }
-
-  const filteredRows = dataRows.filter(
-    (r) => r && r._type !== ROW_TYPES.SEPARATOR && r.type !== 'separator' && r.row_type !== 'separator'
-  );
-
-  // Group by company (office name on the row)
-  const byCompany = new Map();
-  for (const row of filteredRows) {
-    const companyName = String(row.office || '').trim();
-    if (!companyName) continue;
-    const loading = String(row.loading || '').trim();
-    const destination = String(row.taktik || row.direction || '').trim();
-    // hamola requires loading + destination + nolon
-    if (!loading || !destination) continue;
-    const nolon = Number(row.noloon) || 0;
-    // _normalizeHamolaRow requires nolon to be a number (0 allowed)
-    const payload = {
-      loading_place: loading,
-      destination_place: destination,
-      nolon,
-      office_amount: Number(row.officeAmount) || 0,
-      item_type: String(row.type || '').trim() || null,
-    };
-    const list = byCompany.get(companyName) || [];
-    list.push(payload);
-    byCompany.set(companyName, list);
-  }
-
-  if (byCompany.size === 0) return;
-
-  const offices = await OfficesService.getOffices(username);
-  const officeByName = new Map(
-    (offices || []).map((o) => [String(o.name || '').trim().toLowerCase(), o])
-  );
-
-  for (const [companyName, candidates] of byCompany.entries()) {
-    const office = officeByName.get(companyName.toLowerCase());
-    if (!office?.id) continue;
-
-    // Fresh office for current hamolaRows
-    const full = await OfficesService.getOfficeById(office.id, username);
-    if (!full) continue;
-
-    const existing = Array.isArray(full.hamolaRows) ? full.hamolaRows : [];
-    const existingKeys = new Set(existing.map(_hamolaKey));
-
-    // Dedupe within this receipt too
-    const seenNew = new Set();
-    for (const cand of candidates) {
-      const key = _hamolaKey(cand);
-      if (existingKeys.has(key) || seenNew.has(key)) continue;
-      seenNew.add(key);
-      await OfficesService.addHamolaRow(username, full.id, cand);
-      existingKeys.add(key);
-    }
-  }
-}
 
 // ─── NAMED EXPORT ─────────────────────────────────────────────────────────
 
@@ -1745,10 +1647,6 @@ function attachRowCalculation(row) {
   const discount  = row.querySelector('.receipt-discount');
   const sarf      = row.querySelector('.receipt-sarf');
   const net       = row.querySelector('.receipt-net');
-  const officeInp = row.querySelector('.receipt-office');
-  const loadingInp = row.querySelector('.receipt-loading');
-  const taktikInp  = row.querySelector('.receipt-taktik');
-
   if (!net) return;
 
   function calculateNet() {
@@ -1790,119 +1688,6 @@ function attachRowCalculation(row) {
   discount  && discount.addEventListener('input',  calculateNet);
   sarf      && sarf.addEventListener('input',      calculateNet);
 
-  // ── Office → loading / taktik / noloon autofill ──
-
-  async function getOfficeHamolaForRow(officeName) {
-    if (!officeName) return [];
-    const username = _currentUsername();
-    if (!username) return [];
-    const offices = await ReceiptsModule.getOffices(username);
-    const office  = offices.find(o => o.name.trim() === officeName.trim());
-    if (!office?.id) return [];
-    return office?.hamolaRows || [];
-  }
-
-  function setDL(id, values) {
-    let dl = document.getElementById(id);
-    if (!dl) { dl = document.createElement('datalist'); dl.id = id; document.body.appendChild(dl); }
-    dl.innerHTML = values.map(v => `<option value="${v}"></option>`).join('');
-  }
-
-  if (officeInp) {
-    officeInp.addEventListener('change', async function () {
-      const hamola   = await getOfficeHamolaForRow(this.value.trim());
-      const loadVals = [...new Set(
-        hamola.map(r => String(r.loading_place || r.loading || '').trim()).filter(Boolean)
-      )];
-      const dirVals  = [...new Set(
-        hamola.map(r => String(r.destination_place || r.direction || r.taktik || '').trim()).filter(Boolean)
-      )];
-      const uid      = 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
-      setDL('dl_rl_' + uid, loadVals);
-      setDL('dl_rd_' + uid, dirVals);
-      if (loadingInp) loadingInp.setAttribute('list', 'dl_rl_' + uid);
-      if (taktikInp)  taktikInp.setAttribute('list',  'dl_rd_' + uid);
-      row._hamolaData = hamola;
-      // Auto-fill loading+destination when only ONE valid option exists
-      if (loadVals.length === 1 && loadingInp) {
-        loadingInp.value = loadVals[0];
-      } else if (loadingInp) {
-        loadingInp.value = '';
-      }
-      if (dirVals.length === 1 && taktikInp) {
-        taktikInp.value = dirVals[0];
-      } else if (taktikInp) {
-        taktikInp.value = '';
-      }
-
-      // ── Blur validation: remove previous listeners before adding new ones ──
-      // This prevents listener accumulation when office is changed multiple times.
-      [loadingInp, taktikInp].forEach(function (inp, idx) {
-        if (!inp) return;
-        const prevBlurKey = idx === 0 ? '_blurHandlerLoading' : '_blurHandlerTaktik';
-        if (row[prevBlurKey]) {
-          inp.removeEventListener('blur', row[prevBlurKey]);
-        }
-        const blurHandler = function () {
-          const vals = idx === 0 ? loadVals : dirVals;
-          if (vals.length > 0 && this.value && !vals.includes(this.value.trim())) {
-            alert('الرجاء الاختيار من القائمة فقط');
-            this.value = '';
-          }
-        };
-        row[prevBlurKey] = blurHandler;
-        inp.addEventListener('blur', blurHandler);
-      });
-
-      // ── autoFillNoloon: remove previous listeners before adding new ones ──
-      function autoFillNoloon() {
-        const loadVal   = loadingInp?.value.trim() || '';
-        const taktikVal = taktikInp?.value.trim()  || '';
-        const matchRow  = hamola.find(h =>
-          String(h.loading_place || h.loading || '').trim() === loadVal
-          && String(h.destination_place || h.direction || h.taktik || '').trim() === taktikVal
-        );
-        if (!matchRow) return;
-        // النولون — display raw stored value (no forced .toFixed(2))
-        const noloonRaw = matchRow.nolon ?? matchRow.noloon;
-        const noloonVal = parseFloat(noloonRaw) || 0;
-        const noloonInp = row.querySelector('.receipt-noloon');
-        if (noloonInp && noloonVal > 0) {
-          noloonInp.value = String(noloonRaw);
-          noloonInp.dispatchEvent(new Event('input'));
-        }
-        // المكتب — display raw stored value (no forced .toFixed(2))
-        const maktabRaw = matchRow.office_amount ?? matchRow.maktab;
-        const maktabVal = parseFloat(maktabRaw) || 0;
-        const maktabInp = row.querySelector('.receipt-office-amount');
-        if (maktabInp && maktabVal > 0) {
-          maktabInp.value = String(maktabRaw);
-          maktabInp.dispatchEvent(new Event('input'));
-        }
-        // النوع
-        const typeVal = String(matchRow.item_type ?? matchRow.type ?? '').trim();
-        const typeInp = row.querySelector('.receipt-type');
-        if (typeInp && typeVal) {
-          typeInp.value = typeVal;
-        }
-      }
-      // Remove previous autoFillNoloon listeners before re-adding
-      if (row._autoFillLoadingHandler && loadingInp) {
-        loadingInp.removeEventListener('change', row._autoFillLoadingHandler);
-      }
-      if (row._autoFillTaktikHandler && taktikInp) {
-        taktikInp.removeEventListener('change', row._autoFillTaktikHandler);
-      }
-      row._autoFillLoadingHandler = autoFillNoloon;
-      row._autoFillTaktikHandler = autoFillNoloon;
-      if (loadingInp) loadingInp.addEventListener('change', autoFillNoloon);
-      if (taktikInp)  taktikInp.addEventListener('change',  autoFillNoloon);
-      // Auto-trigger noloon fill if both loading and destination were auto-filled
-      if (loadVals.length === 1 && dirVals.length === 1) {
-        autoFillNoloon();
-      }
-    });
-  }
 }
 
 function calculateTotals() {

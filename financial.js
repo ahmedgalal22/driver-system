@@ -54,16 +54,6 @@ function _uuid() {
 
 // ─── INTERNAL HELPERS ──────────────────────────────────────────────────────────
 
-function _toKey(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function _requireText(value, label) {
-  const text = String(value || '').trim();
-  if (!text) throw new Error(`[FinancialService] ${label} is required.`);
-  return text;
-}
-
 function _storesForOps(ops, extra = []) {
   return [...new Set([
     ...extra,
@@ -249,44 +239,6 @@ function _validate(data) {
     raw_rows: data.rows ?? [],
     receipt_number: data.receipt_number ?? null,
   };
-}
-
-async function resolveHamolaPrice(username, officeName, loadingPlace, destinationPlace, officeMap = null) {
-  if (!username) throw new Error('[FinancialService:resolveHamolaPrice] username is required.');
-
-  const name = _requireText(officeName, 'office_name');
-  const loading = _requireText(loadingPlace, 'loading_place');
-  const destination = _requireText(destinationPlace, 'destination');
-
-  let map = officeMap;
-  if (!map) {
-    const offices = await DB.findByFields(STORE.OFFICES, { username });
-    map = new Map(offices.map((o) => [_toKey(o.name), o]));
-  }
-
-  const office = map.get(_toKey(name));
-  if (!office) {
-    throw new Error(`❌ الشركة غير موجودة: ${name}`);
-  }
-
-  const hamola = Array.isArray(office.hamolaRows) ? office.hamolaRows : [];
-  const match = hamola.find((row) => {
-    const loadKey = _toKey(row.loading_place ?? row.loading);
-    const destKey = _toKey(row.destination_place ?? row.direction ?? row.taktik);
-    return loadKey === _toKey(loading) && destKey === _toKey(destination);
-  });
-
-  if (!match) {
-    throw new Error(`❌ لا يوجد سعر مطابق للشركة "${name}" لمسار (${loading} → ${destination})`);
-  }
-
-  const price = Number(match.price);
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error(`❌ سعر التحميل غير صالح للشركة "${name}" لمسار (${loading} → ${destination})`);
-  }
-
-  return { office, price };
-
 }
 
 // ─── PUBLIC: createReceipt ─────────────────────────────────────────────────────
@@ -1204,7 +1156,6 @@ export const FinancialService = Object.freeze({
   createDriverSalfa,
   updateDriverSalfa,
   deleteDriverSalfa,
-  resolveHamolaPrice,
   getDriverKartas,
   getDriverUnpaidKartas,
   getDriverPaidKartas,

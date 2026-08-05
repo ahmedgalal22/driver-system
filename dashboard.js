@@ -7,7 +7,6 @@
 import { Money } from './money.js';
 import { AuthModule } from './auth.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
-import { DBProvider } from './services/dbProvider.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 import { TreasuryRepository } from './services/treasuryRepository.js';
@@ -24,8 +23,6 @@ const DOMAIN_EVENT = Object.freeze({
 });
 
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
-
-const STORE_OFFICES = 'offices';
 
 const STATE = {
   quickRange: '', // 'day', 'week', 'month', or ''
@@ -104,80 +101,6 @@ async function _loadReceiptRowsProjection(receipts) {
     }
   }));
   return projection;
-}
-
-/**
- * Calculates Card 4: "إجمالي المحصل من الشركات"
- * Sums weight * unit_price for each company's routes from active receipts in period.
- * Optimized to run in a single pass over receipt rows using an indexed weightMap (complexity: O(R * L)).
- *
- * Rows are read from the ReceiptRow projection (persisted contract slots:
- * office / loading / destination). weight/weight2 have NO persisted slot in
- * the frozen ReceiptRow contract — the weight contribution is 0 until the
- * contract is extended (documented B6 debt).
- */
-async function _calculateTotalCollectedFromCompanies(username, activeReceipts, offices, receiptRowsProjection) {
-  const weightMap = {}; // key = officeId::loadingPlace::destinationPlace -> accumulatedWeight
-
-  // Helper map to quickly find officeId by its normalized name
-  const officeNameMap = new Map();
-  if (Array.isArray(offices)) {
-    for (const office of offices) {
-      if (office && office.name) {
-        officeNameMap.set(String(office.name).trim().toLowerCase(), String(office.id));
-      }
-    }
-  }
-
-  // Single pass through all active receipt rows to build the weightMap
-  if (Array.isArray(activeReceipts)) {
-    for (const receipt of activeReceipts) {
-      if (!receipt) continue;
-      const rows = (receiptRowsProjection && receiptRowsProjection.get(String(receipt.id))) || [];
-      for (const row of rows) {
-        if (!row) continue; // separators are UI-local — never persisted in receipt_rows
-        const rowOffice = String(row.office || '').trim().toLowerCase();
-        if (!rowOffice) continue;
-
-        const officeId = officeNameMap.get(rowOffice);
-        if (!officeId) continue; // Skip if office is not registered
-
-        const loading = String(row.loading || '').trim().toLowerCase();
-        const dest = String(row.destination || '').trim().toLowerCase(); // persisted الجهة slot
-        // weight/weight2: no persisted slot (B6) → 0 until the contract is extended
-        const w = (Number(row.weight) || 0) + (Number(row.weight2) || 0);
-        if (!loading || !dest) continue;
-
-        const key = `${officeId}::${loading}::${dest}`;
-        weightMap[key] = (weightMap[key] || 0) + w;
-      }
-    }
-  }
-
-  // Calculate totals by iterating offices once and their routes once
-  let totalCents = 0;
-  if (Array.isArray(offices)) {
-    for (const office of offices) {
-      if (!office) continue;
-      const officeId = String(office.id);
-      const hamolaRows = Array.isArray(office.hamolaRows) ? office.hamolaRows : [];
-      
-      let officeGrandTotalCents = 0;
-      for (const r of hamolaRows) {
-        if (!r) continue;
-        const loading = String(r.loading_place || r.loading || '').trim().toLowerCase();
-        const dest = String(r.destination_place || r.direction || r.taktik || '').trim().toLowerCase();
-        const key = `${officeId}::${loading}::${dest}`;
-        
-        const weight = weightMap[key] || 0;
-        const price = Number(r.price) || 0;
-        officeGrandTotalCents += Money.toCents(weight * price);
-      }
-      totalCents += officeGrandTotalCents;
-    }
-  }
-
-  return Money.toDecimal(totalCents);
 }
 
 // ─── PRIMARY CAPITAL TREASURY STORAGE LAYER ──────────────────────────────────
@@ -446,7 +369,6 @@ function _injectIsolatedStyles() {
     .dashboard-stat-indigo  { background: linear-gradient(135deg, #4f46e5, #7c3aed) !important; }
     .dashboard-stat-rose    { background: linear-gradient(135deg, #f43f5e, #be123c) !important; }
     .dashboard-stat-teal    { background: linear-gradient(135deg, #0d9488, #115e59) !important; }
-    .dashboard-stat-sky     { background: linear-gradient(135deg, #0ea5e9, #0369a1) !important; }
     .dashboard-stat-emerald { background: linear-gradient(135deg, #10b981, #047857) !important; }
 
     /* Capital treasury independent section container */
@@ -984,7 +906,6 @@ async function _refreshDashboard() {
   // 1. Read raw tables via repositories
   const allReceipts = await ReceiptRepository.getAll(username);
   const allTreasury = await TreasuryRepository.getAll(username);
-  const offices = await DBProvider.getAll(STORE_OFFICES, { username });
 
   // 2. Filter datasets based on selected dates with defense guards
   const activeReceipts = (allReceipts || []).filter(r => {
@@ -1034,19 +955,16 @@ async function _refreshDashboard() {
   }
   const totalOfficeVal = Money.toDecimal(totalOfficeCents);
 
-  // Card 3: "إجمالي المحصل من الشركات" — Calculated with prices map & routes weight
-  const totalCollectedFromCompanies = await _calculateTotalCollectedFromCompanies(username, activeReceipts, offices, receiptRowsProjection);
-
   // ─── RENDER STATISTICS CARDS ────────────────────────────────────────────────
 
-  _renderSummaryCards(totalExpenseVal, totalOfficeVal, totalCollectedFromCompanies);
+  _renderSummaryCards(totalExpenseVal, totalOfficeVal);
 
   // ─── RENDER CAPITAL TREASURY ────────────────────────────────────────────────
 
   await _renderCapitalTreasury(username);
 }
 
-function _renderSummaryCards(expenses, office, collected) {
+function _renderSummaryCards(expenses, office) {
   const container = document.getElementById('dashboardStatsGrid');
   if (!container) return;
 
@@ -1064,7 +982,6 @@ function _renderSummaryCards(expenses, office, collected) {
   container.innerHTML = `
     ${cardHtml('المصروفات والمرتبات', expenses, 'المصاريف التشغيلية والمرتبات المباشرة', 'dashboard-stat-rose')}
     ${cardHtml('إجمالي المكتب', office, 'نسبة عمولة المكتب المحصلة من الكارتات', 'dashboard-stat-teal')}
-    ${cardHtml('إجمالي المحصل من الشركات', collected, 'مجموع مستحقات الحمولة من الشركات ماليًا', 'dashboard-stat-sky')}
   `;
 }
 

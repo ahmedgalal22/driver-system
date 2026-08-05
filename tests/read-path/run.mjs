@@ -128,39 +128,6 @@ for (const r of activeReceipts) {
 }
 ok(totalOfficeCents === 0, `Card 3 (إجمالي المكتب) = 0¢ — structural B6 zero, NOT a lookup failure (got ${totalOfficeCents})`);
 
-// EXTRACTED VERBATIM Card 4 weightMap pass — dashboard.js (_calculateTotalCollectedFromCompanies)
-const offices = [officeA, officeB];
-const officeNameMap = new Map();
-for (const office of offices) {
-  if (office && office.name) officeNameMap.set(String(office.name).trim().toLowerCase(), String(office.id));
-}
-const weightMap = {};
-for (const receipt of activeReceipts) {
-  if (!receipt) continue;
-  const rows = (receiptRowsProjection && receiptRowsProjection.get(String(receipt.id))) || [];
-  for (const row of rows) {
-    if (!row) continue;
-    const rowOffice = String(row.office || '').trim().toLowerCase();
-    if (!rowOffice) continue;
-    const officeId = officeNameMap.get(rowOffice);
-    if (!officeId) continue;
-    const loading = String(row.loading || '').trim().toLowerCase();
-    const dest = String(row.destination || '').trim().toLowerCase();
-    const w = (Number(row.weight) || 0) + (Number(row.weight2) || 0);
-    if (!loading || !dest) continue;
-    const key = `${officeId}::${loading}::${dest}`;
-    weightMap[key] = (weightMap[key] || 0) + w;
-  }
-}
-const expectedKeys = new Set([
-  `${officeA.id}::طنطا::القاهرة`, `${officeA.id}::طنطا::المنصورة`, `${officeB.id}::طنطا::الإسكندرية`,
-]);
-const gotKeys = new Set(Object.keys(weightMap));
-ok(gotKeys.size === 3 && [...expectedKeys].every(k => gotKeys.has(k)),
-  `Card 4: weightMap keys formed from persisted office/loading/destination (${[...gotKeys].join(' | ')})`);
-ok(Object.values(weightMap).every(v => v === 0),
-  'Card 4: all weights = 0 — structural B6 zero (weights have no persisted slot)');
-
 // ─── GROUP 3: offices.js pipeline (extracted verbatim, real repositories) ───
 console.log('\n— GROUP 3: offices.js pipeline —');
 
@@ -206,6 +173,7 @@ function _officeSummaryLoop(filteredReceipts, rowsProjection, nameMap, officeLis
   return summary;
 }
 
+const offices = [officeA, officeB];
 const nameMap = new Map(offices.map((o) => [String(o.name || '').trim().toLowerCase(), o]));
 const sRow = _persistedRowToOfficeShape(liveRows.find(r => r.vehicle_plate === '111 أ ب'));
 ok(sRow.office === 'شركة أ' && sRow.loading === 'طنطا' && sRow.taktik === 'القاهرة',
@@ -288,8 +256,6 @@ const offSrc = readFileSync('./offices.src.js', 'utf8');
 ok(dashSrc.includes("import { ReceiptReadRepository } from './services/receiptReadRepository.js';"),
   'dashboard.js imports ReceiptReadRepository');
 ok(!/Array\.isArray\(\s*(receipt|r)\.rows/.test(dashSrc), 'dashboard.js: ZERO executable embedded receipt.rows accessors');
-ok(dashSrc.includes('const rows = (receiptRowsProjection && receiptRowsProjection.get(String(receipt.id))) || [];'),
-  'extraction-bound: Card 4 marker present verbatim in dashboard.js');
 ok(dashSrc.includes('totalOfficeCents += Money.toCents(row.office_amount || 0);'),
   'extraction-bound: Card 3 marker present verbatim in dashboard.js');
 ok(offSrc.includes("import { ReceiptRepository } from './services/receiptRepository.js';")
