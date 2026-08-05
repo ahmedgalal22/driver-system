@@ -380,7 +380,7 @@ function _renderShell() {
                 <tr>
                   <th style="color:#fff;">اسم السائق</th>
                   <th style="color:#fff;">رقم الهاتف</th>
-                  <th style="color:#fff;">الرصيد الحالي</th>
+                  <th style="color:#fff;">رصيد السائق</th>
                   <th style="color:#fff;">إجراءات</th>
                 </tr>
               </thead>

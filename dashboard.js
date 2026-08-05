@@ -1199,7 +1199,7 @@ function _printCapitalTreasury() {
         <div style="font-size:13pt;font-weight:800;color:#dc2626;">-${Money.fmt(totalOut)} ج.م</div>
       </div>
       <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:8px;text-align:center;background-color:#f1f5f9;">
-        <div style="font-size:8pt;color:#6b7280;">صافي الرصيد الحالي</div>
+        <div style="font-size:8pt;color:#6b7280;">صافي الحالي</div>
         <div style="font-size:13pt;font-weight:800;color:#1e3a8a;">${Money.fmt(totalIn - totalOut)} ج.م</div>
       </div>
     </div>
