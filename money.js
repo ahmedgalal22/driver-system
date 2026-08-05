@@ -104,7 +104,6 @@ const FIELDS = Object.freeze([
   'subtotal',
   'deposit_total',
   'withdraw_total',
-  'general_add',
   'general_discount',
   'net_due',
   'previous_balance',

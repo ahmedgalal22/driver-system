@@ -149,7 +149,7 @@ const FORM_PAYLOAD = {
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك الاختبار',
   owner_name: 'مالك الاختبار',
   company_name: null, company_phone: null,
-  previous_balance: 500, general_discount: 0, general_add: 100,
+  previous_balance: 500, general_discount: 0,
   paid: 0, total: 0, net_due: 0, net_total: 0,
   rows: [
     // Row A: driver selected on the row (id-keyed) — collector output shape after
@@ -173,7 +173,7 @@ const FORM_PAYLOAD = {
       net: rowB_net },
   ],
 };
-console.log(`entered rows: data A net=${rowA_net}, separator, data B net=${rowB_net}; total=${rowA_net + rowB_net}, general_add=100, prev_balance=500`);
+console.log(`entered rows: data A net=${rowA_net}, separator, data B net=${rowB_net}; total=${rowA_net + rowB_net}, prev_balance=500`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE B — What ReceiptsModule.create() constructs (REAL _normalize +
@@ -218,10 +218,10 @@ ok(persistedHeader.vehicle_id === undefined, 'LOST: header.vehicle_id NOT persis
 // Header survivors
 ok(persistedHeader.client_id === 'owner-1' && persistedHeader.client_name === 'مالك الاختبار'
    && persistedHeader.receipt_date === '2026-07-29', 'KEPT: client_id / client_name / receipt_date');
-ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === Money.toCents(100)
-   && persistedHeader.net_due === Money.toCents(1270) && persistedHeader.net_total === Money.toCents(1770)
+ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === undefined
+   && persistedHeader.net_due === Money.toCents(1170) && persistedHeader.net_total === Money.toCents(1670)
    && persistedHeader.previous_balance === Money.toCents(500) && persistedHeader.paid === 0,
-   `KEPT: header money in cents (total=${persistedHeader.total}, net_due=${persistedHeader.net_due}, net_total=${persistedHeader.net_total})`);
+   `REMOVED (General Add phase): header.general_add not persisted; net_due == total, net_total == total + previous_balance (total=${persistedHeader.total}, net_due=${persistedHeader.net_due}, net_total=${persistedHeader.net_total})`);
 ok(persistedHeader.payout_status === 'unpaid', 'KEPT: payout_status');
 
 // Row losses / survivors
@@ -245,8 +245,8 @@ ok(pA.vehicle_plate === 'أ ب ج 1234' && pA.office === 'شركة الأمل' &
 ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 92000 && pA.sarf === 3000,
    `KEPT: money in cents (driver_price=${pA.driver_price}, advance=${pA.advance}, net=${pA.net}, sarf=${pA.sarf})`);
 const ledger = await DB.getByIndex('vehicle_ledger', 'by_reference_id', rid);
-ok(ledger.length === 1 && ledger[0].amount === 127000 && ledger[0].type === 'receipt_due',
-   `KEPT: ledger entry (amount=${ledger[0]?.amount}) — note text still built from receipt id (FinancialService untouched by Phase 5): ${J(ledger[0]?.note)}`);
+ok(ledger.length === 1 && ledger[0].amount === 117000 && ledger[0].type === 'receipt_due',
+   `REMOVED-CONTRACT (General Add phase): leg amount == total (amount=${ledger[0]?.amount}) — note text still built from receipt id: ${J(ledger[0]?.note)}`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE D — What ReceiptReadRepository returns (REAL)
@@ -385,10 +385,10 @@ const rebuiltTotals = calculateReceiptTotals(
       add: uiA.add, sarf: uiA.sarf },
     // row B — entered values (same reconstruction established)
     { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
-  ], 100, 500, 0);
+  ], 500, 0);
 console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, net_due=${rebuiltTotals.net_due}, net_total=${rebuiltTotals.net_total}`);
-ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_due === 1270 && rebuiltTotals.net_total === 1770,
-   `Edit view totals frame correct on load: total=${rebuiltTotals.total}, net_due=${rebuiltTotals.net_due}, net_total=${rebuiltTotals.net_total} — matches persisted header (1170/1270/1770)`);
+ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_due === 1170 && rebuiltTotals.net_total === 1670,
+   `Edit view totals frame correct on load (General Add phase signature): total=${rebuiltTotals.total}, net_due=${rebuiltTotals.net_due}, net_total=${rebuiltTotals.net_total} — net_due == total, net_total == total + prev_balance (1170/1170/1670)`);
 fingerprint(FINANCIAL_SRC, "throw new Error('[FinancialService] total must be a non-negative number.');",
   'FinancialService would reject negative total on save (if the number gate were bypassed)');
 

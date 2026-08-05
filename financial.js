@@ -293,12 +293,8 @@ function _validate(data) {
   }
 
   const general_discount = 0; // removed from system
-  const general_add = Money.toCents(data.general_add ?? data.generalAdd ?? 0);
-  if (general_add < 0) {
-    throw new Error('[FinancialService] general_add must be a non-negative number.');
-  }
   const previous_balance = Money.toCents(data.previous_balance ?? data.previousBalance ?? 0);
-  const net_due_calc = total + general_add;
+  const net_due_calc = total;
   const net_due_input = data.net_due != null ? Money.toCents(data.net_due) : null;
   const net_due = net_due_input != null ? net_due_input : net_due_calc;
   const net_total = net_due + previous_balance;
@@ -317,7 +313,6 @@ function _validate(data) {
     account_type,
     receipt_date,
     total,
-    general_add,
     general_discount,
     net_due,
     previous_balance,
@@ -572,7 +567,6 @@ async function createReceipt(username, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    general_add: clean.general_add,
     net_due: clean.net_due,
     net_total: clean.net_total,
     notes: data.notes ?? null,
@@ -631,7 +625,6 @@ async function updateReceipt(username, id, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    general_add: clean.general_add,
     net_due: clean.net_due,
     net_total: clean.net_total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),

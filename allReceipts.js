@@ -630,7 +630,6 @@ function buildReceiptCardHtml(record, opts = {}) {
       <div class="record-card__footer">
         <div><span>عدد الكارتات</span><strong>${kartaCount}</strong></div>
         <div><span>الإجمالي</span><strong>${Money.fmtCents(record.total)}</strong></div>
-        <div><span>اضافة عام</span><strong>${Money.fmtCents(record.general_add)}</strong></div>
         <div><span>الصافي المستحق</span><strong>${Money.fmtCents(record.net_due)}</strong></div>
         <div><span>رصيد العميل</span><strong>${Money.fmtCents(record.previous_balance)}</strong></div>
         <div><span>الصافي الكلي</span><strong>${Money.fmtCents(record.net_total)}</strong></div>
@@ -895,7 +894,6 @@ function buildReceiptPrintBlock(record) {
       <div class="print-footer">
         <span>عدد الكارتات: <strong>${kartaCount}</strong></span>
         <span>الإجمالي: <strong>${Money.fmtCents(record.total)}</strong></span>
-        <span>إضافة عام: <strong>${Money.fmtCents(record.general_add)}</strong></span>
         <span>الصافي المستحق: <strong>${Money.fmtCents(record.net_due)}</strong></span>
         <span>رصيد العميل: <strong>${Money.fmtCents(record.previous_balance)}</strong></span>
         <span>الصافي الكلي: <strong>${Money.fmtCents(record.net_total)}</strong></span>
@@ -912,7 +910,7 @@ function buildReceiptPrintBlock(record) {
 //
 // Design contract:
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
-//   • Top-level money fields (total, paid, net_due, net_total, general_add,
+//   • Top-level money fields (total, paid, net_due, net_total,
 //     previous_balance) are stored as CENTS  → Money.fmtCents().
 //   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
 //     weight2, deficit, weightTotal) are stored as DECIMALS → Money.fmt().
@@ -1134,7 +1132,6 @@ function _receiptPrintBuildTableBody(rows, activeCols) {
  */
 function _receiptPrintBuildTotalsRow(record, kartaCount) {
   const total           = Money.fmtCents(record.total           ?? 0);
-  const generalAdd      = Money.fmtCents(record.general_add     ?? 0);
   const netDue          = Money.fmtCents(record.net_due         ?? 0);
   const previousBalance = Money.fmtCents(record.previous_balance ?? 0);
   const netTotal        = Money.fmtCents(record.net_total       ?? 0);
@@ -1149,7 +1146,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
         <tr>
           ${th('عدد الكارتات')}
           ${th('الإجمالي')}
-          ${th('إضافة عام')}
           ${th('الصافي المستحق')}
           ${th('رصيد العميل')}
           ${th('الصافي الكلي')}
@@ -1160,7 +1156,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
         <tr>
           ${td(String(kartaCount))}
           ${td(total)}
-          ${td(generalAdd)}
           ${td(netDue)}
           ${td(previousBalance)}
           ${td(netTotal)}

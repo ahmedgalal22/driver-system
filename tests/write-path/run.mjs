@@ -22,7 +22,7 @@ function makePayload(over = {}) {
     receipt_number: '1001',
     client_id, client_type: 'owner', client_name: 'مالك اختبار',
     account_type: null,
-    total: 1150, general_add: 0, previous_balance: 0, paid: 0,
+    total: 1150, previous_balance: 0, paid: 0,
     net_due: 1150, net_total: 1150,
     rows: [
       { row_id: uuid(), _type: 'data', owner_id: client_id, owner_name: 'مالك اختبار',

@@ -54,7 +54,7 @@ const rowX = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_
 const hdr = (over = {}) => ({
   receipt_date: '2026-07-27', receipt_number: '1001',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
-  account_type: null, total: 1150, general_add: 0, previous_balance: 0,
+  account_type: null, total: 1150, previous_balance: 0,
   paid: 0, net_due: 1150, net_total: 1150, ...over,
 });
 

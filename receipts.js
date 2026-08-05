@@ -92,10 +92,6 @@ function _validate(rawData) {
   }
 
   // general_discount removed from system
-  const generalAdd = Number(rawData.general_add ?? 0);
-  if (!Number.isFinite(generalAdd) || generalAdd < 0) {
-    throw new Error('[ReceiptsModule] general_add must be a non-negative number.');
-  }
   const paid = Number(rawData.paid ?? 0);
   if (!Number.isFinite(paid) || paid < 0) {
     throw new Error('[ReceiptsModule] paid must be a non-negative number.');
@@ -178,10 +174,9 @@ function _normalize(rawData) {
   const dataRows = rows.filter(r => r.row_type !== ROW_TYPES.SEPARATOR);
 
   const previous_balance = Number(rawData.previous_balance) || 0;
-  const general_add      = Number(rawData.general_add)      || 0;
   const paid             = Number(rawData.paid)             || 0;
 
-  const calcs = calculateReceiptTotals(rows, general_add, previous_balance, paid);
+  const calcs = calculateReceiptTotals(rows, previous_balance, paid);
   const total = calcs.total;
   const net_due = calcs.net_due;
   const net_total = calcs.net_total;
@@ -209,7 +204,6 @@ function _normalize(rawData) {
     total,
     previous_balance,
     general_discount,
-    general_add,
     net_due,
     net_total,
     paid,
@@ -301,7 +295,6 @@ function _buildServicePayload(n) {
     row_count        : n.row_count,
     total            : n.total,
     general_discount : n.general_discount,
-    general_add      : n.general_add,
     net_due          : n.net_due,
     previous_balance : n.previous_balance,
     paid             : n.paid,
@@ -1202,11 +1195,6 @@ function renderTotals() {
               <div style="font-size:18px;font-weight:bold;margin:0;" id="totalAmount">0.00</div>
             </td>
 
-            <td class="totals-cell" style="background:#16a34a;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
-              <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">إضافة عام</div>
-              <input type="number" id="generalAdd" value="0" min="0" step="0.01"
-                style="width:100%;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);border-radius:6px;padding:3px 6px;font-size:15px;font-weight:bold;color:white;text-align:center;box-sizing:border-box;">
-            </td>
             <td class="totals-cell" style="background:#0d9488;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
               <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">الصافي المستحق</div>
               <div style="font-size:18px;font-weight:bold;margin:0;" id="netDueAmount">0.00</div>
@@ -2050,9 +2038,6 @@ function calculateTotals() {
       add: parseFloat(row.querySelector('.receipt-add')?.value) || 0,
     }));
 
-  const addEl = document.getElementById('generalAdd');
-  const add = parseFloat(addEl?.value) || 0;
-
   const balEl = document.getElementById('receiptBalance');
   const previousBalance = parseFloat(balEl?.dataset.previous || '0') || 0;
 
@@ -2060,7 +2045,7 @@ function calculateTotals() {
   const paidAuto = paidEl ? paidEl.dataset.auto !== '0' : true;
   
   // Calculate using our unified financial calculator!
-  const calcs = calculateReceiptTotals(rowObjs, add, previousBalance, 0);
+  const calcs = calculateReceiptTotals(rowObjs, previousBalance, 0);
   const total = calcs.total;
   const netDue = calcs.net_due;
   const netTotal = calcs.net_total;
@@ -2669,7 +2654,6 @@ async function collectRawData() {
   const companyName     = document.getElementById('companyName')?.value;
   const companyPhone    = document.getElementById('companyPhone')?.value;
   const generalDiscount = 0; // removed from system
-  const generalAdd      = parseFloat(document.getElementById('generalAdd')?.value) || 0;
   return {
     id               : ReceiptState.editingReceiptId || undefined,
     receipt_date     : (receiptDateInput || '').trim(),
@@ -2682,7 +2666,6 @@ async function collectRawData() {
     company_phone    : normalizeOptionalString(companyPhone),
     previous_balance : previousBalance,
     general_discount : generalDiscount,
-    general_add      : generalAdd,
     paid             : parseFloat(document.getElementById('paidAmount')?.value) || 0,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
     net_due          : parseFloat(document.getElementById('netDueAmount')?.textContent) || 0,
@@ -2997,7 +2980,6 @@ function printReceipt() {
   if (totalsContainer) {
     const rowCount   = document.getElementById('rowCount')?.textContent || '0';
     const total      = document.getElementById('totalAmount')?.textContent || '0.00';
-    const generalAdd = document.getElementById('generalAdd')?.value || '0';
     const netDue = document.getElementById('netDueAmount')?.textContent || '0.00';
     const netTotal = document.getElementById('netTotalAmount')?.textContent || '0.00';
     const paid       = document.getElementById('paidAmount')?.value || '0';
@@ -3009,7 +2991,6 @@ function printReceipt() {
           <tr>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">عدد الكارتات</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الإجمالي</th>
-            <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">إضافة عام</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الصافي المستحق</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">رصيد العميل</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الصافي الكلي</th>
@@ -3020,7 +3001,6 @@ function printReceipt() {
           <tr>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${rowCount}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${total}</td>
-            <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${generalAdd}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${netDue}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${balance}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${netTotal}</td>
@@ -3100,9 +3080,6 @@ function clearReceiptSilent() {
   const tbody = document.getElementById('receiptTableBody');
   if (tbody) tbody.innerHTML = '';
   
-  const ga = document.getElementById('generalAdd');
-  if (ga) ga.value = '0';
-  
   const paidEl = document.getElementById('paidAmount');
   if (paidEl) { paidEl.value = '0'; paidEl.dataset.auto = '1'; }
   
@@ -3162,8 +3139,6 @@ async function loadReceiptForEdit(receiptData) {
 
   // Financial fields are stored as cents in DB — convert to decimals for UI
   // general_discount removed from system
-  const generalAdd      = Money.fmtCents(receiptData.general_add ?? receiptData.generalAdd ?? receiptData.totals?.general_add ?? 0);
-
   const balEl           = document.getElementById('receiptBalance');
   const paidEl = document.getElementById('paidAmount');
   const isPaid = String(receiptData.payout_status || RECEIPT_PAYOUT_STATUS.UNPAID) === RECEIPT_PAYOUT_STATUS.PAID;
@@ -3182,8 +3157,6 @@ async function loadReceiptForEdit(receiptData) {
     if (paidEl) paidEl.dataset.auto = '1'; // auto-update paid from netTotal
   }
 
-  // generalDiscount removed
-  setV('generalAdd',      generalAdd);
 
   const tbody       = document.getElementById('receiptTableBody');
   tbody.innerHTML   = '';
@@ -3331,10 +3304,6 @@ function attachPageListeners() {
   document.addEventListener('input', function (e) {
     if (e.target.id === 'paidAmount') {
       e.target.dataset.auto = '0';
-      calculateTotals();
-      return;
-    }
-    if (e.target.id === 'generalAdd') {
       calculateTotals();
       return;
     }
