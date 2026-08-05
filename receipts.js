@@ -178,7 +178,6 @@ function _normalize(rawData) {
 
   const calcs = calculateReceiptTotals(rows, previous_balance, paid);
   const total = calcs.total;
-  const net_total = calcs.net_total;
   const balance = calcs.balance;
   const row_count        = dataRows.length;
   const general_discount = 0; // removed from system
@@ -203,7 +202,6 @@ function _normalize(rawData) {
     total,
     previous_balance,
     general_discount,
-    net_total,
     paid,
     balance,
   };
@@ -1202,10 +1200,6 @@ function renderTotals() {
               <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">رصيد العميل</div>
               <div style="font-size:18px;font-weight:bold;margin:0;" id="receiptBalance" data-previous="0">0.00</div>
             </td>
-            <td class="totals-cell" style="background:#0ea5e9;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
-              <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">الصافي الكلي</div>
-              <div style="font-size:18px;font-weight:bold;margin:0;" id="netTotalAmount">0.00</div>
-            </td>
             <td class="totals-cell" style="background:#16a34a;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
               <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">المدفوع</div>
               <input type="number" id="paidAmount" value="0" min="0" step="0.01" data-auto="1"
@@ -2037,7 +2031,6 @@ function calculateTotals() {
   // Calculate using our unified financial calculator!
   const calcs = calculateReceiptTotals(rowObjs, previousBalance, 0);
   const total = calcs.total;
-  const netTotal = calcs.net_total;
 
   const totalEl = document.getElementById('totalAmount');
   if (totalEl) totalEl.textContent = Money.fmt(total);
@@ -2058,12 +2051,10 @@ function calculateTotals() {
     }
   });
 
-  const netTotalEl = document.getElementById('netTotalAmount');
-  if (netTotalEl) netTotalEl.textContent = Money.fmt(netTotal);
-
-  if (paidEl && paidAuto) paidEl.value = Money.fmt(netTotal);
+  // المدفوع auto-fill = المبلغ الذي يصفّي رصيد العميل (الإجمالي + الرصيد السابق)
+  if (paidEl && paidAuto) paidEl.value = Money.fmt(calcs.balance);
   const paid = parseFloat(paidEl?.value) || 0;
-  const projectedBalance = netTotal - paid;
+  const projectedBalance = calcs.balance - paid;
 
   // Show: previous balance when no rows yet, projected balance otherwise
   if (balEl) {
@@ -2654,7 +2645,6 @@ async function collectRawData() {
     general_discount : generalDiscount,
     paid             : parseFloat(document.getElementById('paidAmount')?.value) || 0,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
-    net_total        : parseFloat(document.getElementById('netTotalAmount')?.textContent) || 0,
     rows             : await collectReceiptRows(),
   };
 }
@@ -2965,7 +2955,6 @@ function printReceipt() {
   if (totalsContainer) {
     const rowCount   = document.getElementById('rowCount')?.textContent || '0';
     const total      = document.getElementById('totalAmount')?.textContent || '0.00';
-    const netTotal = document.getElementById('netTotalAmount')?.textContent || '0.00';
     const paid       = document.getElementById('paidAmount')?.value || '0';
     const balance    = document.getElementById('receiptBalance')?.textContent || '0.00';
 
@@ -2976,7 +2965,6 @@ function printReceipt() {
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">عدد الكارتات</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الإجمالي</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">رصيد العميل</th>
-            <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الصافي الكلي</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">المدفوع</th>
           </tr>
         </thead>
@@ -2985,7 +2973,6 @@ function printReceipt() {
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${rowCount}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${total}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${balance}</td>
-            <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${netTotal}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${paid}</td>
           </tr>
         </tbody>
@@ -3065,9 +3052,6 @@ function clearReceiptSilent() {
   const paidEl = document.getElementById('paidAmount');
   if (paidEl) { paidEl.value = '0'; paidEl.dataset.auto = '1'; }
 
-  const netTotalEl = document.getElementById('netTotalAmount');
-  if (netTotalEl) netTotalEl.textContent = '0.00';
-  
   const balEl = document.getElementById('receiptBalance');
   if (balEl) { balEl.textContent = '0.00'; balEl.dataset.previous = '0'; }
   
@@ -3133,7 +3117,7 @@ async function loadReceiptForEdit(receiptData) {
     // "لم يتم صرفه" — use saved previous_balance as-is
     const previousBalance = Money.fmtCents(receiptData.previous_balance);
     if (balEl) balEl.dataset.previous = String(previousBalance);
-    if (paidEl) paidEl.dataset.auto = '1'; // auto-update paid from netTotal
+    if (paidEl) paidEl.dataset.auto = '1'; // auto-update paid (يصفّي الرصيد)
   }
 
 

@@ -150,7 +150,7 @@ const FORM_PAYLOAD = {
   owner_name: 'مالك الاختبار',
   company_name: null, company_phone: null,
   previous_balance: 500, general_discount: 0,
-  paid: 0, total: 0, net_total: 0,
+  paid: 0, total: 0,
   rows: [
     // Row A: driver selected on the row (id-keyed) — collector output shape after
     // Phase 6 (driver per receipt row): driver_id = select value, driver_name =
@@ -195,7 +195,7 @@ ok(servicePayload.rows[0].driver_id === 'drv-1',
    `driver_id flows from the row's driver select (Phase 6 — driver per receipt row; got ${J(servicePayload.rows[0].driver_id)})`);
 ok(servicePayload.rows[2].driver_id === null,
    `driver-less row («— بدون سائق —») keeps driver_id = null (D1: optional per row; got ${J(servicePayload.rows[2].driver_id)})`);
-console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload.rows[2].net}, total=${servicePayload.total}, net_total=${servicePayload.net_total}`);
+console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload.rows[2].net}, total=${servicePayload.total}`);
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE C — What is actually persisted (REAL FinancialService.createReceipt)
@@ -219,9 +219,9 @@ ok(persistedHeader.vehicle_id === undefined, 'LOST: header.vehicle_id NOT persis
 ok(persistedHeader.client_id === 'owner-1' && persistedHeader.client_name === 'مالك الاختبار'
    && persistedHeader.receipt_date === '2026-07-29', 'KEPT: client_id / client_name / receipt_date');
 ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === undefined
-   && persistedHeader.net_due === undefined && persistedHeader.net_total === Money.toCents(1670)
+   && persistedHeader.net_due === undefined && persistedHeader.net_total === undefined
    && persistedHeader.previous_balance === Money.toCents(500) && persistedHeader.paid === 0,
-   `REMOVED (General Add + Net Due phases): header.general_add / header.net_due not persisted; net_total == total + previous_balance (total=${persistedHeader.total}, net_total=${persistedHeader.net_total})`);
+   `REMOVED (General Add + Net Due + Net Total phases): header.general_add / header.net_due / header.net_total not persisted (total=${persistedHeader.total}, previous_balance=${persistedHeader.previous_balance})`);
 ok(persistedHeader.payout_status === 'unpaid', 'KEPT: payout_status');
 
 // Row losses / survivors
@@ -386,9 +386,9 @@ const rebuiltTotals = calculateReceiptTotals(
     // row B — entered values (same reconstruction established)
     { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
   ], 500, 0);
-console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, net_total=${rebuiltTotals.net_total}`);
-ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_due === undefined && rebuiltTotals.net_total === 1670,
-   `REMOVED-CONTRACT (Net Due phase): calculator returns {total, net_total, balance} only — total=${rebuiltTotals.total}, net_total=${rebuiltTotals.net_total} (1170/1670)`);
+console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance}`);
+ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === 1670,
+   `REMOVED-CONTRACT (Net Due + Net Total phases): calculator returns {total, balance} only — total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance} (1170/1670)`);
 fingerprint(FINANCIAL_SRC, "throw new Error('[FinancialService] total must be a non-negative number.');",
   'FinancialService would reject negative total on save (if the number gate were bypassed)');
 

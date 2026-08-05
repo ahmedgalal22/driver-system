@@ -382,7 +382,6 @@ function summarizeReceipts(records) {
 
   return records.reduce((acc, record) => {
     if (!rowFilterActive) {
-      acc.netTotal += toNumber(record.net_total);
       acc.paid += toNumber(record.paid);
       const rows = getReceiptRows(record);
       acc.count += rows.filter((row) => row._type !== 'separator').length;
@@ -398,14 +397,12 @@ function summarizeReceipts(records) {
 
     acc.count += dataRows.length;
     dataRows.forEach((row) => {
-      const rowNetCents = Money.toCents(row.net);
-      acc.netTotal += rowNetCents;
       acc.noloon += toNumber(row.noloon);
       acc.ohda += toNumber(row.ohda);
     });
     acc.weight += sumVisibleRowWeight(visible);
     return acc;
-  }, { netTotal: 0, paid: 0, count: 0, weight: 0, noloon: 0, ohda: 0 });
+  }, { paid: 0, count: 0, weight: 0, noloon: 0, ohda: 0 });
 }
 
 
@@ -528,7 +525,6 @@ function renderSummaryCards(_tab, _preFiltered) {
   const sums = summarizeReceipts(filtered);
   const html = `
       <div class="summary-grid summary-grid--receipts">
-        ${summaryCard('💰 إجمالي الصافي الكلي', centsToMoney(sums.netTotal), 'summary-card--violet')}
         ${summaryCard('📊 إجمالي المدفوع', centsToMoney(sums.paid), 'summary-card--red')}
         ${summaryCard('🗂️ عدد الكارتات', String(sums.count), 'summary-card--blue')}
         ${summaryCard('⚖️ إجمالي الوزن', fmtMoney(sums.weight), 'summary-card--green')}
@@ -628,7 +624,6 @@ function buildReceiptCardHtml(record, opts = {}) {
         <div><span>عدد الكارتات</span><strong>${kartaCount}</strong></div>
         <div><span>الإجمالي</span><strong>${Money.fmtCents(record.total)}</strong></div>
         <div><span>رصيد العميل</span><strong>${Money.fmtCents(record.previous_balance)}</strong></div>
-        <div><span>الصافي الكلي</span><strong>${Money.fmtCents(record.net_total)}</strong></div>
         <div><span>المدفوع</span><strong>${Money.fmtCents(record.paid)}</strong></div>
       </div>
       ${noteHtml}
@@ -762,10 +757,10 @@ function serializeCurrentView(_tab) {
  * _buildReceiptsBulkSummary(sums)
  *
  * Renders a summary bar for the bulk PDF export (تصدير PDF) of receipt cards.
- * Mirrors exactly the 7 summary cards shown on screen above the list.
+ * Mirrors the summary cards shown on screen above the list.
  *
  * Money units:
- *   netTotal, paid → CENTS   (from summarizeReceipts which reads record totals)
+ *   paid → CENTS             (from summarizeReceipts which reads record totals)
  *   weight, noloon, ohda   → DECIMAL (summed directly from row fields)
  *   count                  → integer
  */
@@ -777,7 +772,6 @@ function _buildReceiptsBulkSummary(sums) {
     <table style="width:100%;border-collapse:collapse;margin-bottom:16px;page-break-inside:avoid;">
       <thead>
         <tr>
-        ${th('الصافي الكلي')}
           ${th('المدفوع')}
           ${th('عدد الكارتات')}
           ${th('إجمالي الوزن')}
@@ -787,7 +781,6 @@ function _buildReceiptsBulkSummary(sums) {
       </thead>
       <tbody>
         <tr>
-          ${td(centsToMoney(sums.netTotal))}
           ${td(centsToMoney(sums.paid))}
           ${td(String(sums.count))}
           ${td(fmtMoney(sums.weight))}
@@ -889,7 +882,6 @@ function buildReceiptPrintBlock(record) {
         <span>عدد الكارتات: <strong>${kartaCount}</strong></span>
         <span>الإجمالي: <strong>${Money.fmtCents(record.total)}</strong></span>
         <span>رصيد العميل: <strong>${Money.fmtCents(record.previous_balance)}</strong></span>
-        <span>الصافي الكلي: <strong>${Money.fmtCents(record.net_total)}</strong></span>
         <span>المدفوع: <strong>${Money.fmtCents(record.paid)}</strong></span>
       </div>
     </section>
@@ -903,7 +895,7 @@ function buildReceiptPrintBlock(record) {
 //
 // Design contract:
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
-//   • Top-level money fields (total, paid, net_total,
+//   • Top-level money fields (total, paid,
 //     previous_balance) are stored as CENTS  → Money.fmtCents().
 //   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
 //     weight2, deficit, weightTotal) are stored as DECIMALS → Money.fmt().
@@ -1126,7 +1118,6 @@ function _receiptPrintBuildTableBody(rows, activeCols) {
 function _receiptPrintBuildTotalsRow(record, kartaCount) {
   const total           = Money.fmtCents(record.total           ?? 0);
   const previousBalance = Money.fmtCents(record.previous_balance ?? 0);
-  const netTotal        = Money.fmtCents(record.net_total       ?? 0);
   const paid            = Money.fmtCents(record.paid            ?? 0);
 
   const th = (label) => `<th style="background:#fff;color:#000;padding:4px 6px;border:1.5px solid #000;text-align:center;font-size:7pt;font-weight:700;">${label}</th>`;
@@ -1139,7 +1130,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
           ${th('عدد الكارتات')}
           ${th('الإجمالي')}
           ${th('رصيد العميل')}
-          ${th('الصافي الكلي')}
           ${th('المدفوع')}
         </tr>
       </thead>
@@ -1148,7 +1138,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
           ${td(String(kartaCount))}
           ${td(total)}
           ${td(previousBalance)}
-          ${td(netTotal)}
           ${td(paid)}
         </tr>
       </tbody>

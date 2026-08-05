@@ -248,7 +248,6 @@ function _validate(data) {
 
   const general_discount = 0; // removed from system
   const previous_balance = Money.toCents(data.previous_balance ?? data.previousBalance ?? 0);
-  const net_total = total + previous_balance;
 
   const paid = Money.toCents(data.paid ?? 0);
   if (paid < 0) {
@@ -266,7 +265,6 @@ function _validate(data) {
     total,
     general_discount,
     previous_balance,
-    net_total,
     paid,
     groups,
     client_id: header.client_id,
@@ -392,7 +390,6 @@ async function createReceipt(username, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    net_total: clean.net_total,
     notes: data.notes ?? null,
     shipping_number: data.shipping_number ?? null,
   };
@@ -438,7 +435,6 @@ async function updateReceipt(username, id, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    net_total: clean.net_total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
     ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),
   };
@@ -1291,13 +1287,9 @@ async function updateClientUnpaidBalances(clientId, username) {
       const currentPrevious = Number(receipt.previous_balance) || 0;
 
       if (newPreviousBalance !== currentPrevious) {
-        const newNetTotal = newPreviousBalance;
-        const newPaid = newNetTotal;
-
         await ReceiptRepository.update(receipt.id, {
           previous_balance: newPreviousBalance,
-          net_total: newNetTotal,
-          paid: newPaid,
+          paid: newPreviousBalance,
         }, { username });
 
         updated = true;
