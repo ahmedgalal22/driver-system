@@ -80,11 +80,11 @@ function _setQuickFilterRange(rangeType) {
 
 // ─── AGGREGATE CALCULATIONS (DETERMINISTIC & MEMORIZED) ──────────────────────
 
-// ── Read-side ReceiptRow projection (Step 7 — normalized Receipt/ReceiptRow) ──
+// ── Read-side ReceiptRow projection (normalized Receipt/ReceiptRow) ──
 // Persisted receipt HEADERS (receipts store) no longer carry row entities;
 // rows live in the separate receipt_rows store. They are fetched once per
 // refresh through the frozen ReceiptReadRepository and projected in-memory,
-// keyed by receipt id — mirroring the approved allReceipts.js Step 6 pattern.
+// keyed by receipt id — mirroring the allReceipts.js projection pattern.
 // Rows are NEVER attached onto receipt header objects — there is no embedded
 // receipt.rows anywhere in this module.
 async function _loadReceiptRowsProjection(receipts) {
@@ -924,7 +924,7 @@ async function _refreshDashboard() {
     return true;
   });
 
-  // ─── ROW PROJECTION (normalized ReceiptRow reads — Step 7) ────────────────
+  // ─── ROW PROJECTION (normalized ReceiptRow reads) ────────────────
   // receipt_rows are fetched once via the frozen ReceiptReadRepository and
   // projected by receipt id; header objects never carry embedded rows.
   const receiptRowsProjection = await _loadReceiptRowsProjection(activeReceipts);

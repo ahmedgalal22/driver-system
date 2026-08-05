@@ -3,10 +3,8 @@
  * Internal structure: Constants → State → Services → Helpers → Rendering → Events → Public API → Boot
  */
 
-import { FinancialService } from './financial.js';
 import { AuthModule } from './auth.js';
 import { Money } from './money.js';
-import { DateUtils } from './dateUtils.js';
 import { calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
@@ -187,11 +185,11 @@ function _resolveRange(filters) {
   };
 }
 
-// ── Read-side ReceiptRow projection (Step 7 — normalized Receipt/ReceiptRow) ──
+// ── Read-side ReceiptRow projection (normalized Receipt/ReceiptRow) ──
 // Persisted receipt HEADERS (receipts store) no longer carry row entities;
 // rows live in the separate receipt_rows store. They are fetched through the
 // frozen ReceiptReadRepository and projected in-memory, keyed by receipt id —
-// mirroring the approved allReceipts.js Step 6 pattern. Rows are NEVER
+// mirroring the allReceipts.js projection pattern. Rows are NEVER
 // attached onto receipt header objects — there is no embedded receipt.rows
 // anywhere in this module.
 async function _loadReceiptRowsProjection(receipts) {
@@ -328,7 +326,6 @@ function _moduleSessionUsername() {
 }
 
 const OfficesModule = Object.freeze({
-  getOffices: () => OfficesService.getOffices(_moduleSessionUsername()),
   createOffices: (rows) => OfficesService.createOffices(_moduleSessionUsername(), rows),
   updateOffice: (id, patch) => OfficesService.updateOffice(_moduleSessionUsername(), id, patch),
   deleteOffice: (id) => OfficesService.deleteOffice(_moduleSessionUsername(), id),

@@ -27,16 +27,8 @@ export const ReceiptRepository = {
       : DBProvider.getAll('receipts', { username });
   },
 
-  async save(payload, meta) {
-    return DBProvider.save('receipts', payload, meta);
-  },
-
   async update(id, patch, meta) {
     return DBProvider.update('receipts', id, patch, meta);
-  },
-
-  async delete(id, meta) {
-    return DBProvider.delete('receipts', id, meta);
   },
 
   // ── Persistence Command Preparation (Frozen Architecture) ───────────
@@ -80,23 +72,4 @@ export const ReceiptRepository = {
     return DBProvider.findByFields('receipt_rows', { receipt_id: receiptId });
   },
 
-  async getRowsByDriver(driverId, { tx } = {}) {
-    if (tx) {
-      return tx.findByFields('receipt_rows', { driver_id: driverId });
-    }
-    return DBProvider.findByFields('receipt_rows', { driver_id: driverId });
-  },
-
-  async saveRow(payload, meta) {
-    return DBProvider.save('receipt_rows', payload, meta);
-  },
-
-  async updateRow(rowId, patch, meta) {
-    return DBProvider.update('receipt_rows', rowId, patch, meta);
-  },
-
-  // ── Cross-store transaction support ────────────────────────────────
-  async transaction(ops, meta) {
-    return DBProvider.transaction(ops, meta);
-  }
 };

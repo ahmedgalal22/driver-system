@@ -8,12 +8,6 @@ export const OfficeRepository = {
   async getAll(username) {
     return DBProvider.findByFields('offices', { username });
   },
-  async findByFields(filters) {
-    return DBProvider.findByFields('offices', filters);
-  },
-  async save(payload, meta) {
-    return DBProvider.save('offices', payload, meta);
-  },
   async update(id, patch, meta) {
     return DBProvider.update('offices', String(id), patch, meta);
   },

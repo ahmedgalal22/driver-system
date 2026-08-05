@@ -202,7 +202,7 @@ function _normalize(rawData) {
 //     weight, weight2, deficit, weightTotal, type,
 //     officeAmount(cents), discount(cents), add(cents), row_order }
 // The UI form speaks a different vocabulary (noloon / ohda / taktik). Every
-// user-entered column is persisted (Phase 5 — Step 2); only separators remain
+// user-entered column is persisted; only separators remain
 // UI-local by design.
 // These two helpers are the ONLY place the two vocabularies are bridged — at
 // the UI boundary. Nothing here recreates an embedded receipt.rows model:
@@ -224,9 +224,9 @@ function _uiRowToPersistedShape(row) {
 /**
  * Persisted ReceiptRow → transient UI field values (read boundary).
  * Money is converted cents → decimal. Every user-entered column is persisted
- * (Phase 5 — Step 2) and restored here; the form's derived cells (weightTotal,
+ * persisted and restored here; the form's derived cells (weightTotal,
  * net) are recomputed from the reconstructed inputs by the unchanged
- * calculation rules. Rows saved before Step 2 carry null for these columns →
+ * calculation rules. Rows saved before the contract restore carry null for these columns →
  * they render blank (no fabrication).
  */
 function _persistedRowToUiShape(row, driverName = '') {
@@ -345,18 +345,6 @@ async function update(username, id, rawData) {
 }
 
 
-// ─── PUBLIC: delete ───────────────────────────────────────────────────────────
-
-async function remove(username, id) {
-  if (!username) throw new Error('[ReceiptsModule:delete] username is required.');
-  if (!id)       throw new Error('[ReceiptsModule:delete] id is required.');
-
-  const res = await FinancialService.deleteReceipt(username, id);
-  window.dispatchEvent(new CustomEvent('receipts:changed'));
-  return res;
-}
-
-
 // ─── PUBLIC: getAll ───────────────────────────────────────────────────────────
 
 async function getAll(username) {
@@ -441,11 +429,6 @@ async function allocateReceiptNumber(username = null, preferred = null) {
   }, { username: owner, stores: [COUNTER_STORE, STORE] });
 }
 
-/** @deprecated Use allocateReceiptNumber on save, peekNextReceiptNumber for UI. */
-async function getNextReceiptNumber(username = null) {
-  return allocateReceiptNumber(username);
-}
-
 /**
  * Look up a persisted receipt by its receipt_number and return it with its rows.
  *
@@ -474,21 +457,6 @@ async function getReceiptByNumber(receipt_number, username = null) {
   return ReceiptReadRepository.getReceiptWithRows(receipt.id);
 }
 
-async function getDrivers(username) {
-  if (!username) throw new Error('[ReceiptsModule:getDrivers] username is required.');
-  return ClientRepository.getDrivers(username);
-}
-
-async function saveDriverName(username, name) {
-  if (!username) throw new Error('[ReceiptsModule:saveDriverName] username is required.');
-  const n = String(name || '').trim();
-  if (!n) return;
-  const existing = await getDrivers(username);
-  const alreadyExists = existing.some(d => String(d.name || '').toLowerCase() === n.toLowerCase());
-  if (!alreadyExists) {
-    await ClientRepository.addDriver({ username, name: n }, { username });
-  }
-}
 
 async function getVehicleById(vehicle_id) {
   if (!vehicle_id) return null;
@@ -516,17 +484,11 @@ async function getOffices(username) {
 const ReceiptsModule = Object.freeze({
   create,
   update,
-  delete : remove,
   getAll,
   peekNextReceiptNumber,
-  allocateReceiptNumber,
-  getNextReceiptNumber,
   getReceiptByNumber,
-  getDrivers,
-  saveDriverName,
   getVehicleById,
   getVehiclesByPlate,
-  getOfficesForUser,
   getOffices,
 });
 
@@ -2350,7 +2312,7 @@ async function validateBeforeSave(rawData) {
   // ── Karta duplicate check: across saved receipts ──
   // Reads persisted ReceiptRows through the normalized read path (headers
   // from getAll() never embed rows).
-  // kartano is persisted on ReceiptRows (Phase 5 — Step 2), so this duplicate
+  // kartano is persisted on ReceiptRows, so this duplicate
   // check is fully active against all previously saved receipts.
   const allSavedReceipts = await ReceiptsModule.getAll(_currentUsername());
   const savedKartas = new Set();
@@ -2779,7 +2741,7 @@ async function loadReceiptForEdit(receiptData) {
   // The persisted contract stores data rows only — separators are UI-local by
   // design and are not re-created on edit. Rendering order comes from the
   // persisted row_order (0-based index over the original form rows, separator
-  // gaps included). Rows saved before Step 2 carry row_order = null; the
+  // gaps included). Rows saved before the contract restore carry row_order = null; the
   // stable sort keeps their repository order unchanged.
   const orderedRows = [...rows].sort((a, b) =>
     (a?.row_order ?? Number.MAX_SAFE_INTEGER) - (b?.row_order ?? Number.MAX_SAFE_INTEGER));

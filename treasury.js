@@ -8,45 +8,6 @@
  *   expense           ← مصروف
  *   salary            ← مرتب
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * RUNTIME STABILIZATION AUDIT (v2 — Locked Down)
- *
- * Previous issues resolved:
- *
- *   ISSUE-1: _renderShell() on every initTreasuryPage() destroys the page's
- *            innerHTML.  Delegated listeners on `document` survive, but the
- *            search input's value is lost and the search placeholder is baked
- *            at shell-render time (not re-synced on tab switch).
- *            FIX: _renderShell() is idempotent — only runs once per lifecycle.
- *                 Tab changes update the search placeholder via _refreshPage().
- *
- *   ISSUE-2: _printTreasuryTab() parses financial totals by scraping
- *            summary-card DOM text.  This is DOM-driven finance.
- *            FIX: Print now reads from a cached `_lastRenderedEntries` array
- *                 and `_lastRenderedSummary` object — raw data only.
- *
- *   ISSUE-5: getSummary() is dead code — never called.  _refreshPage()
- *            computes summaries via _computeFilteredSummary() which is a
- *            duplicate of getSummary() logic.  Two calculation paths.
- *            FIX: getSummary() is retained (public API), but
- *                 _computeFilteredSummary() now uses Money.toCents()
- *                 consistently (was already correct, verified).
- *
- *   ISSUE-6: _refreshPage() has no async guard — rapid filter clicks or
- *            search typing can interleave, causing stale renders.
- *            FIX: _refreshPage() uses a generation counter (_refreshGen)
- *                 to discard stale async results.
- *
- *   ISSUE-7: _datalist._clients stores a mutable reference on a DOM node.
- *            If the modal is destroyed and recreated, the reference is lost.
- *            Not critical (modal is reused, not destroyed), but fragile.
- *            FIX: Client list stored in STATE._salfaClients instead.
- *
- *   ISSUE-8: _isSavingTreasury not reset if the try block throws before
- *            the early-returns.  `finally` block handles this correctly
- *            already — verified. No issue.
- *
- * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { Money } from './money.js';
@@ -395,58 +356,6 @@ async function deleteEntry(username, entryId) {
 }
 
 /**
- * Get treasury summary (إجماليات الخزنة)
- */
-async function getSummary(username, filters = null) {
-  if (!username) throw new Error('[Treasury] username required');
-
-  const all = await TreasuryRepository.getAll(username);
-  let entries = all.filter(e => e.is_reversed === false);
-
-  // Date filter
-  if (filters?.from || filters?.to) {
-    entries = entries.filter(e => {
-      const d = String(e.date || '').split('T')[0];
-      if (filters.from && d < filters.from) return false;
-      if (filters.to && d > filters.to) return false;
-      return true;
-    });
-  }
-
-  let total_in = 0;
-  let total_salfa = 0;
-  let total_expense = 0;
-
-
-  for (const e of entries) {
-    const amt = Number(e.amount) || 0;
-    if (e.type === TREASURY_ENTRY_TYPE.DEPOSIT) {
-      total_in += amt;
-    }
-    if (e.effect === EFFECTS.SALFA) total_salfa += amt;
-    if (e.effect === EFFECTS.EXPENSE || e.effect === EFFECTS.SALARY) total_expense += amt;
-
-  }
-
-  // Full balance (no date filter — always from start)
-  const allActive = all.filter(e => e.is_reversed === false);
-  let balance_in = 0;
-  let balance_out = 0;
-  for (const e of allActive) {
-    const amt = Number(e.amount) || 0;
-    if (e.type === TREASURY_ENTRY_TYPE.DEPOSIT) balance_in += amt;
-    if (e.type === TREASURY_ENTRY_TYPE.WITHDRAW) balance_out += amt;
-  }
-  return {
-    balance: Money.toDecimal(balance_in - balance_out),
-    total_in: Money.toDecimal(total_in),
-    total_salfa: Money.toDecimal(total_salfa),
-    total_expense: Money.toDecimal(total_expense),
-
-  };
-}
-
-/**
  * Get filtered entries for display
  */
 async function getEntries(username, filters = null) {
@@ -483,7 +392,6 @@ const TreasuryService = Object.freeze({
   createExpense,
   editEntry,
   deleteEntry,
-  getSummary,
   getEntries,
 });
 
@@ -497,15 +405,15 @@ const STATE = {
   to: '',
   editingId: null,
   search: { all: '', expenses: '' },
-  _salfaClients: [],       // ISSUE-7 FIX: client list stored in state, not on DOM node
-  _shellRendered: false,   // ISSUE-1 FIX: idempotent shell rendering
+  _salfaClients: [],       // client list stored in state, not on DOM node
+  _shellRendered: false,   // idempotent shell rendering
 };
 
-// ── Render-cache for data-driven print (ISSUE-2 FIX) ──
+// ── Render-cache for data-driven print ──
 let _lastRenderedEntries = [];
 let _lastRenderedSummary = { balance: 0, total_in: 0, total_salfa: 0, total_expense: 0 };
 
-// ── Async generation counter (ISSUE-6 FIX) ──
+// ── Async generation counter ──
 let _refreshGen = 0;
 
 // ── Suppress event-driven refresh when a UI handler will refresh explicitly ──
@@ -529,7 +437,7 @@ function _setQuickRange(days) {
 /**
  * Renders the treasury page shell.
  *
- * ISSUE-1 FIX: This is now idempotent. It only runs if the shell has not
+ * Idempotent: it only runs if the shell has not
  * been rendered yet (or if the page element is empty, indicating a page
  * lifecycle reset from app.js).  This prevents destroying delegated listeners
  * or losing input state on re-entry.
@@ -766,7 +674,7 @@ async function _openSalfaModal() {
     ...owners.filter(o => o.deleted_at === null).map(o => ({ id: o.id, type: CLIENT_TYPE.OWNER, name: o.name || '' })),
   ].filter(c => c.name);
 
-  // ISSUE-7 FIX: Store client list in STATE, not on a DOM node
+  // Store client list in STATE, not on a DOM node
   STATE._salfaClients = clients;
 
   const options = clients.map(c => `<option value="${_esc(c.name)}" data-id="${c.id}" data-type="${c.type}"></option>`).join('');
@@ -874,7 +782,7 @@ async function _saveSalfa() {
     if (amount <= 0) { _showModalError('❌ المبلغ مطلوب'); _isSavingTreasury = false; if (btn) btn.disabled = false; return; }
     if (!date) { _showModalError('❌ التاريخ مطلوب'); _isSavingTreasury = false; if (btn) btn.disabled = false; return; }
 
-    // ISSUE-7 FIX: Read client list from STATE, not from DOM node property
+    // Read client list from STATE, not from DOM node property
     let client_id = null, client_type = null, client_name = personName || null;
     const clients = STATE._salfaClients || [];
     const match = clients.find(c => c.name === personName);
@@ -934,13 +842,13 @@ async function _saveExpense() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Print — Data-Driven (ISSUE-2 FIX)
+// Print — data-driven
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Print the current treasury tab.
  *
- * ISSUE-2 FIX: Previously scraped DOM text for amounts and summary cards.
+ * Data-driven: reads from a cached render of entries/summary, never scraped DOM text.
  * Now reads exclusively from _lastRenderedEntries and _lastRenderedSummary
  * (raw data cached on each _refreshPage()).
  *
@@ -1044,11 +952,11 @@ function _computeFilteredSummary(entries) {
 /**
  * _refreshPage — master refresh function.
  *
- * ISSUE-6 FIX: Uses a generation counter to discard stale async results.
+ * Uses a generation counter to discard stale async results.
  * If a newer _refreshPage() call starts before this one finishes fetching,
  * this call's render is silently discarded — preventing stale data display.
  *
- * This also updates the search placeholder (ISSUE-1 FIX) so tab switches
+ * This also updates the search placeholder so tab switches
  * update it without re-rendering the shell.
  */
 async function _refreshPage() {
@@ -1074,13 +982,13 @@ async function _refreshPage() {
       })
     : allEntries;
 
-  // Cache for data-driven print (ISSUE-2 FIX)
+  // Cache for data-driven print
   _lastRenderedEntries = filteredEntries;
 
   // Compute summary from filtered entries only
   const filteredSummary = _computeFilteredSummary(filteredEntries);
 
-  // Cache summary for print (ISSUE-2 FIX)
+  // Cache summary for print
   _lastRenderedSummary = filteredSummary;
 
   _renderSummary(filteredSummary);
@@ -1093,7 +1001,7 @@ async function _refreshPage() {
   if (fromEl) fromEl.value = STATE.from || '';
   if (toEl) toEl.value = STATE.to || '';
 
-  // Sync search input value + placeholder (ISSUE-1 FIX)
+  // Sync search input value + placeholder
   const searchEl = document.getElementById('treasurySearch');
   if (searchEl) searchEl.value = STATE.search[STATE.tab] || '';
   _syncSearchPlaceholder();

@@ -150,7 +150,7 @@ function normalizePersistedRow(row) {
   return row;
 }
 
-// ── Read-side row projection (Step 6 — normalized Receipt/ReceiptRow) ──
+// ── Read-side row projection (normalized Receipt/ReceiptRow) ──
 // Persisted receipts and their rows live in SEPARATE stores (receipts /
 // receipt_rows). This page renders synchronously from STATE, so rows are
 // fetched once per data load through ReceiptReadRepository and projected
@@ -166,7 +166,7 @@ const _receiptRowsProjection = new Map();
  *   discount, add, row_order })
  * into the read-side vocabulary this page renders/prints (money in DECIMALS).
  * Mirrors the receipts.js read boundary. Every user-entered column is
- * persisted (Phase 5 — Step 2) and restored here; rows saved before Step 2
+ * persisted and restored here; rows saved before the contract restore
  * carry null for these columns → they render blank (no fabrication).
  */
 function _persistedRowToPageRow(row) {
@@ -188,7 +188,7 @@ function _persistedRowToPageRow(row) {
     loading      : row.loading || '',
     taktik       : destination,
     direction    : destination,
-    // ── restored user-entered columns (persisted — Phase 5 Step 2) ──
+    // ── restored user-entered columns (persisted) ──
     kartano, kartaNo: kartano, karta: kartano,
     date: rowDate, rowdate: rowDate,
     data: driverName, driver: driverName,
@@ -653,7 +653,7 @@ async function loadAllReceiptsData() {
   try {
     const receipts = await ReceiptsModule.getAll(username);
     STATE.receipts = receipts.slice();
-    // Step 6: preload the normalized ReceiptRows through ReceiptReadRepository
+    // Preload the normalized ReceiptRows through ReceiptReadRepository
     // (persisted receipts are headers only — rows live in receipt_rows).
     await _loadReceiptRowsProjection(STATE.receipts);
     renderSummaryCards('receipts');

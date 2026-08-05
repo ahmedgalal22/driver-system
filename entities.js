@@ -174,21 +174,6 @@ async function getOwnerById(id) {
 }
 
 
-
-async function getClientsByTab(tab) {
-  const owners = await ClientRepository.getAllOwners();
-  return owners
-    .filter(o => o.deleted_at === null)
-    .map(o => ({
-      id: String(o.id),
-      type: 'owner',
-      name: o.vehicle_name || o.name || '',
-      vehicle_name: o.vehicle_name || o.name || '',
-      vehicle_number: o.vehicle_number || '',
-    }))
-    .filter(x => x.name);
-}
-
 async function getClientByType(type, id) {
   if (type && type !== 'owner') return null;
   const owner = await ClientRepository.getOwnerById(String(id));
@@ -223,12 +208,10 @@ async function addAccount(username, kind, payload) {
 
 
 const OwnersModule = Object.freeze({
-  createOwner,
   getAllOwners,
   updateOwner,
   deleteOwner,
   getOwnerById,
-  getClientsByTab,
   getClientByType,
   getOwnerVehicles,
   addAccount,
@@ -242,7 +225,6 @@ window.OwnersModule = OwnersModule;
 // Owners Page — Rendering / Events
 // ========================================
 
-let _activeAccountTab = 'customers';
 let _ownersActiveSubTab = 'vehicles';
 let _selectedClient = null;
 let _editingDriverId = null;
@@ -576,7 +558,7 @@ function _printEntities(mode) {
 
 
 async function _getKartaCount(clientId) {
-  // Normalized read path (Step 6): persisted receipts never embed rows.
+  // Normalized read path: persisted receipts never embed rows.
   // Headers come from the client-scoped read-repository query; rows are
   // loaded per receipt via ReceiptReadRepository. DB.findByFields excludes
   // soft-deleted records by default (deleted guard is therefore implicit).
@@ -1895,7 +1877,6 @@ export {
   updateOwner,
   deleteOwner,
   getOwnerById,
-  getClientsByTab,
   getClientByType,
   getOwnerVehicles,
   addAccount,

@@ -31,14 +31,5 @@ export const ReceiptReadRepository = {
       {},
       { tx }
     );
-  },
-
-  async getReceiptRowsByDriver(driverId, { tx } = {}) {
-    return ReadDataSource.findByFields(
-      'receipt_rows',
-      { driver_id: driverId },
-      {},
-      { tx }
-    );
   }
 };

@@ -61,7 +61,7 @@ function _storesForOps(ops, extra = []) {
   ])];
 }
 
-// ─── NEW HELPERS (Step 2.1) ────────────────────────────────────────────────
+// ─── RECEIPT VALIDATION HELPERS ────────────────────────────────────────────────
 
 function _validateReceiptHeader(data) {
   const client_id = data.client_id != null ? String(data.client_id).trim() : '';
@@ -120,7 +120,7 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
     client_name: cleanHeader.client_name || null,
     receipt_date: cleanHeader.receipt_date,
     account_type: cleanHeader.account_type,
-    // Phase 5 — Step 2: sole user-visible header field the model dropped
+    // Restored header contract: sole user-visible header field previously dropped
     // (already validated through _validate; by_number index exists in schema).
     receipt_number: cleanHeader.receipt_number ?? null,
   };
@@ -140,7 +140,7 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     advance: Money.toCents(row.advance ?? 0),
     net: Money.toCents(row.net ?? 0),
     sarf: Money.toCents(row.sarf ?? 0),
-    // ── Phase 5 — Step 2: restored user-entered row fields (Step 1 audit drop
+    // ── Restored user-entered row fields (previously dropped from the audit
     // list). Money fields follow the existing cents convention; quantities and
     // strings are stored in their original form. company_* fields remain
     // intentionally excluded (form-dead, per audit).
@@ -393,62 +393,6 @@ async function rebuildVehicleBalance(vehicle_id) {
     withdraw_total : Money.toDecimal(withdraw_total),
     entry_count    : active.length,
   };
-}
-
-// ─── PUBLIC: rebuildTreasuryBalance ───────────────────────────────────────────
-
-async function rebuildTreasuryBalance(account_type = null) {
-  if (account_type !== null && !ACCOUNT_TYPES.includes(account_type)) {
-    throw new Error(
-      `[FinancialService:rebuildTreasuryBalance] Invalid account_type "${account_type}". ` +
-      `Allowed: ${ACCOUNT_TYPES.join(', ')}, or omit for all.`
-    );
-  }
-
-  const allEntries = await DB.getAll(STORE.TREASURY);
-  const active     = allEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-
-  function _calcAccount(entries) {
-    let deposit_total  = 0;
-    let withdraw_total = 0;
-    for (const e of entries) {
-      if (e.type === 'deposit')  deposit_total  += Number(e.amount) || 0;
-      if (e.type === 'withdraw') withdraw_total += Number(e.amount) || 0;
-    }
-    return {
-      balance        : Money.toDecimal(deposit_total - withdraw_total),
-      deposit_total  : Money.toDecimal(deposit_total),
-      withdraw_total : Money.toDecimal(withdraw_total),
-      entry_count    : entries.length,
-    };
-  }
-
-  if (account_type !== null) {
-    const filtered = active.filter(e => e.account_type === account_type);
-    return { account_type, ..._calcAccount(filtered) };
-  }
-
-  const result   = {};
-  let   cBal = 0, cDep = 0, cWith = 0, cCount = 0;
-
-  for (const acct of ACCOUNT_TYPES) {
-    const filtered  = active.filter(e => e.account_type === acct);
-    const snap      = _calcAccount(filtered);
-    result[acct]    = snap;
-    cDep   += Money.toCents(snap.deposit_total);
-    cWith  += Money.toCents(snap.withdraw_total);
-    cCount += snap.entry_count;
-  }
-  cBal = cDep - cWith;
-
-  result.combined = {
-    balance        : Money.toDecimal(cBal),
-    deposit_total  : Money.toDecimal(cDep),
-    withdraw_total : Money.toDecimal(cWith),
-    entry_count    : cCount,
-  };
-
-  return result;
 }
 
 // ─── SHARED LEDGER & BALANCE HELPERS ──────────────────────────────────────────
@@ -861,16 +805,6 @@ async function getDriverKartas(driverId) {
   return result.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
-async function getDriverUnpaidKartas(driverId) {
-  const all = await getDriverKartas(driverId);
-  return all.filter(k => k.status !== 'paid');
-}
-
-async function getDriverPaidKartas(driverId) {
-  const all = await getDriverKartas(driverId);
-  return all.filter(k => k.status === 'paid');
-}
-
 async function getDriverKartasSummary(driverId) {
   const kartas = await getDriverKartas(driverId);
   let total_kartas = 0, unpaid_kartas = 0, paid_kartas = 0;
@@ -1147,7 +1081,6 @@ export const FinancialService = Object.freeze({
   updateReceipt,
   deleteReceipt,
   rebuildVehicleBalance,
-  rebuildTreasuryBalance,
   getDriverBalance,
   getDriverLedger,
   createDriverDeposit,
@@ -1157,8 +1090,6 @@ export const FinancialService = Object.freeze({
   updateDriverSalfa,
   deleteDriverSalfa,
   getDriverKartas,
-  getDriverUnpaidKartas,
-  getDriverPaidKartas,
   getDriverKartasSummary,
   getKartaSettlementHistory,
   createKartaSettlement,
