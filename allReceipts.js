@@ -124,13 +124,6 @@ function receiptDisplayDate(value) {
   return SHORT_DATE_FMT.format(date);
 }
 
-function receiptFullDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return DATE_FMT.format(date);
-}
-
 function receiptDayName(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -401,13 +394,6 @@ function summarizeReceipts(records) {
 
 function setFilterValue(tab, key, value) {
   STATE.filters[tab][key] = value;
-}
-
-function setLast30(tab) {
-  const range = getLast30DaysRange();
-  STATE.filters[tab].from = range.from;
-  STATE.filters[tab].to = range.to;
-  STATE.filters[tab].date = '';
 }
 
 function setQuickRange(tab, days) {

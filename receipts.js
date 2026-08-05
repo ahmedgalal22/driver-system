@@ -90,7 +90,6 @@ function _validate(rawData) {
     throw new Error('[ReceiptsModule] client_type must be owner.');
   }
 
-  // general_discount removed from system
   for (const row of dataRows) {
     if (!row || typeof row !== 'object') {
       throw new Error('[ReceiptsModule] Each data row must be a plain object.');
@@ -170,7 +169,6 @@ function _normalize(rawData) {
   const calcs = calculateReceiptTotals(rows);
   const total = calcs.total;
   const row_count        = dataRows.length;
-  const general_discount = 0; // removed from system
 
   return {
     id             : receiptId,
@@ -190,7 +188,6 @@ function _normalize(rawData) {
     rows,
     row_count,
     total,
-    general_discount,
   };
 }
 
@@ -277,7 +274,6 @@ function _buildServicePayload(n) {
     rows             : n.rows.map(_uiRowToPersistedShape), // bridge to persisted vocabulary
     row_count        : n.row_count,
     total            : n.total,
-    general_discount : n.general_discount,
   };
 }
 
@@ -2514,7 +2510,6 @@ async function collectRawData() {
   const client = _selectedClient();
   const companyName     = document.getElementById('companyName')?.value;
   const companyPhone    = document.getElementById('companyPhone')?.value;
-  const generalDiscount = 0; // removed from system
   return {
     id               : ReceiptState.editingReceiptId || undefined,
     receipt_date     : (receiptDateInput || '').trim(),
@@ -2525,7 +2520,6 @@ async function collectRawData() {
     owner_name       : client?.type === 'owner' ? client.name : null,
     company_name     : normalizeOptionalString(companyName),
     company_phone    : normalizeOptionalString(companyPhone),
-    general_discount : generalDiscount,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
     rows             : await collectReceiptRows(),
   };
@@ -2613,8 +2607,6 @@ async function validateBeforeSave(rawData) {
     alert('⚠️ يجب اختيار الشركة ومكان التحميل والجهة لكل صف قبل الحفظ.');
     return false;
   }
-
-  // Price route validation removed — no longer needed
 
   const invalidVehicles = rawData.rows
     .filter(r => r._type !== 'separator' && !r.vehicle_id);
@@ -2969,8 +2961,6 @@ async function loadReceiptForEdit(receiptData) {
   setV('receiptNumber',     receiptData.receipt_number || receiptData.receiptNumber || '');
   setV('companyName',       receiptData.company_name   || receiptData.companyName   || '');
   setV('companyPhone',      receiptData.company_phone  || receiptData.companyPhone  || '');
-
-  // general_discount removed from system
 
   const tbody       = document.getElementById('receiptTableBody');
   tbody.innerHTML   = '';

@@ -23,8 +23,6 @@
 import { DB } from './database.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
-// Blocker fix (step 6): WriteDataSource is used at createReceipt/updateReceipt/deleteReceipt
-// but was never imported → ReferenceError on every receipt save.
 import { WriteDataSource } from './services/writeDataSource.js';
 import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
@@ -234,8 +232,6 @@ function _validate(data) {
     throw new Error('[FinancialService] total must be a non-negative number.');
   }
 
-  const general_discount = 0; // removed from system
-
   const groups = [...clientVehicleGroups.values()].filter(g => g.total !== 0);
   if (groups.length === 0) {
     throw new Error('[FinancialService] rows total must be greater than zero.');
@@ -245,7 +241,6 @@ function _validate(data) {
     account_type,
     receipt_date,
     total,
-    general_discount,
     groups,
     client_id: header.client_id,
     client_type: header.client_type,
@@ -312,7 +307,6 @@ async function createReceipt(username, data) {
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
-    general_discount: clean.general_discount,
     notes: data.notes ?? null,
     shipping_number: data.shipping_number ?? null,
   };
@@ -352,7 +346,6 @@ async function updateReceipt(username, id, data) {
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
-    general_discount: clean.general_discount,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
     ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),
   };

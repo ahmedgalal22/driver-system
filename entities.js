@@ -303,16 +303,6 @@ function _currentUsername() {
   return session.username;
 }
 
-function _kindLabel(type) {
-  return 'مركبة';
-}
-
-
-async function _loadTabClients() {
-  return OwnersModule.getClientsByTab(_activeAccountTab);
-}
-
-
 function _renderShell() {
   const page = document.getElementById('ownersPage');
   if (!page) return;
@@ -392,12 +382,6 @@ function _renderShell() {
     `;
   }
 }
-
-function _renderCustomersShell() {
-  return '';
-}
-
-
 
 let _addModalKind = 'owner';
 let _editingAccountId = null;
