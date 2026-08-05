@@ -142,7 +142,6 @@ const CLIENT_TYPE = Object.freeze({
 const LEDGER_ENTRY_TYPE = Object.freeze({
   DEPOSIT         : 'deposit',
   WITHDRAW        : 'withdraw',
-  RECEIPT_DUE     : 'receipt_due',
   RECEIPT_PAYMENT : 'receipt_payment',
 });
 

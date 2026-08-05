@@ -55,17 +55,17 @@ const hdr = (over = {}) => ({
   receipt_date: '2026-07-27', receipt_number: '1001',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
   account_type: null, total: 1150, previous_balance: 0,
-  paid: 0, net_due: 1150, net_total: 1150, ...over,
+  paid: 0, net_total: 1150, ...over,
 });
 
 const R1 = (await FinancialService.createReceipt(U, hdr({ rows: [row1(), row2()] }))).receipt.id;
 // update 2→3 rows (same arithmetic family as the proven write-path harness)
 await FinancialService.updateReceipt(U, R1, hdr({
-  total: 1800, paid: 500, net_due: 1800, net_total: 2300, previous_balance: 500,
+  total: 1800, paid: 500, net_total: 2300, previous_balance: 500,
   rows: [row1(), row2(), row3()],
 }));
 const R2 = (await FinancialService.createReceipt(U, hdr({
-  receipt_number: '1002', total: 100, net_due: 100, net_total: 100, rows: [rowX()],
+  receipt_number: '1002', total: 100, net_total: 100, rows: [rowX()],
 }))).receipt.id;
 await FinancialService.deleteReceipt(U, R2);
 
@@ -273,7 +273,7 @@ ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27
 ok(c1.receipt_number === '1001', 'cards: receipt_number revived from persisted header (Phase 5 — Step 2)');
 
 // loud failure on unknown office — preserved semantics
-await FinancialService.createReceipt(U, hdr({ receipt_number: '1003', total: 100, net_due: 100, net_total: 100,
+await FinancialService.createReceipt(U, hdr({ receipt_number: '1003', total: 100, net_total: 100,
   rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
 const badReceipts = await ReceiptRepository.getAll(U);
 const badProjection = await _loadReceiptRowsProjection(badReceipts);

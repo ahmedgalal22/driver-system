@@ -235,7 +235,7 @@ async function addAccount(username, kind, payload) {
 
 
 // ─── DEPRECATED PROXIES (delegate to FinancialService) ─────────────────────
-// getOwnerBalance was removed — it ignored receipt_due entries and returned wrong results.
+// getOwnerBalance was removed — it returned wrong results.
 // These proxies maintain backward compatibility for any external callers.
 const getOwnerBalance = (id) => FinancialService.getClientBalance(id).then(s => s.balance);
 const getOwnerLedger = (id) => FinancialService.getClientLedger(id);
@@ -296,7 +296,6 @@ function _dateLabel(value) {
 function _ledgerType(type) {
   if (type === 'deposit') return 'إضافة';
   if (type === 'withdraw') return 'سداد';
-  if (type === 'receipt_due') return 'صافي مستحق';
   if (type === 'receipt_payment') return 'صرف نموذج';
   if (type === 'OFFICE_DEPOSIT') return 'إيداع شركة';
   if (type === 'OFFICE_WITHDRAW_AUTO') return 'سحب شركة';
@@ -309,10 +308,6 @@ function _ledgerNote(entry) {
   const type = entry.type || '';
   const note = entry.note || '';
 
-  // Receipt due — نموذج صرف أُضيف
-  if (type === 'receipt_due') {
-    return receiptNum ? 'إيداع نموذج صرف — إذن: ' + receiptNum : 'إيداع نموذج صرف';
-  }
   // Receipt payment — نموذج صرف تم صرفه
   if (type === 'receipt_payment') {
     return receiptNum ? 'سحب نموذج صرف — إذن: ' + receiptNum : 'سحب نموذج صرف';

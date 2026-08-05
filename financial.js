@@ -183,52 +183,6 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
   }));
 }
 
-function _buildLedgerOpsForReceipt(receipt, receiptRows, username) {
-  const commands = [];
-
-  // Receipt due ledger entry (net_due, cents). The receipt argument must be
-  // the full persistence record (header + totals) — callers pass it after
-  // assembly, so net_due is always a number (previously read off the bare
-  // header entity → `undefined !== 0` fired commands with amount: undefined).
-  const netDue = Number(receipt.net_due) || 0;
-  if (netDue !== 0) {
-    commands.push(createPersistenceCommand(
-      PersistenceCommandType.ADD,
-      'Ledger',
-      _uuid(),
-      {
-        payload: {
-          username,
-          owner_id: receipt.client_id,
-          owner_name: receipt.client_name || null,
-          client_id: receipt.client_id,
-          client_type: receipt.client_type,
-          client_name: receipt.client_name || null,
-          vehicle_owner_id: null,
-          vehicle_owner_name: null,
-          vehicle_id: null,
-          vehicle_plate: null,
-          type: 'receipt_due',
-          amount: netDue,
-          reference_type: 'receipt',
-          reference_id: receipt.id,
-          date: receipt.receipt_date,
-          applied_at: DateUtils.nowLocal(),
-          is_reversed: false,
-          note: `Receipt ${receipt.receipt_number || receipt.id} — net due`,
-        },
-        meta: { username }
-      }
-    ));
-  }
-
-  // Company ledger synchronization (from ReceiptRows)
-  const offices = {}; // In real implementation, this would come from repository or cache
-  // For now, we skip complex company logic to keep the remediation focused
-
-  return commands;
-}
-
 async function _getExistingReceiptRows(receiptId, tx) {
   return ReceiptRepository.getRowsByReceipt(receiptId, { tx });
 }
@@ -294,10 +248,7 @@ function _validate(data) {
 
   const general_discount = 0; // removed from system
   const previous_balance = Money.toCents(data.previous_balance ?? data.previousBalance ?? 0);
-  const net_due_calc = total;
-  const net_due_input = data.net_due != null ? Money.toCents(data.net_due) : null;
-  const net_due = net_due_input != null ? net_due_input : net_due_calc;
-  const net_total = net_due + previous_balance;
+  const net_total = total + previous_balance;
 
   const paid = Money.toCents(data.paid ?? 0);
   if (paid < 0) {
@@ -314,7 +265,6 @@ function _validate(data) {
     receipt_date,
     total,
     general_discount,
-    net_due,
     previous_balance,
     net_total,
     paid,
@@ -380,110 +330,6 @@ async function _assertNotApplied(receiptId, tx = DB) {
   }
 }
 
-// ─── PRIVATE: BUILD APPLY OPS ──────────────────────────────────────────────────
-
-async function _buildApplyOps(username, clean, receiptId, tx = DB) {
-  const {
-    receipt_date,
-    net_due,
-    client_id,
-    client_type,
-    client_name,
-    rows,
-    receipt_number,
-  } = clean;
-
-  const ops = [];
-
-  if (net_due !== 0) {
-    ops.push({
-      op: 'add', store: STORE.LEDGER,
-      payload: {
-        username,
-        owner_id      : client_id,
-        owner_name    : client_name || null,
-        client_id     : client_id,
-        client_type   : client_type,
-        client_name   : client_name || null,
-        vehicle_owner_id  : null,
-        vehicle_owner_name: null,
-        vehicle_id    : null,
-        vehicle_plate : null,
-        type           : 'receipt_due',
-        amount         : net_due,
-        reference_type : REF_TYPE,
-        reference_id   : receiptId,
-        date           : receipt_date,
-        applied_at     : DateUtils.nowLocal(),
-        is_reversed    : false,
-        note           : `Receipt ${receipt_number || receiptId} — net due`,
-      },
-    });
-  }
-
-  // ── Company ledger synchronization (companyAmount = row.net + row.sarf) ──
-  const offices = await tx.findByFields(STORE.OFFICES, { username });
-  const officeByName = new Map(
-    (offices || []).map((o) => [_toKey(o.name), o])
-  );
-
-  const companyMap = new Map();
-  const dataRows = Array.isArray(rows) ? rows : [];
-  for (const row of dataRows) {
-    if (!row || row._type === 'separator') continue;
-    let office = null;
-    if (row.office && String(row.office).trim()) {
-      office = officeByName.get(_toKey(row.office));
-    }
-    if (!office || !office.id) continue;
-
-    const rowNetCents = Money.toCents(row.net ?? 0);
-    const rowSarfCents = Money.toCents(row.sarf ?? 0);
-    const rowCompanyAmountCents = rowNetCents + rowSarfCents;
-
-    if (rowCompanyAmountCents !== 0) {
-      const key = String(office.id);
-      const prev = companyMap.get(key) || { office, totalCents: 0, firstRow: row };
-      prev.totalCents += rowCompanyAmountCents;
-      companyMap.set(key, prev);
-    }
-  }
-
-  for (const { office, totalCents, firstRow } of companyMap.values()) {
-    if (totalCents !== 0) {
-      ops.push({
-        op: 'add', store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id      : String(office.id),
-          owner_name    : office.name || null,
-          client_id     : String(office.id),
-          client_type   : 'office',
-          client_name   : office.name || null,
-          vehicle_owner_id  : client_id || null,
-          vehicle_owner_name: client_name || null,
-          vehicle_id    : firstRow?.vehicle_id || null,
-          vehicle_plate : firstRow?.vehicle_plate || null,
-          type           : OFFICE_LEDGER_TYPES.WITHDRAW_AUTO,
-          amount         : -totalCents,
-          entity_type    : 'office',
-          entity_id      : String(office.id),
-          reference_type : REF_TYPE,
-          reference_id   : receiptId,
-          date           : receipt_date,
-          applied_at     : DateUtils.nowLocal(),
-          is_reversed    : false,
-          note           : `Receipt ${receipt_number || receiptId} — company due`,
-        },
-      });
-    }
-  }
-
-  return ops;
-}
-
-// ─── OFFICE BALANCE: PRICE RESOLUTION ───────────────────────────────────────
-
 async function resolveHamolaPrice(username, officeName, loadingPlace, destinationPlace, officeMap = null) {
   if (!username) throw new Error('[FinancialService:resolveHamolaPrice] username is required.');
 
@@ -521,26 +367,6 @@ async function resolveHamolaPrice(username, officeName, loadingPlace, destinatio
   return { office, price };
 
 }
-// ─── PRIVATE: PARSE APPLY RESULTS ─────────────────────────────────────────────
-
-function _parseApplyResults(applyResults) {
-  let ledger_due = null;
-
-  for (const entry of applyResults || []) {
-    if (!entry) continue;
-    if (entry.type === 'receipt_due') {
-      ledger_due = entry;
-      break;
-    }
-  }
-
-  return {
-    treasury: null,
-    ledger_deposit: null,
-    ledger_withdraw: null,
-    ledger_due,
-  };
-}
 
 // ─── PUBLIC: createReceipt ─────────────────────────────────────────────────────
 
@@ -558,8 +384,7 @@ async function createReceipt(username, data, extraOps = []) {
   // Build ReceiptRow entities
   const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId);
 
-  // Assemble the full persistence record ONCE — ledger command generation
-  // consumes net_due/totals from this exact object.
+  // Assemble the full persistence record ONCE.
   const receiptRecord = {
     ...receiptHeader,
     payout_status,
@@ -567,14 +392,10 @@ async function createReceipt(username, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    net_due: clean.net_due,
     net_total: clean.net_total,
     notes: data.notes ?? null,
     shipping_number: data.shipping_number ?? null,
   };
-
-  // Build ledger operations from the full receipt record
-  const ledgerCommands = _buildLedgerOpsForReceipt(receiptRecord, receiptRows, username);
 
   // Prepare PersistenceCommands via ReceiptRepository (Add)
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(receiptRecord, { username });
@@ -582,22 +403,14 @@ async function createReceipt(username, data, extraOps = []) {
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
 
   // Combine all commands
-  const allCommands = [receiptCommand, ...receiptRowCommands, ...ledgerCommands];
+  const allCommands = [receiptCommand, ...receiptRowCommands];
 
   // Execute through WriteDataSource
   const results = await WriteDataSource.execute(allCommands, { username });
 
   const receipt = Money.decimalizeRecord(results[0]);
-  const applyResults = results.slice(1);
-  const { treasury, ledger_deposit, ledger_withdraw, ledger_due } = _parseApplyResults(applyResults);
 
-  return {
-    receipt,
-    treasury: Money.decimalizeRecord(treasury),
-    ledger_deposit: Money.decimalizeRecord(ledger_deposit),
-    ledger_withdraw: Money.decimalizeRecord(ledger_withdraw),
-    ledger_due: Money.decimalizeRecord(ledger_due),
-  };
+  return { receipt };
 }
 
 // ─── PUBLIC: updateReceipt ─────────────────────────────────────────────────────
@@ -625,7 +438,6 @@ async function updateReceipt(username, id, data, extraOps = []) {
     paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
-    net_due: clean.net_due,
     net_total: clean.net_total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
     ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),
@@ -638,9 +450,6 @@ async function updateReceipt(username, id, data, extraOps = []) {
 
   // Generate reverse operations for previous ledger entries
   const reverseCommands = await _buildReverseOps(id, username);
-
-  // Generate new ledger operations from the full receipt record
-  const newLedgerCommands = _buildLedgerOpsForReceipt(receiptRecord, newReceiptRows, username);
 
   // Prepare PersistenceCommands via ReceiptRepository
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
@@ -656,13 +465,12 @@ async function updateReceipt(username, id, data, extraOps = []) {
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
 
   // Combine all commands: header update → delete old rows → add new rows →
-  // reverse old ledger entries → apply new ledger entries.
+  // reverse old ledger entries.
   const allCommands = [
     receiptCommand,
     ...deleteRowCommands,
     ...receiptRowCommands,
     ...reverseCommands,
-    ...newLedgerCommands,
     ...extraOps
   ];
 
@@ -670,16 +478,8 @@ async function updateReceipt(username, id, data, extraOps = []) {
   const results = await WriteDataSource.execute(allCommands, { username });
 
   const receipt = Money.decimalizeRecord(results[0]); // First command is the header update
-  const applyResults = results.slice(1);
-  const { treasury, ledger_deposit, ledger_withdraw, ledger_due } = _parseApplyResults(applyResults);
 
-  return {
-    receipt,
-    treasury: Money.decimalizeRecord(treasury),
-    ledger_deposit: Money.decimalizeRecord(ledger_deposit),
-    ledger_withdraw: Money.decimalizeRecord(ledger_withdraw),
-    ledger_due: Money.decimalizeRecord(ledger_due),
-  };
+  return { receipt };
 }
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
@@ -1302,12 +1102,6 @@ async function getClientBalance(client_id) {
       continue;
     }
 
-    if (entry.type === 'receipt_due') {
-      if (cents >= 0) deposit_total += cents;
-      else withdraw_total += Math.abs(cents);
-      continue;
-    }
-
     if (entry.type === 'receipt_payment') {
       withdraw_total += Math.abs(cents);
       continue;
@@ -1481,9 +1275,7 @@ async function updateClientUnpaidBalances(clientId, username) {
         if (entry.reference_id === String(receipt.id) && entry.reference_type === 'receipt') {
           continue;
         }
-        if (entry.type === 'receipt_due') {
-          balanceCents += cents;
-        } else if (entry.type === 'receipt_payment') {
+        if (entry.type === 'receipt_payment') {
           balanceCents -= Math.abs(cents);
         } else if (entry.type === 'deposit') {
           balanceCents += cents;
@@ -1499,8 +1291,7 @@ async function updateClientUnpaidBalances(clientId, username) {
       const currentPrevious = Number(receipt.previous_balance) || 0;
 
       if (newPreviousBalance !== currentPrevious) {
-        const netDue = Number(receipt.net_due) || 0;
-        const newNetTotal = netDue + newPreviousBalance;
+        const newNetTotal = newPreviousBalance;
         const newPaid = newNetTotal;
 
         await ReceiptRepository.update(receipt.id, {

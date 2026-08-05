@@ -1010,16 +1010,7 @@ async function _refreshDashboard() {
 
   // ─── CALCULATE STATISTICS ──────────────────────────────────────────────────
 
-  // Card 1: "إجمالي صرف الكارتات" — Sum of net_due from filtered active receipts
-  let totalReceiptCents = 0;
-  for (const r of activeReceipts) {
-    if (r) {
-      totalReceiptCents += Number(r.net_due) || 0; // net_due is stored as cents
-    }
-  }
-  const totalReceiptsVal = Money.toDecimal(totalReceiptCents);
-
-  // Card 2: "المصروفات والمرتبات" — Sum of amount from filtered active treasury (expenses/salaries)
+  // Card 1: "المصروفات والمرتبات" — Sum of amount from filtered active treasury (expenses/salaries)
   let totalExpenseCents = 0;
   for (const t of activeTreasury) {
     if (t && (t.effect === TREASURY_EFFECT.EXPENSE || t.effect === TREASURY_EFFECT.SALARY)) {
@@ -1028,7 +1019,7 @@ async function _refreshDashboard() {
   }
   const totalExpenseVal = Money.toDecimal(totalExpenseCents);
 
-  // Card 3: "إجمالي المكتب" — Sum of officeAmount from active receipts within selected period
+  // Card 2: "إجمالي المكتب" — Sum of officeAmount from active receipts within selected period
   let totalOfficeCents = 0;
   for (const r of activeReceipts) {
     if (r) {
@@ -1043,26 +1034,19 @@ async function _refreshDashboard() {
   }
   const totalOfficeVal = Money.toDecimal(totalOfficeCents);
 
-  // Card 4: "إجمالي المحصل من الشركات" — Calculated with prices map & routes weight
+  // Card 3: "إجمالي المحصل من الشركات" — Calculated with prices map & routes weight
   const totalCollectedFromCompanies = await _calculateTotalCollectedFromCompanies(username, activeReceipts, offices, receiptRowsProjection);
-
-  // Card 5: "صافي الربح" = Companies Collected + Office Amount - Receipts Spent - Salaries/Expenses
-  const netProfitCents = Money.toCents(totalCollectedFromCompanies) 
-                         + Money.toCents(totalOfficeVal) 
-                         - Money.toCents(totalReceiptsVal) 
-                         - Money.toCents(totalExpenseVal);
-  const netProfitVal = Money.toDecimal(netProfitCents);
 
   // ─── RENDER STATISTICS CARDS ────────────────────────────────────────────────
 
-  _renderSummaryCards(totalReceiptsVal, totalExpenseVal, totalOfficeVal, totalCollectedFromCompanies, netProfitVal);
+  _renderSummaryCards(totalExpenseVal, totalOfficeVal, totalCollectedFromCompanies);
 
   // ─── RENDER CAPITAL TREASURY ────────────────────────────────────────────────
 
   await _renderCapitalTreasury(username);
 }
 
-function _renderSummaryCards(card1, card2, card3, card4, card5) {
+function _renderSummaryCards(expenses, office, collected) {
   const container = document.getElementById('dashboardStatsGrid');
   if (!container) return;
 
@@ -1078,11 +1062,9 @@ function _renderSummaryCards(card1, card2, card3, card4, card5) {
     </div>`;
 
   container.innerHTML = `
-    ${cardHtml('إجمالي صرف الكارتات', card1, 'صافي الصرف في الفترة المحددة', 'dashboard-stat-indigo')}
-    ${cardHtml('المصروفات والمرتبات', card2, 'المصاريف التشغيلية والمرتبات المباشرة', 'dashboard-stat-rose')}
-    ${cardHtml('إجمالي المكتب', card3, 'نسبة عمولة المكتب المحصلة من الكارتات', 'dashboard-stat-teal')}
-    ${cardHtml('إجمالي المحصل من الشركات', card4, 'مجموع مستحقات الحمولة من الشركات ماليًا', 'dashboard-stat-sky')}
-    ${cardHtml('صافي الربح', card5, 'المعادلة: المحصل + المكتب - الكارتات - المصاريف', card5 >= 0 ? 'dashboard-stat-emerald' : 'dashboard-stat-rose')}
+    ${cardHtml('المصروفات والمرتبات', expenses, 'المصاريف التشغيلية والمرتبات المباشرة', 'dashboard-stat-rose')}
+    ${cardHtml('إجمالي المكتب', office, 'نسبة عمولة المكتب المحصلة من الكارتات', 'dashboard-stat-teal')}
+    ${cardHtml('إجمالي المحصل من الشركات', collected, 'مجموع مستحقات الحمولة من الشركات ماليًا', 'dashboard-stat-sky')}
   `;
 }
 

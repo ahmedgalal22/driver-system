@@ -178,7 +178,6 @@ function _normalize(rawData) {
 
   const calcs = calculateReceiptTotals(rows, previous_balance, paid);
   const total = calcs.total;
-  const net_due = calcs.net_due;
   const net_total = calcs.net_total;
   const balance = calcs.balance;
   const row_count        = dataRows.length;
@@ -204,7 +203,6 @@ function _normalize(rawData) {
     total,
     previous_balance,
     general_discount,
-    net_due,
     net_total,
     paid,
     balance,
@@ -295,7 +293,6 @@ function _buildServicePayload(n) {
     row_count        : n.row_count,
     total            : n.total,
     general_discount : n.general_discount,
-    net_due          : n.net_due,
     previous_balance : n.previous_balance,
     paid             : n.paid,
     balance          : n.balance,
@@ -1194,11 +1191,6 @@ function renderTotals() {
               <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">الإجمالي</div>
               <div style="font-size:18px;font-weight:bold;margin:0;" id="totalAmount">0.00</div>
             </td>
-
-            <td class="totals-cell" style="background:#0d9488;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
-              <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">الصافي المستحق</div>
-              <div style="font-size:18px;font-weight:bold;margin:0;" id="netDueAmount">0.00</div>
-            </td>
           </tr>
         </table>
       </div>
@@ -1485,7 +1477,7 @@ async function updateSelectedClientBalanceExcluding(excludeReceiptId) {
     calculateTotals();
     return;
   }
-  // Get full client ledger, then subtract this receipt's receipt_due entry
+  // Get full client ledger, then exclude this receipt's own entries
   const ledger = await ReceiptsModule.getClientLedger(client.id);
   let balance = 0;
   for (const entry of ledger) {
@@ -1494,9 +1486,7 @@ async function updateSelectedClientBalanceExcluding(excludeReceiptId) {
     if (excludeReceiptId && entry.reference_id === String(excludeReceiptId) && entry.reference_type === 'receipt') {
       continue;
     }
-    if (entry.type === 'receipt_due') {
-      balance += cents;
-    } else if (entry.type === 'receipt_payment') {
+    if (entry.type === 'receipt_payment') {
       balance -= Math.abs(cents);
     } else if (entry.type === 'deposit') {
       balance += cents;
@@ -2047,7 +2037,6 @@ function calculateTotals() {
   // Calculate using our unified financial calculator!
   const calcs = calculateReceiptTotals(rowObjs, previousBalance, 0);
   const total = calcs.total;
-  const netDue = calcs.net_due;
   const netTotal = calcs.net_total;
 
   const totalEl = document.getElementById('totalAmount');
@@ -2068,9 +2057,6 @@ function calculateTotals() {
       sectionTotal += parseFloat(row.querySelector('.receipt-net')?.value) || 0;
     }
   });
-
-  const netEl = document.getElementById('netDueAmount');
-  if (netEl) netEl.textContent = Money.fmt(netDue);
 
   const netTotalEl = document.getElementById('netTotalAmount');
   if (netTotalEl) netTotalEl.textContent = Money.fmt(netTotal);
@@ -2668,7 +2654,6 @@ async function collectRawData() {
     general_discount : generalDiscount,
     paid             : parseFloat(document.getElementById('paidAmount')?.value) || 0,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
-    net_due          : parseFloat(document.getElementById('netDueAmount')?.textContent) || 0,
     net_total        : parseFloat(document.getElementById('netTotalAmount')?.textContent) || 0,
     rows             : await collectReceiptRows(),
   };
@@ -2980,7 +2965,6 @@ function printReceipt() {
   if (totalsContainer) {
     const rowCount   = document.getElementById('rowCount')?.textContent || '0';
     const total      = document.getElementById('totalAmount')?.textContent || '0.00';
-    const netDue = document.getElementById('netDueAmount')?.textContent || '0.00';
     const netTotal = document.getElementById('netTotalAmount')?.textContent || '0.00';
     const paid       = document.getElementById('paidAmount')?.value || '0';
     const balance    = document.getElementById('receiptBalance')?.textContent || '0.00';
@@ -2991,7 +2975,6 @@ function printReceipt() {
           <tr>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">عدد الكارتات</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الإجمالي</th>
-            <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الصافي المستحق</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">رصيد العميل</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الصافي الكلي</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">المدفوع</th>
@@ -3001,7 +2984,6 @@ function printReceipt() {
           <tr>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${rowCount}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${total}</td>
-            <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${netDue}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${balance}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${netTotal}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${paid}</td>
@@ -3082,10 +3064,7 @@ function clearReceiptSilent() {
   
   const paidEl = document.getElementById('paidAmount');
   if (paidEl) { paidEl.value = '0'; paidEl.dataset.auto = '1'; }
-  
-  const netEl = document.getElementById('netDueAmount');
-  if (netEl) netEl.textContent = '0.00';
-  
+
   const netTotalEl = document.getElementById('netTotalAmount');
   if (netTotalEl) netTotalEl.textContent = '0.00';
   
