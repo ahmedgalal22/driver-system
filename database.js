@@ -31,7 +31,7 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 11;             // v11: normalized Receipt + ReceiptRow architecture (clean reset)
+  const DB_VERSION = 12;             // v12: final schema cleanup — dormant receipt header fields (shipping_number/company_info/receipt-side account_type) + obsolete receipts indexes (by_vehicle/by_office/by_type) removed; dormant office.hamolaRows purged (clean reset)
 
   /**
    * STORES schema.
@@ -110,9 +110,6 @@ const DB = (() => {
       keyPath: 'id',
       autoIncrement: false,
       indexes: [
-        { name: 'by_vehicle',  keyPath: 'vehicle_id',     options: { unique: false } },
-        { name: 'by_office',   keyPath: 'office_id',      options: { unique: false } },
-        { name: 'by_type',     keyPath: 'receipt_type',   options: { unique: false } },
         { name: 'by_number',   keyPath: 'receipt_number', options: { unique: true  } },
         { name: 'by_deleted',  keyPath: 'deleted_at' },
       ],
@@ -219,8 +216,10 @@ const DB = (() => {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
 
-        // v8 simplified product schema: no migration, no legacy compatibility.
+        // Schema policy: no migration, no legacy compatibility (clean reset).
         // Drop every existing object store, then create the current STORES set.
+        // Dormant persisted fields (e.g. office.hamolaRows, removed header
+        // fields) are purged by the reset itself on version bump.
         const existingNames = Array.from(db.objectStoreNames);
         for (const name of existingNames) {
           db.deleteObjectStore(name);

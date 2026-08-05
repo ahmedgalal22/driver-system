@@ -947,9 +947,8 @@ async function _refreshDashboard() {
       const rows = receiptRowsProjection.get(String(r.id)) || [];
       for (const row of rows) {
         if (!row) continue; // separators are UI-local — never persisted in receipt_rows
-        // office_amount has NO persisted slot in the frozen ReceiptRow contract
-        // (B6) → contributes 0 until the contract is extended.
-        totalOfficeCents += Money.toCents(row.office_amount || 0);
+        // officeAmount is persisted in integer cents on each ReceiptRow.
+        totalOfficeCents += Number(row.officeAmount) || 0;
       }
     }
   }

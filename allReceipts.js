@@ -1063,7 +1063,7 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
  *   - Header image (wasel.png) — absolute URL built from window.location, no DOM read.
  *   - Title, receipt number, date.
  *   - Owner name.
- *   - Optional shipping number and notes.
+ *   - Optional notes.
  */
 function _receiptPrintBuildHeader(record) {
   const receiptNumber = esc(record.receipt_number || '—');

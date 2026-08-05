@@ -209,25 +209,25 @@ async function _loadReceiptRowsProjection(receipts) {
 }
 
 /**
- * Bridge one persisted ReceiptRow (frozen contract, money in CENTS:
- * { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate, driver_price,
- *   loading, destination, office, advance, net, sarf })
+ * Bridge one persisted ReceiptRow (frozen contract, money in CENTS)
  * into the office-side vocabulary the calculators/cards consume (money in
- * DECIMALS). Mirrors the approved receipts.js / allReceipts.js read boundaries.
- * Columns with no persisted slot (weights, deficit, type, officeAmount,
- * discount, add) are blank/zero — they cannot be restored until the contract
- * is extended (B6). `net` is the authoritative save-time row net, persisted
- * in cents on the row itself.
+ * DECIMALS). Mirrors the receipts.js / allReceipts.js read boundaries.
+ * Every user-entered column is restored straight from its persisted slot —
+ * nothing is fabricated; slots null on old rows render blank/zero.
+ * `net` is the authoritative save-time row net, persisted in cents on the row.
  */
 function _persistedRowToOfficeShape(row) {
   return {
     office : row.office || '',
     loading: row.loading || '',
     taktik : row.destination || '', // destination → الجهة
-    // ── no persisted slot (blank/zero until the contract gains them — B6) ──
-    weight: '', weight2: '', deficit: '',
-    type: '', officeAmount: 0, discount: 0, add: 0,
-    // ── money: cents → decimals ──
+    // ── persisted user-entered columns (original form) ──
+    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
+    type: row.type || '',
+    // ── money: persisted cents → decimals ──
+    officeAmount: Money.toDecimal(row.officeAmount ?? 0),
+    discount: Money.toDecimal(row.discount ?? 0),
+    add: Money.toDecimal(row.add ?? 0),
     noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
     ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
     sarf  : Money.toDecimal(row.sarf ?? 0),
@@ -278,7 +278,7 @@ async function getOfficeFinancialSummary(username, filters = null) {
         throw new Error(`[OfficesService] unknown office: ${officeName}`);
       }
       const item = summary.get(String(office.id));
-      item.weight += _calcWeight(shape); // → 0: no persisted weight slots (B6)
+      item.weight += _calcWeight(shape); // persisted weight slots → real totals
       item.net += shape.net;             // persisted authoritative save-time row net
     }
   }
@@ -615,20 +615,17 @@ async function showOfficeDetails(id) {
  * Get all receipt rows linked to a specific office/company.
  * Each row includes parent receipt metadata for display.
  *
- * Normalized read (Step 7): headers come from ReceiptRepository, rows from
- * the frozen ReceiptReadRepository projected by receipt id — the in-memory
- * equivalent of the MySQL-ready join below (never an embedded receipt.rows):
+ * Normalized read: headers come from ReceiptRepository, rows from the frozen
+ * ReceiptReadRepository projected by receipt id — the in-memory equivalent of
+ * the MySQL-ready join below (never an embedded receipt.rows):
  *   SELECT rr.*, r.receipt_number, r.client_name
  *   FROM receipt_rows rr
  *   JOIN receipts r ON rr.receipt_id = r.id
  *   WHERE rr.office = ?
  *
- * Persisted row slots render real values (car, loading, taktik, office,
- * noloon/ohda/sarf via cents→decimal). Columns with no persisted slot —
- * kartano, date, driver name, weight, type, row notes, receipt_number header
- * slot — render blank/zero until the contract is extended (B6). Driver-name
- * resolution from persisted driver_id is deferred (no driver read repository
- * is wired into this module yet — Step 8 candidate).
+ * Every card column is restored straight from its persisted slot — kartano,
+ * date, driver name, weight, type, car, loading, taktik, office, money via
+ * cents→decimal. Only row notes stay blank: rows have no persisted notes slot.
  */
 async function _getOfficeCards(office) {
   const username = _moduleSessionUsername();
@@ -648,21 +645,21 @@ async function _getOfficeCards(office) {
 
       cards.push({
         receipt_id: receipt.id,
-        receipt_number: receipt.receipt_number || '', // header slot not persisted (B6) → ''
+        receipt_number: receipt.receipt_number || '',   // persisted header slot
         client_name: receipt.client_name || receipt.owner_name || '',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
         _rowId: row.row_id ?? null,                     // persisted ReceiptRow PK
-        kartano: '',                                    // no persisted slot (B6)
-        date: '',                                       // no persisted slot (B6)
+        kartano: row.kartano || '',                     // persisted
+        date: row.date || '',                           // persisted
         car: row.vehicle_plate || '',
-        driver: '',                                     // name not persisted; resolution deferred (Step 8)
-        weight: 0,                                      // no persisted slot (B6)
+        driver: row.driver_name || '',                  // persisted driver name
+        weight: Number(row.weight) || 0,                // persisted (original form → numeric for summation)
         noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون (cents→decimal)
         loading: row.loading || '',
         taktik: row.destination || '',                  // destination → الجهة
-        type: '',                                       // no persisted slot (B6)
-        notes: '',                                      // row notes not persisted (B6)
+        type: row.type || '',                           // persisted
+        notes: '',                                      // row notes: no persisted slot
       });
     }
   }

@@ -38,7 +38,6 @@ const STORE = Object.freeze({
   OFFICES  : 'offices',
 });
 
-const ACCOUNT_TYPES = Object.freeze(['cash', 'bank', 'vodafone', 'none']);
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
 
@@ -78,17 +77,12 @@ function _validateReceiptHeader(data) {
     throw new Error('[FinancialService] receipt_date must be a valid ISO date string.');
   }
 
-  const account_type = data.account_type ?? null;
-  if (account_type !== null && !ACCOUNT_TYPES.includes(account_type)) {
-    throw new Error(`[FinancialService] account_type must be one of: ${ACCOUNT_TYPES.join(', ')}, or null.`);
-  }
 
   return {
     client_id,
     client_type,
     client_name,
     receipt_date,
-    account_type,
   };
 }
 
@@ -119,7 +113,6 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
     client_type: cleanHeader.client_type,
     client_name: cleanHeader.client_name || null,
     receipt_date: cleanHeader.receipt_date,
-    account_type: cleanHeader.account_type,
     // Restored header contract: sole user-visible header field previously dropped
     // (already validated through _validate; by_number index exists in schema).
     receipt_number: cleanHeader.receipt_number ?? null,
@@ -213,7 +206,6 @@ function _validate(data) {
     clientVehicleGroups.set(key, prev);
   }
 
-  const account_type = header.account_type;
   const receipt_date = header.receipt_date;
 
   // Convert decimals → cents (RULE 9)
@@ -228,7 +220,6 @@ function _validate(data) {
   }
 
   return {
-    account_type,
     receipt_date,
     total,
     groups,
@@ -260,7 +251,6 @@ async function createReceipt(username, data) {
     ...receiptHeader,
     total: clean.total,
     notes: data.notes ?? null,
-    shipping_number: data.shipping_number ?? null,
   };
 
   // Prepare PersistenceCommands via ReceiptRepository (Add)
@@ -294,12 +284,11 @@ async function updateReceipt(username, id, data) {
   const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
 
   // Assemble the full persistence record ONCE (Update semantics:
-  // notes/shipping_number are only patched when provided).
+  // notes is only patched when provided).
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
-    ...(data.shipping_number !== undefined ? { shipping_number: data.shipping_number || null } : {}),
   };
 
   // Retrieve existing ReceiptRows (they must be REPLACED, not appended —

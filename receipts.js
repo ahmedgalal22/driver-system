@@ -99,16 +99,6 @@ function _validate(rawData) {
     }
   }
 
-  const VALID_ACCOUNT_TYPES = ['cash', 'bank', 'vodafone'];
-  if (rawData.account_type != null) {
-    const normalized = String(rawData.account_type).toLowerCase();
-    if (!VALID_ACCOUNT_TYPES.includes(normalized)) {
-      throw new Error(
-        `[ReceiptsModule] Invalid account_type "${rawData.account_type}". ` +
-        `Allowed: ${VALID_ACCOUNT_TYPES.join(', ')}.`
-      );
-    }
-  }
 }
 
 // ─── NORMALIZE ROW ────────────────────────────────────────────────────────────
@@ -180,11 +170,8 @@ function _normalize(rawData) {
     owner_name     : normalizeOptionalString(rawData.owner_name),
     company_name   : normalizeOptionalString(rawData.company_name),
     company_phone  : normalizeOptionalString(rawData.company_phone),
-    company_info   : normalizeOptionalString(rawData.company_info),
     notes          : normalizeOptionalString(rawData.notes),
-    shipping_number: null,
     vehicle_id     : rawData.vehicle_id != null ? String(rawData.vehicle_id) : null,
-    account_type   : rawData.account_type ? String(rawData.account_type).toLowerCase() : null,
     rows,
     row_count,
     total,
@@ -266,11 +253,8 @@ function _buildServicePayload(n) {
     owner_id         : firstDataRow?.owner_id || null,
     company_name     : n.company_name,
     company_phone    : n.company_phone,
-    company_info   : n.company_info,
     notes          : n.notes,
-    shipping_number: null,
     vehicle_id       : n.vehicle_id || firstDataRow?.vehicle_id || null,
-    account_type     : n.account_type,
     rows             : n.rows.map(_uiRowToPersistedShape), // bridge to persisted vocabulary
     row_count        : n.row_count,
     total            : n.total,
@@ -502,20 +486,17 @@ const ReceiptsModule = Object.freeze({
 
 /** Session state for the receipt form — single object for future MySQL/API sync. */
 const ReceiptState = {
-  editingAccountType: null,
   editingReceiptId: null,
   isEditing: false,
 };
 
 function _resetReceiptEditingState() {
-  ReceiptState.editingAccountType = null;
   ReceiptState.editingReceiptId = null;
   ReceiptState.isEditing = false;
 }
 
 function _enterReceiptEditMode(receiptData) {
   ReceiptState.editingReceiptId = receiptData?.id ?? null;
-  ReceiptState.editingAccountType = receiptData?.account_type ?? null;
   ReceiptState.isEditing = ReceiptState.editingReceiptId != null;
 }
 
@@ -2422,8 +2403,6 @@ async function saveReceipt() {
 
   // EDIT MODE — no modal
   if (ReceiptState.isEditing && ReceiptState.editingReceiptId) {
-    rawData.account_type = null;
-
     try {
       await ReceiptsModule.update(username, ReceiptState.editingReceiptId, rawData);
       _vehicleAnalysisCache.clear();
@@ -2442,7 +2421,6 @@ async function saveReceipt() {
   }
 
   // CREATE MODE
-  rawData.account_type = null;
 
   try {
     const saveResult = await ReceiptsModule.create(username, rawData);

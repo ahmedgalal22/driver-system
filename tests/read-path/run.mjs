@@ -54,7 +54,7 @@ const rowX = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_
 const hdr = (over = {}) => ({
   receipt_date: '2026-07-27', receipt_number: '1001',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
-  account_type: null, total: 1150,
+  total: 1150,
   ...over,
 });
 
@@ -80,7 +80,7 @@ ok(liveRows.every(r => 'kartano' in r && 'date' in r && 'driver_name' in r && 't
     && 'weight' in r && 'weight2' in r && 'deficit' in r && 'weightTotal' in r
     && 'officeAmount' in r && 'discount' in r && 'add' in r && 'row_order' in r
     && !('office_amount' in r) && !('noloon' in r) && !('taktik' in r) && !('_type' in r)),
-  'contract is structural (Phase 5 Step 2): restored slots persisted (kartano/date/driver_name/type/weight/weight2/deficit/weightTotal/officeAmount/discount/add/row_order); UI-vocabulary aliases (office_amount/noloon/taktik/_type) still never persisted');
+  'contract is structural: user-entered slots persisted (kartano/date/driver_name/type/weight/weight2/deficit/weightTotal/officeAmount/discount/add/row_order); UI-vocabulary aliases (office_amount/noloon/taktik/_type) still never persisted');
 ok((await ReceiptReadRepository.getReceiptRowsByReceipt(R2)).length === 0,
   'deleted receipt R2 → 0 live rows (rows soft-deleted with header)');
 
@@ -113,20 +113,19 @@ ok(activeReceipts.length === 1 && activeReceipts[0].id === R1,
 const receiptRowsProjection = await _loadReceiptRowsProjection(activeReceipts);
 ok((receiptRowsProjection.get(String(R1)) || []).length === 3, 'projection: R1 → 3 rows');
 
-// EXTRACTED VERBATIM Card 3 loop — dashboard.js (_refreshDashboard)
+// EXTRACTED VERBATIM Card 2 loop — dashboard.js (_refreshDashboard)
 let totalOfficeCents = 0;
 for (const r of activeReceipts) {
   if (r) {
     const rows = receiptRowsProjection.get(String(r.id)) || [];
     for (const row of rows) {
       if (!row) continue; // separators are UI-local — never persisted in receipt_rows
-      // office_amount has NO persisted slot in the frozen ReceiptRow contract
-      // (B6) → contributes 0 until the contract is extended.
-      totalOfficeCents += Money.toCents(row.office_amount || 0);
+      // officeAmount is persisted in integer cents on each ReceiptRow.
+      totalOfficeCents += Number(row.officeAmount) || 0;
     }
   }
 }
-ok(totalOfficeCents === 0, `Card 3 (إجمالي المكتب) = 0¢ — structural B6 zero, NOT a lookup failure (got ${totalOfficeCents})`);
+ok(totalOfficeCents === 0, `Card 2 (إجمالي المكتب) = 0¢ — persisted officeAmount slot read (fixture rows carry officeAmount=0, got ${totalOfficeCents})`);
 
 // ─── GROUP 3: offices.js pipeline (extracted verbatim, real repositories) ───
 console.log('\n— GROUP 3: offices.js pipeline —');
@@ -137,10 +136,13 @@ function _persistedRowToOfficeShape(row) {
     office : row.office || '',
     loading: row.loading || '',
     taktik : row.destination || '', // destination → الجهة
-    // ── no persisted slot (blank/zero until the contract gains them — B6) ──
-    weight: '', weight2: '', deficit: '',
-    type: '', officeAmount: 0, discount: 0, add: 0,
-    // ── money: cents → decimals ──
+    // ── persisted user-entered columns (original form) ──
+    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
+    type: row.type || '',
+    // ── money: persisted cents → decimals ──
+    officeAmount: Money.toDecimal(row.officeAmount ?? 0),
+    discount: Money.toDecimal(row.discount ?? 0),
+    add: Money.toDecimal(row.add ?? 0),
     noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون
     ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
     sarf  : Money.toDecimal(row.sarf ?? 0),
@@ -182,8 +184,8 @@ ok(sRow.noloon === 11 && sRow.ohda === 5 && sRow.sarf === 2 && sRow.net === 550,
   `shape money: cents→decimal via REAL Money (نولون=${sRow.noloon}, عهدة=${sRow.ohda}, sarf=${sRow.sarf}, net=${sRow.net})`);
 ok(sRow.weight === '' && sRow.weight2 === '' && sRow.deficit === ''
     && sRow.officeAmount === 0 && sRow.discount === 0 && sRow.add === 0 && sRow.type === '',
-  'shape: un-persisted slots blank/zero (B6)');
-ok(calculateWeightTotal(sRow) === 0, 'calculateWeightTotal(shape) = 0 via REAL financialCalculator (B6)');
+  'shape: slots restored from persisted row — fixture rows carry none → blank/zero');
+ok(calculateWeightTotal(sRow) === 0, 'calculateWeightTotal(shape) = 0 via REAL financialCalculator (persisted weights absent in fixture)');
 
 const summary = _officeSummaryLoop(activeReceipts, receiptRowsProjection, nameMap, offices);
 const sumA = summary.get(String(officeA.id)), sumB = summary.get(String(officeB.id));
@@ -191,7 +193,7 @@ const expectedNetA = Money.toDecimal(liveRows.filter(r => r.office === 'شركة
 ok(sumA.net === 1200 && sumA.net === expectedNetA,
   `summary: شركة أ net REVIVED from persisted row nets (${sumA.net} = 550+650, cross-checked vs cents sum ${expectedNetA})`);
 ok(sumB.net === 600, `summary: شركة ب net = 600 from persisted row net (got ${sumB.net})`);
-ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (B6 structural zero)');
+ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (fixture rows carry no persisted weights; slot read proven)');
 
 // EXTRACTED VERBATIM cards loop core — offices.js (_getOfficeCards)
 function _officeCardsLoop(allReceipts_arg, rowsProjection_arg, officeName) {
@@ -211,11 +213,12 @@ function _officeCardsLoop(allReceipts_arg, rowsProjection_arg, officeName) {
         receipt_date: receipt.receipt_date || '',
         row_index: i,
         _rowId: row.row_id ?? null,
-        kartano: '', date: '', car: row.vehicle_plate || '', driver: '', weight: 0,
+        kartano: row.kartano || '', date: row.date || '', car: row.vehicle_plate || '',
+        driver: row.driver_name || '', weight: Number(row.weight) || 0,
         noloon: Money.toDecimal(row.driver_price ?? 0),
         loading: row.loading || '',
         taktik: row.destination || '',
-        type: '', notes: '',
+        type: row.type || '', notes: '',
       });
     }
   }
@@ -233,7 +236,7 @@ ok(!!c1 && !!c3 && c1.noloon === 11 && c3.noloon === 10
 ok(c1.receipt_id === R1 && typeof c1._rowId === 'string' && liveRows.some(r => r.row_id === c1._rowId),
   'cards: _rowId = persisted ReceiptRow PK, receipt_id FK intact');
 ok(c1.kartano === '' && c1.date === '' && c1.driver === '' && c1.weight === 0 && c1.type === '' && c1.notes === '',
-  'cards: un-persisted slots blank/zero (B6) — kartano/date/driver/weight/type/notes');
+  'cards: slots restored from persisted row — fixture rows carry none → blank/0 (kartano/date/driver/weight/type/notes)');
 ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27'
     && c1.payout_status === undefined,
   'cards: header metadata propagated (client_name, receipt_date); REMOVED-CONTRACT (Paid phase): payout_status no longer on office cards');
@@ -256,8 +259,8 @@ const offSrc = readFileSync('./offices.src.js', 'utf8');
 ok(dashSrc.includes("import { ReceiptReadRepository } from './services/receiptReadRepository.js';"),
   'dashboard.js imports ReceiptReadRepository');
 ok(!/Array\.isArray\(\s*(receipt|r)\.rows/.test(dashSrc), 'dashboard.js: ZERO executable embedded receipt.rows accessors');
-ok(dashSrc.includes('totalOfficeCents += Money.toCents(row.office_amount || 0);'),
-  'extraction-bound: Card 3 marker present verbatim in dashboard.js');
+ok(dashSrc.includes('totalOfficeCents += Number(row.officeAmount) || 0;'),
+  'extraction-bound: Card 2 marker present verbatim in dashboard.js (persisted officeAmount slot)');
 ok(offSrc.includes("import { ReceiptRepository } from './services/receiptRepository.js';")
     && offSrc.includes("import { ReceiptReadRepository } from './services/receiptReadRepository.js';"),
   'offices.js imports ReceiptRepository + ReceiptReadRepository');

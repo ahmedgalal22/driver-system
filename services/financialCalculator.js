@@ -27,7 +27,7 @@ export function calculateRowNet(row) {
   const deficit      = Number(row.deficit)      || 0;
   const noloon       = Number(row.noloon)       || 0;
   const ohda         = Number(row.ohda)         || 0;
-  const officeAmount = Number(row.officeAmount ?? row.office_amount ?? row.officeAmount) || 0;
+  const officeAmount = Number(row.officeAmount) || 0;
   const discount     = Number(row.discount)     || 0;
   const add          = Number(row.add)          || 0;
   const sarf         = Number(row.sarf)         || 0;
