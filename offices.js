@@ -418,7 +418,6 @@ async function getOfficeFinancialSummary(username, filters = null) {
       office,
       net: 0,
       weight: 0,
-      balance: 0,
     });
   }
 
@@ -454,16 +453,6 @@ async function getOfficeFinancialSummary(username, filters = null) {
   }
 
   const rows = Array.from(summary.values());
-  const balances = await Promise.all(
-    rows.map((item) => FinancialService.getClientBalance(item.office.id))
-  );
-  rows.forEach((item, idx) => {
-    const snap = balances[idx];
-    if (!snap) {
-      throw new Error('[OfficesService] balance lookup failed.');
-    }
-    item.balance = snap.balance;
-  });
 
   const totals = rows.reduce(
     (acc, item) => {
@@ -482,83 +471,6 @@ async function getOfficeFinancialSummary(username, filters = null) {
   };
 }
 
-async function getOfficeLedger(username, office_id) {
-  _requireUsername(username, 'getOfficeLedger');
-  if (!office_id) throw new Error('[OfficesService:getOfficeLedger] office_id is required.');
-  const office = await getOfficeById(office_id, username);
-  if (!office) throw new Error('[OfficesService] office not found.');
-  const ledger = await FinancialService.getClientLedger(String(office_id));
-
-  const receiptIds = [...new Set(
-    ledger
-      .filter((e) => e.reference_type === 'receipt' && e.reference_id)
-      .map((e) => String(e.reference_id))
-  )];
-
-  const receiptMap = new Map();
-  for (const id of receiptIds) {
-    // Header-only read via the canonical repository (same receipts store).
-    // receipt_number has no persisted header slot yet (B6) → null until the
-    // contract is extended.
-    const receipt = await ReceiptRepository.getById(id);
-    if (receipt && receipt.receipt_number) {
-      receiptMap.set(id, String(receipt.receipt_number));
-    }
-  }
-
-  return ledger.map((entry) => ({
-    ...entry,
-    reference_number: receiptMap.get(String(entry.reference_id)) || null,
-  }));
-}
-
-async function depositToOffice(username, office_id, payload) {
-  _requireUsername(username, 'depositToOffice');
-  if (!office_id) throw new Error('[OfficesService:depositToOffice] office_id is required.');
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('[OfficesService] payload must be a plain object.');
-  }
-
-  const office = await getOfficeById(office_id, username);
-  if (!office) throw new Error('[OfficesService] office not found.');
-
-  const data = {
-    ...payload,
-    office_id: String(office.id),
-  };
-
-  return FinancialService.createOfficeDeposit(username, data);
-}
-
-async function adjustOfficeBalance(username, office_id, payload) {
-  _requireUsername(username, 'adjustOfficeBalance');
-  if (!office_id) throw new Error('[OfficesService:adjustOfficeBalance] office_id is required.');
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('[OfficesService] payload must be a plain object.');
-  }
-
-  const office = await getOfficeById(office_id, username);
-  if (!office) throw new Error('[OfficesService] office not found.');
-
-  if (payload.type === 'deposit') {
-    return FinancialService.createOfficeDeposit(username, {
-      office_id: String(office.id),
-      amount: payload.amount,
-      note: payload.note,
-      date: payload.date,
-    });
-  }
-
-  const data = {
-    ...payload,
-    client_id: String(office.id),
-    client_type: 'office',
-    client_name: office.name || '',
-  };
-
-  return FinancialService.createClientBalanceEntry(username, data);
-}
-
 const OfficesService = Object.freeze({
   createOffices,
   updateOffice,
@@ -569,9 +481,6 @@ const OfficesService = Object.freeze({
   updateHamolaRow,
   deleteHamolaRow,
   getOfficeFinancialSummary,
-  getOfficeLedger,
-  depositToOffice,
-  adjustOfficeBalance,
   _getCachedHamola,
 });
 
@@ -595,11 +504,6 @@ const OfficesModule = Object.freeze({
   updateOffice: (id, patch) => OfficesService.updateOffice(_moduleSessionUsername(), id, patch),
   deleteOffice: (id) => OfficesService.deleteOffice(_moduleSessionUsername(), id),
   getOfficeDetails: (id) => OfficesService.getOfficeById(id, _moduleSessionUsername()),
-  getOfficeLedger: (office_id) => OfficesService.getOfficeLedger(_moduleSessionUsername(), office_id),
-  adjustOfficeBalance: (office_id, payload) =>
-    OfficesService.adjustOfficeBalance(_moduleSessionUsername(), office_id, payload),
-  depositToOffice: (office_id, payload) =>
-    OfficesService.depositToOffice(_moduleSessionUsername(), office_id, payload),
   addHamolaRow: (office_id, row) =>
     OfficesService.addHamolaRow(_moduleSessionUsername(), office_id, row),
   updateHamolaRow: (office_id, row_id, patch) =>
@@ -619,7 +523,7 @@ const OfficesModule = Object.freeze({
 let _searchQuery = '';
 let _editingOfficeId = null;
 let _editingOfficeDraft = null;
-let _activeDetailsTab = 'balance';
+let _activeDetailsTab = 'hamola';
 let _detailsOfficeId = null;
 let _officeCardsSearchQuery = '';
 let _officeCardsCache = [];
@@ -637,10 +541,6 @@ function _requireSession() {
 
 function _fmt(n) {
   return Money.fmt(n);
-}
-
-function _balanceClass(value) {
-  return Number(value) < 0 ? 'balance-negative' : 'balance-positive';
 }
 
 function _text(value) {
@@ -663,7 +563,7 @@ function _renderListShell() {
       </div>
 
       <!-- بطاقات الملخص -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
         <div style="background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:12px;padding:16px;color:#fff;">
           <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">عدد الشركات</p>
           <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalCount">0</p>
@@ -671,10 +571,6 @@ function _renderListShell() {
         <div style="background:linear-gradient(135deg,#10b981,#059669);border-radius:12px;padding:16px;color:#fff;">
           <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي الوزن</p>
           <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalWeight">0.00</p>
-        </div>
-        <div style="background:linear-gradient(135deg,#f97316,#ea580c);border-radius:12px;padding:16px;color:#fff;">
-          <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي الرصيد</p>
-          <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalBalance">0.00</p>
         </div>
       </div>
 
@@ -694,7 +590,6 @@ function _renderListShell() {
               <th style="color:#fff;">اسم الشركة</th>
               <th style="color:#fff;">رقم الهاتف</th>
               <th style="color:#fff;">إجمالي الوزن</th>
-              <th style="color:#fff;">الرصيد</th>
               <th style="color:#fff;">إجراءات</th>
             </tr>
           </thead>
@@ -794,7 +689,6 @@ function _renderDetailsShell(office) {
 
       <!-- التبويبات -->
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
-        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد الشركة</button>
         <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
         <button type="button" data-tab="cards" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'cards' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'cards' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'cards' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'cards' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">📋 الكارتات</button>
       </div>
@@ -806,12 +700,6 @@ function _renderDetailsShell(office) {
   if (!document.getElementById('hamolaModal')) {
     const modal = document.createElement('div');
     modal.innerHTML = _renderHamolaModal();
-    document.body.appendChild(modal.firstElementChild);
-  }
-
-  if (!document.getElementById('officeDepositModal')) {
-    const modal = document.createElement('div');
-    modal.innerHTML = _renderOfficeDepositModal();
     document.body.appendChild(modal.firstElementChild);
   }
 }
@@ -853,112 +741,6 @@ function _renderHamolaModal() {
         </div>
         <div id="hamolaModalMsg" class="field-msg-inline field-msg-inline--error" role="alert" aria-live="polite"></div>
       </div>
-    </div>
-  `;
-}
-
-function _renderOfficeDepositModal() {
-  return `
-    <div id="officeDepositModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold">إيداع رصيد</h3>
-          <button type="button" data-action="office-deposit-close" class="btn btn-secondary btn-sm">إغلاق</button>
-        </div>
-
-        <div class="grid grid-cols-1 gap-3 mb-4">
-          <div>
-            <label class="label mb-1" for="officeDepositAmount">المبلغ</label>
-            <input id="officeDepositAmount" type="number" step="0.01" min="0" class="input input-sm" />
-          </div>
-          <div>
-            <label class="label mb-1" for="officeDepositNote">ملاحظة</label>
-            <input id="officeDepositNote" type="text" class="input input-sm" />
-          </div>
-        </div>
-
-        <div class="flex gap-2">
-          <button type="button" data-action="office-deposit-save" class="btn btn-primary btn-sm">حفظ</button>
-        </div>
-        <div id="officeDepositMsg" class="field-msg-inline field-msg-inline--error" role="alert" aria-live="polite"></div>
-      </div>
-    </div>
-  `;
-}
-
-function _renderOfficeBalance(entries) {
-  function entryDate(entry) {
-    return entry.date || entry.applied_at || entry.created_at || '';
-  }
-
-  function entryTypeLabel(entry) {
-    if (entry.type === 'OFFICE_DEPOSIT' || entry.type === 'deposit') return 'إيداع';
-    if (entry.type === 'OFFICE_WITHDRAW_AUTO' || entry.type === 'withdraw') return 'سحب';
-    return _text(entry.type || '');
-  }
-
-  function entryDelta(entry) {
-    const amount = Number(entry.amount) || 0;
-    if (entry.type === 'OFFICE_DEPOSIT' || entry.type === 'OFFICE_WITHDRAW_AUTO') return amount;
-    if (entry.type === 'deposit') return Math.abs(amount);
-    if (entry.type === 'withdraw') return -Math.abs(amount);
-    return amount;
-  }
-
-  const sorted = entries.slice().sort((a, b) => {
-    const da = new Date(entryDate(a) || 0).getTime();
-    const db = new Date(entryDate(b) || 0).getTime();
-    return da - db;
-  });
-
-  let running = 0;
-  const withBalance = sorted.map((entry) => {
-    const delta = entryDelta(entry);
-    running += delta;
-    return { entry, delta, balance: running };
-  });
-
-  const currentBalance = withBalance.length
-    ? withBalance[withBalance.length - 1].balance
-    : 0;
-  const currentClass = _balanceClass(currentBalance);
-
-  const displayRows = withBalance.slice().reverse();
-  const rows = displayRows.length
-    ? displayRows.map(({ entry, delta, balance }) => `
-      <tr>
-        <td>${_text(entryDate(entry))}</td>
-        <td>${entryTypeLabel(entry)}</td>
-        <td>${delta < 0 ? '-' : ''}${_fmt(Math.abs(delta))}</td>
-        <td>${_fmt(balance)}</td>
-        <td>${_text(entry.reference_number || entry.reference_id || '-')}</td>
-      </tr>
-    `).join('')
-    : `<tr><td colspan="5" class="text-center text-muted p-4">لا توجد حركات</td></tr>`;
-
-  return `
-    <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;">
-      <div>
-        <p class="text-muted text-xs mb-1">الرصيد الحالي</p>
-        <p class="text-2xl font-bold ${currentClass}">${_fmt(currentBalance)}</p>
-      </div>
-      <div class="flex gap-2">
-        <button type="button" data-action="office-deposit-open" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع / سحب</button>
-      </div>
-    </div>
-    <div class="table-wrapper">
-      <table class="table">
-        <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
-          <tr>
-            <th style="color:#fff;">التاريخ</th>
-            <th style="color:#fff;">النوع</th>
-            <th style="color:#fff;">المبلغ</th>
-            <th style="color:#fff;">الرصيد بعد العملية</th>
-            <th style="color:#fff;">المرجع</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
     </div>
   `;
 }
@@ -1020,8 +802,6 @@ async function loadOffices() {
   const totalWeightEl = document.getElementById('officeTotalWeight');
 
   if (totalCountEl) totalCountEl.textContent = String(summary.total_offices || 0);
-  const totalBalanceEl = document.getElementById("officeTotalBalance");
-  if (totalBalanceEl) totalBalanceEl.textContent = _fmt(summary.rows.reduce((s, r) => s + (r.balance || 0), 0));
   if (totalWeightEl) totalWeightEl.textContent = _fmt(summary.total_weight);
 
   const tbody = document.getElementById('officesTableBody');
@@ -1056,7 +836,6 @@ async function loadOffices() {
           }
         </td>
         <td style="color:#374151;">${_fmt(item.weight)}</td>
-        <td class="${Number(item.balance) < 0 ? 'balance-negative' : ''}" style="font-weight:700;">${_fmt(item.balance)}</td>
         <td>
           ${isEditing
             ? `
@@ -1071,7 +850,7 @@ async function loadOffices() {
         </td>
       </tr>
     `;
-  }).join('') || `<tr><td colspan="5" class="text-center text-muted p-6">
+  }).join('') || `<tr><td colspan="4" class="text-center text-muted p-6">
     <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:24px;">
       <div style="width:64px;height:64px;background:#e2e8f0;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2rem;">🏢</div>
       <p style="font-weight:700;color:#64748b;margin:0;">لا يوجد شركات</p>
@@ -1261,12 +1040,6 @@ async function _renderDetailsContent(office) {
   const content = document.getElementById('officeDetailsContent');
   if (!content) return;
 
-  if (_activeDetailsTab === 'balance') {
-    const ledger = await OfficesModule.getOfficeLedger(office.id);
-    content.innerHTML = _renderOfficeBalance(ledger || []);
-    return;
-  }
-
   if (_activeDetailsTab === 'hamola') {
     content.innerHTML = _renderHamolaTable(office.hamolaRows || []);
   }
@@ -1318,75 +1091,6 @@ function _openHamolaModal(title, row = null) {
 
 function _closeHamolaModal() {
   document.getElementById('hamolaModal')?.classList.add('hidden');
-}
-
-function _openOfficeDepositModal() {
-  const modal = document.getElementById('officeDepositModal');
-  const msg = document.getElementById('officeDepositMsg');
-  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
-  const amountEl = document.getElementById('officeDepositAmount');
-  const noteEl = document.getElementById('officeDepositNote');
-  if (amountEl) amountEl.value = '';
-  if (noteEl) noteEl.value = '';
-  modal?.classList.remove('hidden');
-}
-
-function _closeOfficeDepositModal() {
-  document.getElementById('officeDepositModal')?.classList.add('hidden');
-}
-
-async function _saveOfficeDeposit() {
-  const msg = document.getElementById('officeDepositMsg');
-  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
-
-  const amountVal = parseFloat(document.getElementById('officeDepositAmount')?.value) || 0;
-  const note = document.getElementById('officeDepositNote')?.value || '';
-
-  if (!_detailsOfficeId) {
-    if (msg) {
-      msg.textContent = 'لا توجد شركة محددة';
-      msg.classList.add('is-visible');
-    }
-    return;
-  }
-
-  if (amountVal <= 0) {
-    if (msg) {
-      msg.textContent = 'المبلغ مطلوب ويجب أن يكون أكبر من صفر';
-      msg.classList.add('is-visible');
-    }
-    return;
-  }
-
-  try {
-    const depositFn = typeof OfficesModule.depositToOffice === 'function'
-      ? OfficesModule.depositToOffice
-      : OfficesModule.adjustOfficeBalance;
-
-    if (typeof depositFn !== 'function') {
-      throw new Error('Office deposit handler is not available');
-    }
-
-    await depositFn(_detailsOfficeId, {
-      amount: amountVal,
-      note: note.trim() || null,
-      date: DateUtils.todayLocal(),
-      type: 'deposit',
-      client_id: _detailsOfficeId,
-      client_type: 'office',
-      entity_id: _detailsOfficeId,
-      entity_type: 'office',
-    });
-
-    _closeOfficeDepositModal();
-    const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
-    await _renderDetailsContent(office);
-  } catch (err) {
-    if (msg) {
-      msg.textContent = err.message || 'حدث خطأ أثناء الإيداع';
-      msg.classList.add('is-visible');
-    }
-  }
 }
 
 async function _saveHamolaRow() {
@@ -1519,30 +1223,13 @@ function attachOfficesPageListeners() {
     }
 
     if (target.closest('[data-action="office-back"]')) {
-      _activeDetailsTab = 'balance';
+      _activeDetailsTab = 'hamola';
       _detailsOfficeId = null;
       _officeCardsSearchQuery = '';
       _officeCardsCache = [];
       if (typeof window.showPage === 'function') await window.showPage('officesPage');
       return;
     }
-
-    if (target.closest('[data-action="office-deposit-open"]')) {
-      _openOfficeDepositModal();
-      return;
-    }
-
-    if (target.closest('[data-action="office-deposit-close"]')) {
-      _closeOfficeDepositModal();
-      return;
-    }
-
-    if (target.closest('[data-action="office-deposit-save"]')) {
-      await _saveOfficeDeposit();
-      return;
-    }
-
-
 
     if (target.closest('[data-action="office-print"]')) {
       if (_detailsOfficeId) {

@@ -22,7 +22,6 @@
 
 import { DB } from './database.js';
 import { ClientRepository } from './services/clientRepository.js';
-import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 // Blocker fix (step 6): WriteDataSource is used at createReceipt/updateReceipt/deleteReceipt
 // but was never imported → ReferenceError on every receipt save.
@@ -42,10 +41,6 @@ const STORE = Object.freeze({
 });
 
 const ACCOUNT_TYPES = Object.freeze(['cash', 'bank', 'vodafone', 'none']);
-const OFFICE_LEDGER_TYPES = Object.freeze({
-  DEPOSIT       : 'OFFICE_DEPOSIT',
-  WITHDRAW_AUTO : 'OFFICE_WITHDRAW_AUTO',
-});
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
 
@@ -831,167 +826,6 @@ async function getDriverBalance(driver_id) {
   };
 }
 
-async function getClientLedger(client_id) {
-  return _fetchLedgerEntries(client_id, 'client_id');
-}
-
-async function getClientBalance(client_id) {
-  const ledger = await getClientLedger(client_id);
-  let deposit_total = 0;
-  let withdraw_total = 0;
-
-  for (const entry of ledger) {
-    // entry.amount is already decimal (from decimalizeRecord)
-    // convert back to cents for safe integer arithmetic
-    const cents = Money.toCents(entry.amount);
-    const isOfficeEntry = entry.entity_type === 'office'
-      || entry.type === OFFICE_LEDGER_TYPES.DEPOSIT
-      || entry.type === OFFICE_LEDGER_TYPES.WITHDRAW_AUTO;
-
-    if (isOfficeEntry) {
-      if (cents >= 0) deposit_total += cents;
-      else withdraw_total += Math.abs(cents);
-      continue;
-    }
-
-    if (entry.type === 'deposit') deposit_total += cents;
-    if (entry.type === 'withdraw') withdraw_total += cents;
-  }
-
-  return {
-    client_id: String(client_id),
-    balance: Money.toDecimal(deposit_total - withdraw_total),
-    deposit_total: Money.toDecimal(deposit_total),
-    withdraw_total: Money.toDecimal(withdraw_total),
-    entry_count: ledger.length,
-    last_transaction_date: ledger[0]?.date || ledger[0]?.applied_at || ledger[0]?.created_at || null,
-  };
-}
-
-async function createClientBalanceEntry(username, data) {
-  if (!username) throw new Error('[FinancialService:createClientBalanceEntry] username is required.');
-  if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createClientBalanceEntry] data must be a plain object.');
-  }
-
-  const client_id = data.client_id != null
-    ? String(data.client_id).trim()
-    : (data.entity_id != null ? String(data.entity_id).trim() : (data.office_id != null ? String(data.office_id).trim() : ''));
-  let client_type = data.client_type;
-  if (client_type !== 'owner' && client_type !== 'office') {
-    if (data.entity_type === 'office' || data.office_id) client_type = 'office';
-    else if (data.entity_type === 'owner') client_type = 'owner';
-  }
-  client_type = client_type === 'owner' || client_type === 'office'
-    ? client_type
-    : '';
-  const client_name = typeof data.client_name === 'string' ? data.client_name.trim() : '';
-  const type = data.type === 'deposit' || data.type === 'withdraw' ? data.type : '';
-  const amount = Money.toCents(data.amount);
-  const date = data.date;
-  const note = typeof data.note === 'string' && data.note.trim()
-    ? data.note.trim()
-    : (type === 'deposit' ? 'إيداع رصيد' : 'سحب رصيد');
-
-  if (!client_id) throw new Error('[FinancialService:createClientBalanceEntry] client_id is required.');
-  if (!client_type) throw new Error('[FinancialService:createClientBalanceEntry] client_type must be owner or office.');
-  if (!type) throw new Error('[FinancialService:createClientBalanceEntry] type must be deposit or withdraw.');
-  if (amount <= 0) throw new Error('[FinancialService:createClientBalanceEntry] amount must be greater than zero.');
-  if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createClientBalanceEntry] date must be a valid ISO date string.');
-  }
-
-  const referenceId = _uuid();
-  const [entry] = await DB.transaction([{
-    op: 'add',
-    store: STORE.LEDGER,
-    payload: {
-      username,
-      owner_id: client_id,
-      owner_name: client_name || null,
-      client_id,
-      client_type,
-      client_name: client_name || null,
-      vehicle_id: null,
-      vehicle_plate: null,
-      type,
-      amount,
-      entity_type: client_type,
-      entity_id: client_id,
-      reference_type: 'client_balance',
-      reference_id: referenceId,
-      date,
-      applied_at: DateUtils.nowLocal(),
-      is_reversed: false,
-      note,
-    },
-  }], { username });
-
-  return Money.decimalizeRecord(entry);
-}
-
-async function createOfficeDeposit(username, data) {
-  if (!username) throw new Error('[FinancialService:createOfficeDeposit] username is required.');
-  if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createOfficeDeposit] data must be a plain object.');
-  }
-
-  const office_id = String(data.office_id || data.entity_id || data.client_id || '').trim();
-  if (!office_id) throw new Error('[FinancialService:createOfficeDeposit] office_id is required.');
-
-  const amount = Money.toCents(data.amount);
-  if (amount <= 0) throw new Error('[FinancialService:createOfficeDeposit] amount must be greater than zero.');
-
-  const date = data.date || DateUtils.todayLocal();
-  if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createOfficeDeposit] date must be a valid ISO date string.');
-  }
-
-  const note = typeof data.note === 'string' && data.note.trim()
-    ? data.note.trim()
-    : 'إيداع رصيد';
-
-  const referenceId = _uuid();
-  const [entry] = await DB.transaction(async (tx) => {
-    const office = await OfficeRepository.getById(office_id, { tx });
-    if (!office || office.deleted_at !== null) {
-      throw new Error('[FinancialService:createOfficeDeposit] office not found.');
-    }
-    if (office.username !== username) {
-      throw new Error('[FinancialService:createOfficeDeposit] cross-user access is forbidden.');
-    }
-
-    return tx.runOps([{
-      op: 'add',
-      store: STORE.LEDGER,
-      payload: {
-        username,
-        owner_id: String(office.id),
-        owner_name: office.name || null,
-        client_id: String(office.id),
-        client_type: 'office',
-        client_name: office.name || null,
-        vehicle_owner_id: null,
-        vehicle_owner_name: null,
-        vehicle_id: null,
-        vehicle_plate: null,
-        type: OFFICE_LEDGER_TYPES.DEPOSIT,
-        amount,
-        entity_type: 'office',
-        entity_id: String(office.id),
-        reference_type: 'office_deposit',
-        reference_id: referenceId,
-        date,
-        applied_at: DateUtils.nowLocal(),
-        is_reversed: false,
-        note,
-      },
-    }]);
-  }, { username, stores: [STORE.OFFICES, STORE.LEDGER] });
-
-  return Money.decimalizeRecord(entry);
-}
-
 // ─── EXPORT ────────────────────────────────────────────────────────────────────
 
 
@@ -1369,18 +1203,14 @@ export const FinancialService = Object.freeze({
   deleteReceipt,
   rebuildVehicleBalance,
   rebuildTreasuryBalance,
-  getClientBalance,
-  getClientLedger,
   getDriverBalance,
   getDriverLedger,
-  createClientBalanceEntry,
   createDriverDeposit,
   updateDriverDeposit,
   deleteDriverDeposit,
   createDriverSalfa,
   updateDriverSalfa,
   deleteDriverSalfa,
-  createOfficeDeposit,
   resolveHamolaPrice,
   getDriverKartas,
   getDriverUnpaidKartas,

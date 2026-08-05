@@ -46,11 +46,6 @@
  *            the early-returns.  `finally` block handles this correctly
  *            already — verified. No issue.
  *
- *   ISSUE-9: editEntry() updates the treasury entry but NOT the
- *            corresponding vehicle_ledger entry for salfa.  If amount
- *            changes, the ledger is now stale.
- *            FIX: editEntry() for salfa now also patches the ledger entry
- *                 amount inside the same atomic operation.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -118,11 +113,6 @@ const CLIENT_TYPE = Object.freeze({
   OFFICE : 'office',
 });
 
-const LEDGER_ENTRY_TYPE = Object.freeze({
-  DEPOSIT         : 'deposit',
-  WITHDRAW        : 'withdraw',
-});
-
 const DOMAIN_EVENT = Object.freeze({
   TREASURY_CHANGED : 'treasury:changed',
   RECEIPTS_CHANGED : 'receipts:changed',
@@ -134,7 +124,6 @@ const DOMAIN_EVENT = Object.freeze({
 
 const STORE = Object.freeze({
   TREASURY: 'treasury',
-  LEDGER  : 'vehicle_ledger',
 });
 
 // Short alias for readability
@@ -145,9 +134,9 @@ function _uuid() {
 }
 
 /**
- * Normalize a treasury/ledger entry ID to the correct IndexedDB key type.
+ * Normalize a treasury entry ID to the correct IndexedDB key type.
  *
- * Treasury and vehicle_ledger stores use autoIncrement: true, which means
+ * The treasury store uses autoIncrement: true, which means
  * IndexedDB generates INTEGER keys (1, 2, 3...).  IDBObjectStore.get()
  * uses strict type matching — get("3") !== get(3).
  *
@@ -289,32 +278,6 @@ async function createSalfa(username, { client_id, client_type, client_name, amou
     },
   ];
 
-  // Entity ledger: withdraw from client balance (only if registered client)
-  if (client_id && client_type === CLIENT_TYPE.OWNER) {
-    ops.push({
-      op: 'add',
-      store: STORE.LEDGER,
-      payload: {
-        username,
-        owner_id: String(client_id),
-        owner_name: client_name || null,
-        client_id: String(client_id),
-        client_type: client_type,
-        client_name: client_name || null,
-        vehicle_id: null,
-        vehicle_plate: null,
-        type: LEDGER_ENTRY_TYPE.WITHDRAW,
-        amount: cents,
-        reference_type: REFERENCE_TYPE.SALFA,
-        reference_id: refId,
-        date: isoDate,
-        applied_at: now,
-        is_reversed: false,
-        note: `سلفة — ${noteText}`,
-      },
-    });
-  }
-
   const results = await DBProvider.transaction(ops, { username });
 
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.TREASURY_CHANGED));
@@ -364,11 +327,6 @@ async function createExpense(username, { subtype, description, employee_name, am
 
 /**
  * Edit a treasury entry (تعديل حركة)
- *
- * STABILIZATION NOTE (ISSUE-9):
- *   For salfa entries with a client_id, the corresponding vehicle_ledger
- *   entry's amount is patched atomically in the same transaction — ledger
- *   and treasury stay in sync.
  */
 async function editEntry(username, entryId, patch) {
   if (!username) throw new Error('[Treasury] username required');
@@ -393,25 +351,9 @@ async function editEntry(username, entryId, patch) {
   if (patch.client_name !== undefined) updates.client_name = String(patch.client_name || '').trim() || null;
   if (patch.employee_name !== undefined) updates.employee_name = String(patch.employee_name || '').trim() || null;
 
-  // ── Atomic operation: patch treasury + ledger together ──
   const ops = [
     { op: 'update', store: STORE.TREASURY, id: entryId, patch: updates },
   ];
-
-  // ISSUE-9 FIX: If this is a salfa with a ledger entry and amount is changing,
-  // patch the ledger entry too so treasury ↔ ledger stay in sync.
-  const isSalfaWithClient = existing.effect === EFFECTS.SALFA && existing.reference_id && existing.client_id;
-  if (isSalfaWithClient && updates.amount !== undefined) {
-    const ledgerEntries = await DBProvider.getByIndex(STORE.LEDGER, 'by_reference_id', existing.reference_id);
-    for (const le of ledgerEntries) {
-      if (le.is_reversed === true) continue;
-      if (le.reference_type !== REFERENCE_TYPE.SALFA) continue;
-      const ledgerPatch = { amount: updates.amount };
-      if (updates.date !== undefined) ledgerPatch.date = updates.date;
-      if (updates.note !== undefined) ledgerPatch.note = `سلفة — ${updates.note || ''}`;
-      ops.push({ op: 'update', store: STORE.LEDGER, id: le.id, patch: ledgerPatch });
-    }
-  }
 
   await DBProvider.transaction(ops, { username });
   const updated = await TreasuryRepository.getById(entryId);
@@ -422,9 +364,6 @@ async function editEntry(username, entryId, patch) {
 
 /**
  * Delete (reverse) a treasury entry (حذف / عكس حركة)
- *
- * For salfa entries with a client_id, the linked vehicle_ledger entry is
- * reversed in the same transaction.
  */
 async function deleteEntry(username, entryId) {
   if (!username) throw new Error('[Treasury] username required');
@@ -449,22 +388,6 @@ async function deleteEntry(username, entryId) {
       patch: { is_reversed: true, reversed_at: now, reversed_by: username },
     },
   ];
-
-  // If this was a salfa with a ledger entry, reverse that too
-  const isSalfaWithClient = existing.effect === EFFECTS.SALFA && existing.reference_id && existing.client_id;
-  if (isSalfaWithClient) {
-    const ledgerEntries = await DBProvider.getByIndex(STORE.LEDGER, 'by_reference_id', existing.reference_id);
-    for (const le of ledgerEntries) {
-      if (le.is_reversed === true) continue;
-      if (le.reference_type !== REFERENCE_TYPE.SALFA) continue;
-      ops.push({
-        op: 'update',
-        store: STORE.LEDGER,
-        id: le.id,
-        patch: { is_reversed: true, reversed_at: now, reversed_by: username },
-      });
-    }
-  }
 
   await DBProvider.transaction(ops, { username });
 

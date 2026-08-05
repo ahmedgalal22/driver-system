@@ -185,7 +185,7 @@ function _persistedRowToOfficeShape(row) {
 function _officeSummaryLoop(filteredReceipts, rowsProjection, nameMap, officeList) {
   const summary = new Map();
   for (const office of officeList) {
-    summary.set(String(office.id), { office, net: 0, weight: 0, balance: 0 });
+    summary.set(String(office.id), { office, net: 0, weight: 0 });
   }
   for (const receipt of filteredReceipts) {
     const rows = rowsProjection.get(String(receipt.id)) || [];
@@ -303,7 +303,7 @@ ok(offSrc.includes('item.net += shape.net;') && offSrc.includes('_rowId: row.row
   'extraction-bound: summary/cards/shape markers present verbatim in offices.js');
 
 // ─── GROUP 5: ledger-header reroute equivalence (offices.js:445 → ReceiptRepository.getById) ──
-console.log('\n— GROUP 5: getOfficeLedger header reroute —');
+console.log('\n— GROUP 5: receipt header read-path (ReceiptRepository.getById) —');
 ok(!!headerR1 && headerR1.id === R1, 'ReceiptRepository.getById returns live header (same DB.getById chain as before)');
 ok(headerR1.receipt_number === '1001', 'header.receipt_number persisted (Phase 5 — Step 2) → reference_number source restored');
 ok((await ReceiptRepository.getById(R2)) === null, 'getById of soft-deleted receipt → null (semantics preserved)');

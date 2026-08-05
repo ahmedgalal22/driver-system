@@ -272,8 +272,6 @@ function _dateLabel(value) {
 function _ledgerType(type) {
   if (type === 'deposit') return 'إضافة';
   if (type === 'withdraw') return 'سداد';
-  if (type === 'OFFICE_DEPOSIT') return 'إيداع شركة';
-  if (type === 'OFFICE_WITHDRAW_AUTO') return 'سحب شركة';
   return type || '-';
 }
 
@@ -286,9 +284,6 @@ function _ledgerNote(entry) {
   if (refType === 'salfa') {
     return note || 'سلفة';
   }
-  // Office entries
-  if (type === 'OFFICE_DEPOSIT') return note || 'إيداع شركة';
-  if (type === 'OFFICE_WITHDRAW_AUTO') return note || 'سحب شركة';
   // Generic
   if (note) return note;
   return _ledgerType(type);
