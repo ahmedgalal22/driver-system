@@ -220,7 +220,7 @@ function _persistedRowToUiShape(row, driverName = '') {
   return {
     kartano     : row.kartano ?? '',
     date        : row.date    ?? '',
-    driver_id   : row.driver_id ?? null,               // row's driver select value (authoritative link)
+    driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)
     data        : row.driver_name || driverName || '', // persisted display denorm; driver_id map = fallback
     car         : row.vehicle_plate || '',
     weight      : row.weight  ?? '',
@@ -806,6 +806,7 @@ function renderMetaFields() {
             autocomplete="off">
           <datalist id="clientsList"></datalist>
           <datalist id="officesList"></datalist>
+          <datalist id="receiptDriversList"></datalist>
         </div>
       </div>
       <div>
@@ -1196,7 +1197,7 @@ async function loadOwnersList() {
 
 // ─── RECEIPT: CAR → DRIVER LINKING — REMOVED (Phase 6 — driver per receipt row).
 // Vehicles have no permanent driver; a plate must never auto-fill the row's
-// driver. The driver is chosen explicitly per row via the row's driver select.
+// driver. The driver is chosen explicitly per row via the row's driver autocomplete.
 
 async function _receiptPopulateClientVehicles() {
   const client = _selectedClient();
@@ -1267,46 +1268,45 @@ async function loadOfficesForReceipt() {
   if (dl) dl.innerHTML = offices.map(o => `<option value="${o.name}">`).join('');
 }
 
-// ─── RECEIPT: PER-ROW DRIVER SELECT (Receipt Row → Driver) ───────────────────
+// ─── RECEIPT: PER-ROW DRIVER AUTOCOMPLETE (Receipt Row → Driver) ─────────────
 // The driver relationship lives on each receipt row (receipt_rows.driver_id).
 // Vehicles have NO permanent driver. Ids are the only relationship key; the
 // driver name is resolved id → name (display denorm), never name → id.
+// UI: a shared <datalist id="receiptDriversList"> holds one option per driver
+// (option value = driver NAME); each row's .receipt-data input types/filters
+// names natively. Selection is committed exactly like the old <select>: only a
+// listed driver or «no driver» can ever be persisted (enforced at save).
 
-const _RECEIPT_NO_DRIVER_OPTION = '<option value="">— بدون سائق —</option>';
-let _receiptDriverOptionsCache = _RECEIPT_NO_DRIVER_OPTION;
+let _receiptDriversCache = []; // [{ id, name }] — refreshed at page boot
 
 async function _receiptLoadDriverOptions() {
   const username = _currentUsername();
   if (!username) return;
-  const drivers = (await ClientRepository.getDriversForUser(username))
-    .filter(d => d && d.deleted_at == null);
-  _receiptDriverOptionsCache = _RECEIPT_NO_DRIVER_OPTION
-    + drivers.map(d => `<option value="${d.id}">${String(d.name || '').replace(/</g, '&lt;')}</option>`).join('');
+  _receiptDriversCache = (await ClientRepository.getDriversForUser(username))
+    .filter(d => d && d.deleted_at == null)
+    .map(d => ({ id: String(d.id), name: String(d.name || '') }));
+  const dl = document.getElementById('receiptDriversList');
+  if (dl) {
+    dl.innerHTML = _receiptDriversCache
+      .map(d => `<option value="${d.name.replace(/</g, '&lt;')}">`)
+      .join('');
+  }
 }
 
-/** Fill one row's driver select from the cached options (preserves selection). */
-function _receiptApplyDriverOptions(tr) {
-  const sel = tr?.querySelector('.receipt-data');
-  if (!sel) return;
-  const prev = sel.value;
-  sel.innerHTML = _receiptDriverOptionsCache;
-  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
-}
-
-/** Reload options from the drivers store and refill every row's driver select. */
+/** Reload drivers from the store into the shared datalist; drop stale row picks. */
 async function _receiptRefreshDriverSelects() {
   await _receiptLoadDriverOptions();
-  document.querySelectorAll('#receiptTableBody .receipt-data').forEach(sel => {
-    const prev = sel.value;
-    sel.innerHTML = _receiptDriverOptionsCache;
-    if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  const names = new Set(_receiptDriversCache.map(d => d.name.trim()));
+  document.querySelectorAll('#receiptTableBody .receipt-data').forEach(el => {
+    // Mirrors the old select behavior: a driver deleted from the store can no
+    // longer stay selected — the row falls back to «— بدون سائق —».
+    if (el.value.trim() && !names.has(el.value.trim())) el.value = '';
   });
 }
 
-/** Display name of the driver selected on a form row ('' when none selected). */
+/** Display name of the driver picked on a form row ('' when none picked). */
 function _receiptRowDriverName(tr) {
-  const sel = tr?.querySelector('.receipt-data');
-  return sel && sel.value ? (sel.selectedOptions[0]?.textContent || '') : '';
+  return tr?.querySelector('.receipt-data')?.value || '';
 }
 
 // ─── ROW TEMPLATE (from COL_DEFS) ────────────────────────────────────────────
@@ -1373,15 +1373,16 @@ function _buildRowHTML() {
     // owner column removed — warning moved to car column
 
     if (col.key === 'data') {
-      // Driver is selected PER RECEIPT ROW (Receipt Row → driver_id), not from
-      // the vehicle. Options are injected from the drivers store by
-      // _receiptApplyDriverOptions / _receiptRefreshDriverSelects.
+      // Driver is picked PER RECEIPT ROW (Receipt Row → driver_id) via a
+      // searchable autocomplete: the input types/filters the driver NAME
+      // (native <datalist> substring filtering); the id link is resolved from
+      // the drivers store at save time (name → id on an exact match).
       return `
         <td class="px-1 py-1 text-center${printClass}">
-          <select
-            class="${col.cls} w-full px-1 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none">
-            <option value="">— بدون سائق —</option>
-          </select>
+          <input type="text" list="receiptDriversList"
+            class="${col.cls} w-full px-1 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none"
+            placeholder="— بدون سائق —"
+            autocomplete="off">
         </td>`;
     }
 
@@ -1434,10 +1435,9 @@ function addReceiptRow(count = 1) {
     fillFromPreviousRow(newRow);
     attachKeyboardNav(newRow);
     attachInputRestrictions(newRow);
-    // Apply client's vehicle datalist + driver select options to new row
+    // Apply client's vehicle datalist to the new row (driver datalist is shared)
     const clientCarsDL = document.getElementById('receiptClientCarsDL');
     if (clientCarsDL) newRow.querySelector('.receipt-car')?.setAttribute('list', 'receiptClientCarsDL');
-    _receiptApplyDriverOptions(newRow);
   }
   ensureReceiptArrowRow();
   updateRowNumbers();
@@ -1463,7 +1463,6 @@ function addRowAfter(refRow) {
   attachRowCalculation(newRow);
   attachKeyboardNav(newRow);
   attachInputRestrictions(newRow);
-  _receiptApplyDriverOptions(newRow);
   ensureReceiptArrowRow();
   updateRowNumbers();
 
@@ -2138,7 +2137,7 @@ async function collectReceiptRows() {
   const rows        = document.querySelectorAll('#receiptTableBody tr');
   const receiptRows = [];
   const owners = await OwnersModule.getAllOwners();
-  let driverNameById = null; // lazy id → name map (drivers store), loaded on first selected driver
+  let driverNameById = null; // lazy (trimmed) name → driver record map (drivers store), loaded on first non-empty pick
 
   for (const row of rows) {
     if (row.id === 'receiptFillArrowRow') continue;
@@ -2166,20 +2165,29 @@ async function collectReceiptRows() {
     if (!vehicle?.owner_id) {
       throw new Error('يجب أن تكون كل مركبة مرتبطة بمالك مركبة مسجل');
     }
-    // Driver comes from THIS ROW's select (Receipt Row → Driver), never from the
-    // vehicle. driver_id is the authoritative key; driver_name is a display
-    // denorm resolved from the driver record (id → name direction only).
-    // Vehicles are never written with any driver attribute.
-    const rowDriverId = normalizeOptionalString(_field(row, 'receipt-data')); // select value = driver id
+    // Driver comes from THIS ROW's autocomplete input (Receipt Row → Driver),
+    // never from the vehicle. The input types/filters the driver NAME; the
+    // authoritative id is resolved here from the drivers store (exact name →
+    // id), and driver_name is denormalized from that record (id → name). This
+    // enforces the exact set the old <select> could submit: a listed driver or
+    // «no driver» — non-listed text is rejected. Vehicles are never written
+    // with any driver attribute.
+    const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));
+    let rowDriverId = null;
     let rowDriverName = null;
-    if (rowDriverId) {
+    if (rowDriverText) {
       if (!driverNameById) {
         driverNameById = new Map();
         const ds = (await ClientRepository.getDriversForUser(_currentUsername()))
           .filter(d => d && d.deleted_at == null);
-        ds.forEach(d => driverNameById.set(String(d.id), d.name || null));
+        ds.forEach(d => driverNameById.set(String(d.name || '').trim(), d));
       }
-      rowDriverName = driverNameById.get(rowDriverId) ?? null;
+      const hit = driverNameById.get(rowDriverText);
+      if (!hit) {
+        throw new Error(`اسم السائق "${rowDriverText}" غير موجود في القائمة — اختر من القائمة أو اترك الحقل فارغًا`);
+      }
+      rowDriverId   = String(hit.id);
+      rowDriverName = hit.name || null;
     }
     let vehicleOwner = await OwnersModule.getOwnerById(String(vehicle.owner_id));
     if (!vehicleOwner) {
@@ -2712,8 +2720,8 @@ async function loadReceiptForEdit(receiptData) {
     } catch (_) { /* non-critical — name left blank */ }
   }));
 
-  // Load the per-row driver select options BEFORE restoring rows so each
-  // persisted driver_id can be re-selected on its row's select.
+  // Load the drivers datalist BEFORE restoring rows so each persisted
+  // driver_id can be resolved to its record name on the row's autocomplete.
   await _receiptLoadDriverOptions();
 
   // The persisted contract stores data rows only — separators are UI-local by
@@ -2730,7 +2738,6 @@ async function loadReceiptForEdit(receiptData) {
     const tr = document.createElement('tr');
     tr.innerHTML = _buildRowHTML();
     tbody.appendChild(tr);
-    _receiptApplyDriverOptions(tr); // options must exist before restoring the selection
 
     // Bridge persisted vocabulary (cents) → UI field values (decimals)
     const ui = _persistedRowToUiShape(rowData, driverNames.get(rowData.driver_id));
@@ -2738,7 +2745,9 @@ async function loadReceiptForEdit(receiptData) {
     const setF = (cls, val) => { const el = tr.querySelector('.' + cls); if (el) el.value = val ?? ''; };
     setF('receipt-kartano',       ui.kartano);
     setF('receipt-date',          ui.date);
-    setF('receipt-data',          ui.driver_id || ''); // driver select restores by persisted id (authoritative link)
+    // Driver: restore the NAME from the driver record (id → name, D3) — the
+    // same text the old select displayed; unknown/deleted id → «— بدون سائق —».
+    setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');
     // receipt-owner removed from table
     setF('receipt-car',           ui.car);
     setF('receipt-weight',        ui.weight);
@@ -2942,7 +2951,7 @@ function _handleReceiptExcelExport() {
     _type:        'data',
     kartano:       tr.querySelector('.receipt-kartano')?.value       ?? '',
     date:          tr.querySelector('.receipt-date')?.value          ?? '',
-    data:          _receiptRowDriverName(tr), // driver select: export display name, never the id
+    data:          _receiptRowDriverName(tr), // driver autocomplete: export display name, never the id
     car:           tr.querySelector('.receipt-car')?.value           ?? '',
     weight:        parseFloat(tr.querySelector('.receipt-weight')?.value)       || 0,
     weight2:       parseFloat(tr.querySelector('.receipt-weight2')?.value)      || 0,
@@ -2985,12 +2994,11 @@ function _handleReceiptExcelImport() {
         receiptRowCounter++;
         const tr = document.createElement('tr');
         tr.innerHTML = _buildRowHTML();
-        tbody.appendChild(tr);
-        tr.dataset.calcAttached = '1';
-        attachRowCalculation(tr);
-        attachKeyboardNav(tr);
-        attachInputRestrictions(tr);
-        _receiptApplyDriverOptions(tr);
+    tbody.appendChild(tr);
+    tr.dataset.calcAttached = '1';
+    attachRowCalculation(tr);
+    attachKeyboardNav(tr);
+    attachInputRestrictions(tr);
 
         // Fill values from imported data
         const setVal = (cls, val) => {
@@ -3001,7 +3009,7 @@ function _handleReceiptExcelImport() {
         setVal('receipt-kartano',       rowData.kartano      ?? '');
         setVal('receipt-date',          rowData.date         ?? '');
         // Driver NOT restored from Excel (D4): no name→id matching is allowed;
-        // the row's driver select stays unselected (driver_id = null).
+        // the row's driver autocomplete stays empty (driver_id = null).
         setVal('receipt-car',           rowData.car          ?? '');
         setVal('receipt-weight',        rowData.weight  !== 0 ? rowData.weight  : '');
         setVal('receipt-weight2',       rowData.weight2 !== 0 ? rowData.weight2 : '');

@@ -115,7 +115,7 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
 [
   ["kartano      : normalizeOptionalString(_field(row, 'receipt-kartano'))", 'collector maps kartano'],
   ["date         : normalizeOptionalString(_field(row, 'receipt-date'))", 'collector maps row date'],
-  ["const rowDriverId = normalizeOptionalString(_field(row, 'receipt-data')); // select value = driver id", 'collector reads the row driver SELECT value (id) — Phase 6: driver per receipt row'],
+  ["const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));", 'collector reads the row driver NAME text (autocomplete input) — exact name → id resolution at save'],
   ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
   ["driver_id    : rowDriverId || null, // authoritative relationship: THIS row → driver (no selected driver → null)", 'collector persists row.driver_id (Receipt Row → Driver; vehicle carries no driver)'],
   ["weight       : _num(row, 'receipt-weight')", 'collector maps weight'],
@@ -152,8 +152,8 @@ const FORM_PAYLOAD = {
   general_discount: 0,
   total: 0,
   rows: [
-    // Row A: driver selected on the row (id-keyed) — collector output shape after
-    // Phase 6 (driver per receipt row): driver_id = select value, driver_name =
+    // Row A: driver selected on the row (id-keyed) — collector output shape:
+    // driver_id resolved from the row autocomplete (exact name → id), driver_name =
     // display denorm resolved from the driver record (id → name, D3).
     { _type: 'data', owner_id: 'owner-1', owner_name: 'مالك الاختبار',
       kartano: 'K-100', date: '2026-07-29', data: 'السائق أحمد', driver_name: 'السائق أحمد', driver_id: 'drv-1',
@@ -192,7 +192,7 @@ ok(servicePayload.rows[0].driver_price === 20 && servicePayload.rows[0].advance 
    && servicePayload.rows[0].destination === 'القاهرة',
    'write bridge maps نولون→driver_price, عهدة→advance, الجهة→destination');
 ok(servicePayload.rows[0].driver_id === 'drv-1',
-   `driver_id flows from the row's driver select (Phase 6 — driver per receipt row; got ${J(servicePayload.rows[0].driver_id)})`);
+   `driver_id flows from the row's driver autocomplete (exact name → id; got ${J(servicePayload.rows[0].driver_id)})`);
 ok(servicePayload.rows[2].driver_id === null,
    `driver-less row («— بدون سائق —») keeps driver_id = null (D1: optional per row; got ${J(servicePayload.rows[2].driver_id)})`);
 console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload.rows[2].net}, total=${servicePayload.total}`);
@@ -308,21 +308,26 @@ console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══'
 [
   "setV('receiptNumber',     receiptData.receipt_number || receiptData.receiptNumber || '');",
   "setF('receipt-kartano',       ui.kartano);",
-  "setF('receipt-data',          ui.driver_id || '');",
+  "setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');",
   "setF('receipt-car',           ui.car);",
   "setF('receipt-noloon',        ui.noloon ? Money.fmt(ui.noloon) : '');",
   "setF('receipt-net',           Money.fmt(ui.net || 0));",
 ].forEach((s) => fingerprint(RECEIPTS_SRC, s, 'loadReceiptForEdit mapping: ' + s.slice(0, 44)));
 fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver-name fallback resolution via driver_id (bridge prefers persisted driver_name)');
-fingerprint(RECEIPTS_SRC, '_receiptApplyDriverOptions(tr); // options must exist before restoring the selection',
-  'loadReceiptForEdit injects driver select options BEFORE restoring the selection');
-fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver select value (authoritative link)",
-  'edit bridge surfaces persisted driver_id for the row select');
+fingerprint(RECEIPTS_SRC, '<datalist id="receiptDriversList"></datalist>',
+  'shared drivers datalist mounted in the form shell');
+fingerprint(RECEIPTS_SRC, '<input type="text" list="receiptDriversList"',
+  'row driver control is an autocomplete input bound to the shared datalist');
+fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)",
+  'edit bridge surfaces persisted driver_id for the row driver autocomplete');
 fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="text" readonly tabindex="-1"', 'receiptNumber input is readonly');
 
 const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id map */ '');
+// Sim of the drivers-store backed map used by loadReceiptForEdit (id → record name)
+const simDriverNames = new Map([[pA.driver_id, 'السائق أحمد']]);
 const editFields = {
-  'receipt-kartano': uiA.kartano, 'receipt-date': uiA.date, 'receipt-data': uiA.driver_id || '',
+  'receipt-kartano': uiA.kartano, 'receipt-date': uiA.date,
+  'receipt-data': pA.driver_id ? (simDriverNames.get(pA.driver_id) || '') : '',
   'receipt-car': uiA.car, 'receipt-weight': uiA.weight, 'receipt-weight2': uiA.weight2,
   'receipt-deficit': uiA.deficit, 'receipt-type': uiA.type, 'receipt-office': uiA.office,
   'receipt-loading': uiA.loading, 'receipt-taktik': uiA.taktik,
@@ -340,10 +345,10 @@ ok(editFields['receipt-noloon'] === '20.00' && editFields['receipt-ohda'] === '1
    && editFields['receipt-sarf'] === '30.00' && editFields['receipt-net'] === '920.00',
    'Edit OK: نولون / عهدة / sarf / net reconstructed from persisted cents');
 ok(editFields['receipt-kartano'] === 'K-100' && editFields['receipt-date'] === '2026-07-29'
-   && editFields['receipt-data'] === 'drv-1' && editFields['receipt-type'] === 'قمح'
+   && editFields['receipt-data'] === 'السائق أحمد' && editFields['receipt-type'] === 'قمح'
    && editFields['receipt-weight'] === 50 && editFields['receipt-weight2'] === 10 && editFields['receipt-deficit'] === 2
    && editFields['receipt-office-amount'] === 75 && editFields['receipt-discount'] === 25 && editFields['receipt-add'] === 40,
-   `Edit RESTORED (Phase 5 — Step 3 + Phase 6): kartano / row date / driver select restored by persisted driver_id (${J(editFields['receipt-data'])}) / type / weights / officeAmount / discount / add reconstructed exactly as entered`);
+   `Edit RESTORED: kartano / row date / driver autocomplete shows the driver NAME resolved id→name via the driver record (${J(editFields['receipt-data'])}) / type / weights / officeAmount / discount / add reconstructed exactly as entered`);
 ok(uiA.data === 'السائق أحمد',
    `Edit display denorm: ui.data still resolves the driver NAME from the persisted denorm (got ${J(uiA.data)}) — print/snapshots keep showing names`);
 const editReceiptNumber = read.receipt.receipt_number || read.receipt.receiptNumber || '';
