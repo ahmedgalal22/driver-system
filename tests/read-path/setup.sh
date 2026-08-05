@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-path end-to-end harness (Phase 4 — Step 7 evidence).
-# Assembles the intended services/+constants/ layout from the flat repo into a
+# Assembles the intended services/ layout from the flat repo into a
 # temp dir, then verifies the migrated UI read paths (dashboard.js / offices.js)
 # against the REAL frozen read stack + REAL persisted data written through the
 # REAL frozen write path. Re-runs the write-path harness afterwards as a
@@ -8,12 +8,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 W="${TMPDIR:-/tmp}/wpt-read-path"
-rm -rf "$W"; mkdir -p "$W/services" "$W/constants"
+rm -rf "$W"; mkdir -p "$W/services"
 
 # Real production modules (same layout contract as tests/write-path)
 cp "$ROOT"/{database.js,financial.js,money.js,dateUtils.js} "$W/"
 cp "$ROOT"/services/*.js "$W/services/"
-cp "$ROOT"/constants/payoutStatus.js "$W/constants/"
 
 # Real modified UI sources — read as TEXT for static assertions (never imported:
 # they carry browser-only dependencies)

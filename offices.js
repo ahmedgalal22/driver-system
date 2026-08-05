@@ -1110,7 +1110,7 @@ async function showOfficeDetails(id) {
  * Normalized read (Step 7): headers come from ReceiptRepository, rows from
  * the frozen ReceiptReadRepository projected by receipt id — the in-memory
  * equivalent of the MySQL-ready join below (never an embedded receipt.rows):
- *   SELECT rr.*, r.receipt_number, r.client_name, r.payout_status
+ *   SELECT rr.*, r.receipt_number, r.client_name
  *   FROM receipt_rows rr
  *   JOIN receipts r ON rr.receipt_id = r.id
  *   WHERE rr.office = ?
@@ -1142,7 +1142,6 @@ async function _getOfficeCards(office) {
         receipt_id: receipt.id,
         receipt_number: receipt.receipt_number || '', // header slot not persisted (B6) → ''
         client_name: receipt.client_name || receipt.owner_name || '',
-        payout_status: receipt.payout_status || 'unpaid',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
         _rowId: row.row_id ?? null,                     // persisted ReceiptRow PK
@@ -1178,7 +1177,6 @@ function _renderOfficeCards(allCards) {
         const hay = [
           c.receipt_number, c.client_name, c.kartano, c.date, c.car,
           c.driver, c.loading, c.taktik, c.type, c.notes,
-          c.payout_status === 'paid' ? 'تم صرفه' : 'لم يتم صرفه',
           String(c.weight), String(c.noloon),
         ].join(' ').toLowerCase();
         return hay.includes(query);
@@ -1218,8 +1216,6 @@ function _renderOfficeCards(allCards) {
     return summaryHTML + searchHTML + '<div style="text-align:center;padding:24px;color:#94a3b8;">لا توجد نتائج للبحث</div>';
   }
 
-  const statusLabel = (s) => s === 'paid' ? '<span style="color:#16a34a;font-weight:700;">تم صرفه</span>' : '<span style="color:#dc2626;font-weight:700;">لم يتم صرفه</span>';
-
   const tableRows = cards.map(c => `
     <tr>
       <td>${_text(c.receipt_number)}</td>
@@ -1233,7 +1229,6 @@ function _renderOfficeCards(allCards) {
       <td>${_text(c.loading)}</td>
       <td>${_text(c.taktik)}</td>
       <td>${_text(c.type)}</td>
-      <td>${statusLabel(c.payout_status)}</td>
       <td>${_text(c.notes)}</td>
     </tr>
   `).join('');
@@ -1254,7 +1249,6 @@ function _renderOfficeCards(allCards) {
             <th style="color:#fff;">التحميل</th>
             <th style="color:#fff;">الجهة</th>
             <th style="color:#fff;">النوع</th>
-            <th style="color:#fff;">الحالة</th>
             <th style="color:#fff;">ملاحظات</th>
           </tr>
         </thead>

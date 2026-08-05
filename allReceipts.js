@@ -11,7 +11,6 @@ import { printHTML, buildPrintDocument } from './printEngine.js';
 import { ExcelService } from './excelService.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
-import { RECEIPT_PAYOUT_STATUS, getPayoutStatusMeta } from './constants/payoutStatus.js';
 import { DateUtils } from './dateUtils.js';
 
 const PAGE_ID = 'allReceiptsPage';
@@ -39,11 +38,8 @@ function createFilterState() {
     vehicle: '',
     karta: '',
     type: '',
-    paidDate: '',
-    status: 'all',
     from: range.from,
     to: range.to,
-    sortByPayoutDate: false,
   };
 }
 
@@ -87,10 +83,6 @@ function esc(value) {
 function fmtMoney(value) { // delegated to Money.fmt
   return Money.fmt(value);
 
-}
-
-function centsToMoney(value) { // delegated to Money.fmtCents
-  return Money.fmtCents(value);
 }
 
 function toNumber(value) {
@@ -332,7 +324,6 @@ function getReceiptCardsFiltered() {
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
-  const status = filters.status || 'all';
   const from = filters.from || '';
   const to = filters.to || '';
   const date = String(filters.date || '').trim();
@@ -340,7 +331,6 @@ function getReceiptCardsFiltered() {
   return STATE.receipts
     .filter((record) => inRange(record.receipt_date, from, to))
     .filter((record) => !date || normalizeDate(record.receipt_date) === normalizeDate(date))
-    .filter((record) => status === 'all' || String(record.payout_status || RECEIPT_PAYOUT_STATUS.UNPAID) === status)
     .filter((record) => {
       const rows = getReceiptRows(record);
       const haystack = [
@@ -349,7 +339,6 @@ function getReceiptCardsFiltered() {
         record.receipt_number,
         record.vehicle_id,
         record.receipt_date,
-        record.payout_status,
         record.company_name,
         record.notes,
         ...rows.map((row) => [
@@ -382,7 +371,6 @@ function summarizeReceipts(records) {
 
   return records.reduce((acc, record) => {
     if (!rowFilterActive) {
-      acc.paid += toNumber(record.paid);
       const rows = getReceiptRows(record);
       acc.count += rows.filter((row) => row._type !== 'separator').length;
       acc.weight += sumVisibleRowWeight(rows);
@@ -402,7 +390,7 @@ function summarizeReceipts(records) {
     });
     acc.weight += sumVisibleRowWeight(visible);
     return acc;
-  }, { paid: 0, count: 0, weight: 0, noloon: 0, ohda: 0 });
+  }, { count: 0, weight: 0, noloon: 0, ohda: 0 });
 }
 
 
@@ -485,15 +473,6 @@ function renderReceiptsControls() {
       <label>
         <input data-filter-tab="receipts" data-filter-key="type" type="text" value="${esc(f.type)}" placeholder="النوع" />
       </label>
-      <button type="button" data-action="sort-by-payout-date" class="range-btn" style="${f.sortByPayoutDate ? 'background:#7c3aed;color:#fff;border-color:#7c3aed;' : ''}">📅 تنظيم الصرف</button>
-      <div style="display:flex;gap:6px;align-items:flex-end;">
-        <button type="button" data-action="status-filter" data-status="all"
-          class="range-btn" style="${f.status === 'all' ? 'background:#2563eb;color:#fff;border-color:#2563eb;' : ''}">📋 الكل</button>
-        <button type="button" data-action="status-filter" data-status="paid"
-          class="range-btn" style="${f.status === 'paid' ? 'background:#059669;color:#fff;border-color:#059669;' : ''}">✅ تم صرفه</button>
-        <button type="button" data-action="status-filter" data-status="unpaid"
-          class="range-btn" style="${f.status === 'unpaid' ? 'background:#dc2626;color:#fff;border-color:#dc2626;' : ''}">⏳ لم يتم صرفه</button>
-      </div>
     </div>
     <div class="range-toolbar no-print">
       <button type="button" data-range="receipts" data-days="1" class="range-btn">يوم</button>
@@ -525,7 +504,6 @@ function renderSummaryCards(_tab, _preFiltered) {
   const sums = summarizeReceipts(filtered);
   const html = `
       <div class="summary-grid summary-grid--receipts">
-        ${summaryCard('📊 إجمالي المدفوع', centsToMoney(sums.paid), 'summary-card--red')}
         ${summaryCard('🗂️ عدد الكارتات', String(sums.count), 'summary-card--blue')}
         ${summaryCard('⚖️ إجمالي الوزن', fmtMoney(sums.weight), 'summary-card--green')}
         ${summaryCard('🚛 إجمالي النولون', fmtMoney(sums.noloon), 'summary-card--cyan')}
@@ -563,25 +541,15 @@ function buildReceiptCardHtml(record, opts = {}) {
   const kartaCount = record.row_count != null
     ? record.row_count
     : persistedRows.filter((row) => row._type !== 'separator').length;
-  const meta = getPayoutStatusMeta(record.payout_status);
-  const payoutStatus = meta.id;
 
   const actionsHtml = readOnly
     ? `<div class="record-card__actions no-print">
          <button type="button" data-action="print-single-receipt" data-id="${esc(record.id)}">🖨️ طباعة</button>
-         <span style="background:${meta.color};color:#fff;padding:3px 10px;border-radius:999px;font-size:0.75rem;font-weight:700;">${esc(meta.label)}</span>
        </div>`
     : `<div class="record-card__actions no-print">
          <button type="button" data-action="edit-receipt" data-id="${esc(record.id)}">✏️ تعديل</button>
          <button type="button" data-action="print-single-receipt" data-id="${esc(record.id)}">🖨️ طباعة</button>
          <button type="button" data-action="delete-receipt" data-id="${esc(record.id)}">🗑️ حذف</button>
-         <label class="status-select-wrap" title="حالة الصرف">
-           <span class="sr-only">حالة الصرف</span>
-           <select data-action="toggle-receipt-status" data-id="${esc(record.id)}">
-             <option value="${RECEIPT_PAYOUT_STATUS.PAID}" ${payoutStatus === RECEIPT_PAYOUT_STATUS.PAID ? 'selected' : ''}>✅ تم صرفه</option>
-             <option value="${RECEIPT_PAYOUT_STATUS.UNPAID}" ${payoutStatus === RECEIPT_PAYOUT_STATUS.UNPAID ? 'selected' : ''}>⏳ لم يتم صرفه</option>
-           </select>
-         </label>
        </div>`;
 
   const noteHtml = readOnly
@@ -603,9 +571,7 @@ function buildReceiptCardHtml(record, opts = {}) {
           <p style="font-size:1rem;font-weight:700;color:#1e3a8a;margin:0 0 4px;">
             <span>صاحب المركبة: ${esc(record.owner_name || record.client_name || '—')}</span>
             <span style="margin:0 8px;color:#cbd5e1;">|</span>
-            <span style="margin:0 8px;color:#cbd5e1;">|</span>
             <span>إذن الصرف: ${esc(record.receipt_number || '—')}</span>
-            ${record.paid_at ? `<span style="margin:0 8px;color:#cbd5e1;">|</span><span>تاريخ الصرف: ${esc(record.paid_at.split('T')[0])}</span>` : ''}
           </p>
         </div>
         ${actionsHtml}
@@ -624,7 +590,6 @@ function buildReceiptCardHtml(record, opts = {}) {
         <div><span>عدد الكارتات</span><strong>${kartaCount}</strong></div>
         <div><span>الإجمالي</span><strong>${Money.fmtCents(record.total)}</strong></div>
         <div><span>رصيد العميل</span><strong>${Money.fmtCents(record.previous_balance)}</strong></div>
-        <div><span>المدفوع</span><strong>${Money.fmtCents(record.paid)}</strong></div>
       </div>
       ${noteHtml}
     </article>
@@ -654,29 +619,7 @@ function renderReceiptList(_preFiltered) {
 
   // ── Sort pipeline (data-driven, never mutates source) ──
   const sorted = [...filtered];
-  if (STATE.filters.receipts.sortByPayoutDate) {
-    // Paid receipts first (sorted by paid_at DESC), then unpaid in default order
-    sorted.sort((a, b) => {
-      const aPaid = String(a.payout_status || 'unpaid') === 'paid';
-      const bPaid = String(b.payout_status || 'unpaid') === 'paid';
-      // Paid before unpaid
-      if (aPaid && !bPaid) return -1;
-      if (!aPaid && bPaid) return 1;
-      // Both paid: sort by paid_at DESC (newest first)
-      if (aPaid && bPaid) {
-        const aTime = a.paid_at ? new Date(a.paid_at).getTime() : 0;
-        const bTime = b.paid_at ? new Date(b.paid_at).getTime() : 0;
-        if (isNaN(aTime) && isNaN(bTime)) return 0;
-        if (isNaN(aTime)) return 1;
-        if (isNaN(bTime)) return -1;
-        return bTime - aTime;
-      }
-      // Both unpaid: default order (created_at DESC)
-      return (b.created_at || 0) - (a.created_at || 0);
-    });
-  } else {
-    sorted.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-  }
+  sorted.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 
   container.innerHTML = sorted
     .map((record) => buildReceiptCardHtml(record))
@@ -760,7 +703,6 @@ function serializeCurrentView(_tab) {
  * Mirrors the summary cards shown on screen above the list.
  *
  * Money units:
- *   paid → CENTS             (from summarizeReceipts which reads record totals)
  *   weight, noloon, ohda   → DECIMAL (summed directly from row fields)
  *   count                  → integer
  */
@@ -772,7 +714,6 @@ function _buildReceiptsBulkSummary(sums) {
     <table style="width:100%;border-collapse:collapse;margin-bottom:16px;page-break-inside:avoid;">
       <thead>
         <tr>
-          ${th('المدفوع')}
           ${th('عدد الكارتات')}
           ${th('إجمالي الوزن')}
           ${th('إجمالي النولون')}
@@ -781,7 +722,6 @@ function _buildReceiptsBulkSummary(sums) {
       </thead>
       <tbody>
         <tr>
-          ${td(centsToMoney(sums.paid))}
           ${td(String(sums.count))}
           ${td(fmtMoney(sums.weight))}
           ${td(fmtMoney(sums.noloon))}
@@ -858,9 +798,6 @@ function buildReceiptPrintBlock(record) {
   const thead      = _bulkReceiptBuildTableHead(activeCols);
   const tbody      = _bulkReceiptBuildTableBody(allRows, activeCols);
 
-  const payoutStatus = String(record.payout_status || 'unpaid');
-  const statusLabel  = payoutStatus === 'paid' ? 'تم صرفه' : 'لم يتم الصرف';
-
   return `
     <section class="print-card">
       <header>
@@ -871,7 +808,6 @@ function buildReceiptPrintBlock(record) {
       <div class="print-meta">
         ${esc(record.owner_name || record.client_name || '')}
         ${record.company_name ? ' · ' + esc(record.company_name) : ''}
-        · ${esc(statusLabel)}
       </div>
       <table>
         ${thead}
@@ -882,7 +818,6 @@ function buildReceiptPrintBlock(record) {
         <span>عدد الكارتات: <strong>${kartaCount}</strong></span>
         <span>الإجمالي: <strong>${Money.fmtCents(record.total)}</strong></span>
         <span>رصيد العميل: <strong>${Money.fmtCents(record.previous_balance)}</strong></span>
-        <span>المدفوع: <strong>${Money.fmtCents(record.paid)}</strong></span>
       </div>
     </section>
   `;
@@ -895,7 +830,7 @@ function buildReceiptPrintBlock(record) {
 //
 // Design contract:
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
-//   • Top-level money fields (total, paid,
+//   • Top-level money fields (total,
 //     previous_balance) are stored as CENTS  → Money.fmtCents().
 //   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
 //     weight2, deficit, weightTotal) are stored as DECIMALS → Money.fmt().
@@ -1118,7 +1053,6 @@ function _receiptPrintBuildTableBody(rows, activeCols) {
 function _receiptPrintBuildTotalsRow(record, kartaCount) {
   const total           = Money.fmtCents(record.total           ?? 0);
   const previousBalance = Money.fmtCents(record.previous_balance ?? 0);
-  const paid            = Money.fmtCents(record.paid            ?? 0);
 
   const th = (label) => `<th style="background:#fff;color:#000;padding:4px 6px;border:1.5px solid #000;text-align:center;font-size:7pt;font-weight:700;">${label}</th>`;
   const td = (value) => `<td style="background:#fff;color:#000;padding:5px 6px;border:1.5px solid #000;text-align:center;font-size:11pt;font-weight:800;">${esc(value)}</td>`;
@@ -1130,7 +1064,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
           ${th('عدد الكارتات')}
           ${th('الإجمالي')}
           ${th('رصيد العميل')}
-          ${th('المدفوع')}
         </tr>
       </thead>
       <tbody>
@@ -1138,7 +1071,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
           ${td(String(kartaCount))}
           ${td(total)}
           ${td(previousBalance)}
-          ${td(paid)}
         </tr>
       </tbody>
     </table>`;
@@ -1151,7 +1083,6 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
  *   - Header image (wasel.png) — absolute URL built from window.location, no DOM read.
  *   - Title, receipt number, date.
  *   - Owner name.
- *   - Payout status badge.
  *   - Optional shipping number and notes.
  */
 function _receiptPrintBuildHeader(record) {
@@ -1159,13 +1090,7 @@ function _receiptPrintBuildHeader(record) {
   const receiptDate   = esc(receiptDisplayDate(record.receipt_date));
   const dayName       = esc(receiptDayName(record.receipt_date));
   const ownerName     = esc(record.owner_name || record.client_name || '—');
-  const meta          = getPayoutStatusMeta(record.payout_status);
-  const statusLabel   = meta.printLabel;
-  const statusColor   = meta.color;
   const companyName   = record.company_name ? esc(record.company_name) : '';
-  const shipping      = record.paid_at
-    ? `<span>تاريخ الصرف: <strong>${esc(record.paid_at.split('T')[0])}</strong></span>`
-    : '';
 
   // Build absolute URL for the header image (wasel.png sits next to the app files).
   // We use window.location.href so the iframe can load it without a relative-path issue.
@@ -1192,8 +1117,6 @@ function _receiptPrintBuildHeader(record) {
       <div class="print-header-info">
         <span>إذن الصرف: <strong>${receiptNumber}</strong></span>
         <span>التاريخ: <strong>${receiptDate} — ${dayName}</strong></span>
-        ${shipping}
-        <span style="color:${statusColor};font-weight:800;">${statusLabel}</span>
       </div>
       <div class="print-header-info" style="margin-top:4px;">
         <span>صاحب المركبة: <strong>${ownerName}</strong></span>
@@ -1422,19 +1345,6 @@ async function handleCardAction(action, id, tab) {
       window.dispatchEvent(new CustomEvent('receipts:changed'));
       return;
     }
-    if (action === 'toggle-receipt-status') {
-      const control = document.querySelector(`[data-action="toggle-receipt-status"][data-id="${CSS.escape(String(id))}"]`);
-      const nextStatus = String(control?.value || RECEIPT_PAYOUT_STATUS.UNPAID);
-      await FinancialService.updateReceiptStatus(username, id, nextStatus);
-
-      // When changing to "paid", auto-update other unpaid receipts for same client
-      if (nextStatus === RECEIPT_PAYOUT_STATUS.PAID && record?.client_id) {
-        await FinancialService.updateClientUnpaidBalances(record.client_id, username);
-      }
-
-      window.dispatchEvent(new CustomEvent('receipts:changed'));
-      return;
-    }
   }
 }
 
@@ -1444,7 +1354,7 @@ async function handleCardAction(action, id, tab) {
  * _exportReceiptsToExcel()
  *
  * Collects the receipts currently visible on screen (after all search,
- * filter, date-range, and status filters) and exports them to a single
+ * filter, and date-range filters) and exports them to a single
  * flat Excel sheet via ExcelService.exportAllReceiptsRows().
  *
  * Data flow:
@@ -1498,21 +1408,6 @@ function bindPageEvents() {
   page.dataset.bound = '1';
 
   page.addEventListener('click', async (event) => {
-    const statusBtn = event.target.closest('[data-action="status-filter"]');
-    if (statusBtn) {
-      STATE.filters.receipts.status = statusBtn.dataset.status || 'all';
-      renderShell();
-      renderAll();
-      return;
-    }
-
-    if (event.target.closest('[data-action="sort-by-payout-date"]')) {
-      STATE.filters.receipts.sortByPayoutDate = !STATE.filters.receipts.sortByPayoutDate;
-      renderShell();
-      renderAll();
-      return;
-    }
-
     const rangeBtn = event.target.closest('[data-range]');
     if (rangeBtn) {
       const days = Number(rangeBtn.dataset.days) || 30;
@@ -1526,9 +1421,6 @@ function bindPageEvents() {
     if (actionBtn) {
       const tab = actionBtn.dataset.tab || 'receipts';
       const action = actionBtn.dataset.action;
-      if (action === 'toggle-receipt-status') {
-        return;
-      }
       if (action === 'apply-filter') {
         renderAll();
         return;
@@ -1568,11 +1460,6 @@ function bindPageEvents() {
     }
   });
 
-  page.addEventListener('change', async (event) => {
-    const statusField = event.target.closest('select[data-action="toggle-receipt-status"]');
-    if (!statusField) return;
-    await handleCardAction('toggle-receipt-status', statusField.dataset.id, 'receipts');
-  });
 }
 
 function renderAll() {

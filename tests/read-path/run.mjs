@@ -55,13 +55,13 @@ const hdr = (over = {}) => ({
   receipt_date: '2026-07-27', receipt_number: '1001',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
   account_type: null, total: 1150, previous_balance: 0,
-  paid: 0, ...over,
+  ...over,
 });
 
 const R1 = (await FinancialService.createReceipt(U, hdr({ rows: [row1(), row2()] }))).receipt.id;
 // update 2→3 rows (same arithmetic family as the proven write-path harness)
 await FinancialService.updateReceipt(U, R1, hdr({
-  total: 1800, paid: 500, previous_balance: 500,
+  total: 1800, previous_balance: 500,
   rows: [row1(), row2(), row3()],
 }));
 const R2 = (await FinancialService.createReceipt(U, hdr({
@@ -240,7 +240,6 @@ function _officeCardsLoop(allReceipts_arg, rowsProjection_arg, officeName) {
         receipt_id: receipt.id,
         receipt_number: receipt.receipt_number || '',
         client_name: receipt.client_name || receipt.owner_name || '',
-        payout_status: receipt.payout_status || 'unpaid',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
         _rowId: row.row_id ?? null,
@@ -268,8 +267,8 @@ ok(c1.receipt_id === R1 && typeof c1._rowId === 'string' && liveRows.some(r => r
 ok(c1.kartano === '' && c1.date === '' && c1.driver === '' && c1.weight === 0 && c1.type === '' && c1.notes === '',
   'cards: un-persisted slots blank/zero (B6) — kartano/date/driver/weight/type/notes');
 ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27'
-    && c1.payout_status === (headerR1.payout_status || 'unpaid'),
-  'cards: header metadata propagated (client_name, receipt_date, payout_status)');
+    && c1.payout_status === undefined,
+  'cards: header metadata propagated (client_name, receipt_date); REMOVED-CONTRACT (Paid phase): payout_status no longer on office cards');
 ok(c1.receipt_number === '1001', 'cards: receipt_number revived from persisted header (Phase 5 — Step 2)');
 
 // loud failure on unknown office — preserved semantics

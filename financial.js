@@ -30,7 +30,6 @@ import { WriteDataSource } from './services/writeDataSource.js';
 import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
 import { Money } from './money.js';
-import { RECEIPT_PAYOUT_STATUS, normalizePayoutStatus, transitionReceiptState } from './constants/payoutStatus.js';
 import { DateUtils } from './dateUtils.js';
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
@@ -42,7 +41,6 @@ const STORE = Object.freeze({
   OFFICES  : 'offices',
 });
 
-const REF_TYPE      = 'receipt';
 const ACCOUNT_TYPES = Object.freeze(['cash', 'bank', 'vodafone', 'none']);
 const OFFICE_LEDGER_TYPES = Object.freeze({
   DEPOSIT       : 'OFFICE_DEPOSIT',
@@ -62,11 +60,6 @@ function _uuid() {
 }
 
 // ─── INTERNAL HELPERS ──────────────────────────────────────────────────────────
-
-function _normalizePayoutStatus(value) {
-  if (value == null) return null;
-  return normalizePayoutStatus(value);
-}
 
 function _toKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -249,11 +242,6 @@ function _validate(data) {
   const general_discount = 0; // removed from system
   const previous_balance = Money.toCents(data.previous_balance ?? data.previousBalance ?? 0);
 
-  const paid = Money.toCents(data.paid ?? 0);
-  if (paid < 0) {
-    throw new Error('[FinancialService] paid must be a non-negative number.');
-  }
-
   const groups = [...clientVehicleGroups.values()].filter(g => g.total !== 0);
   if (groups.length === 0) {
     throw new Error('[FinancialService] rows total must be greater than zero.');
@@ -265,7 +253,6 @@ function _validate(data) {
     total,
     general_discount,
     previous_balance,
-    paid,
     groups,
     client_id: header.client_id,
     client_type: header.client_type,
@@ -274,58 +261,6 @@ function _validate(data) {
     raw_rows: data.rows ?? [],
     receipt_number: data.receipt_number ?? null,
   };
-}
-
-// ─── PRIVATE: BUILD REVERSE OPS ───────────────────────────────────────────────
-// Emits PersistenceCommands (not raw DB ops) — WriteDataSource only accepts
-// the canonical command shape. Reverse = soft-flag update (audit trail kept).
-
-async function _buildReverseOps(referenceId, username, tx = DB) {
-  const commands = [];
-  const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-
-  const treasuryEntries = await tx.getByIndex(STORE.TREASURY, 'by_reference_id', referenceId);
-  for (const entry of treasuryEntries) {
-    if (entry.reference_type !== REF_TYPE && entry.reference_type !== 'receipt_row') continue;
-    if (entry.is_reversed === true) continue;
-    commands.push(createPersistenceCommand(
-      PersistenceCommandType.UPDATE, 'Treasury', entry.id,
-      { patch: reversePatch, meta: { username } }
-    ));
-  }
-
-  const ledgerEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', referenceId);
-  for (const entry of ledgerEntries) {
-    if (entry.reference_type !== REF_TYPE && entry.reference_type !== 'receipt_row') continue;
-    if (entry.is_reversed === true) continue;
-    commands.push(createPersistenceCommand(
-      PersistenceCommandType.UPDATE, 'Ledger', entry.id,
-      { patch: reversePatch, meta: { username } }
-    ));
-  }
-
-  return commands;
-}
-
-// ─── PRIVATE: DUPLICATE GUARD ─────────────────────────────────────────────────
-
-async function _assertNotApplied(receiptId, tx = DB) {
-  const treasuryEntries = await tx.getByIndex(STORE.TREASURY, 'by_reference_id', receiptId);
-  const hasActiveTreasury = treasuryEntries.some(
-    e => e.reference_type === REF_TYPE && e.is_reversed === false
-  );
-  if (hasActiveTreasury) {
-    throw new Error(`[FinancialService] Receipt already applied: ${receiptId}`);
-  }
-
-  const ledgerEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', receiptId);
-  const hasActiveLedger = ledgerEntries.some(
-    e => e.reference_type === REF_TYPE && e.is_reversed === false
-  );
-  if (hasActiveLedger) {
-    throw new Error(`[FinancialService] Receipt already applied: ${receiptId}`);
-  }
 }
 
 async function resolveHamolaPrice(username, officeName, loadingPlace, destinationPlace, officeMap = null) {
@@ -368,13 +303,11 @@ async function resolveHamolaPrice(username, officeName, loadingPlace, destinatio
 
 // ─── PUBLIC: createReceipt ─────────────────────────────────────────────────────
 
-async function createReceipt(username, data, extraOps = []) {
+async function createReceipt(username, data) {
   if (!username) throw new Error('[FinancialService:create] username is required.');
 
   const receiptId = data.id || _uuid();
   const clean = _validate(data);
-
-  const payout_status = _normalizePayoutStatus(data.payout_status) || RECEIPT_PAYOUT_STATUS.UNPAID;
 
   // Build Receipt header
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, receiptId);
@@ -385,9 +318,7 @@ async function createReceipt(username, data, extraOps = []) {
   // Assemble the full persistence record ONCE.
   const receiptRecord = {
     ...receiptHeader,
-    payout_status,
     total: clean.total,
-    paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
     notes: data.notes ?? null,
@@ -412,12 +343,11 @@ async function createReceipt(username, data, extraOps = []) {
 
 // ─── PUBLIC: updateReceipt ─────────────────────────────────────────────────────
 
-async function updateReceipt(username, id, data, extraOps = []) {
+async function updateReceipt(username, id, data) {
   if (!username) throw new Error('[FinancialService:update] username is required.');
   if (!id)       throw new Error('[FinancialService:update] id is required.');
 
   const clean = _validate(data);
-  const payout_status = _normalizePayoutStatus(data.payout_status);
 
   // Build updated Receipt header
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, id);
@@ -426,13 +356,10 @@ async function updateReceipt(username, id, data, extraOps = []) {
   const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
 
   // Assemble the full persistence record ONCE (Update semantics:
-  // payout_status/notes/shipping_number are only patched when provided,
-  // so an omitted payout_status never wipes the stored one).
+  // notes/shipping_number are only patched when provided).
   const receiptRecord = {
     ...receiptHeader,
-    ...(payout_status !== null ? { payout_status } : {}),
     total: clean.total,
-    paid: clean.paid,
     previous_balance: clean.previous_balance,
     general_discount: clean.general_discount,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
@@ -443,9 +370,6 @@ async function updateReceipt(username, id, data, extraOps = []) {
   // new row entities get fresh row_ids on every edit, so failing to delete
   // the old set would duplicate every karta in receipt_rows).
   const existingReceiptRows = await _getExistingReceiptRows(id);
-
-  // Generate reverse operations for previous ledger entries
-  const reverseCommands = await _buildReverseOps(id, username);
 
   // Prepare PersistenceCommands via ReceiptRepository
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
@@ -460,14 +384,11 @@ async function updateReceipt(username, id, data, extraOps = []) {
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
 
-  // Combine all commands: header update → delete old rows → add new rows →
-  // reverse old ledger entries.
+  // Combine all commands: header update → delete old rows → add new rows.
   const allCommands = [
     receiptCommand,
     ...deleteRowCommands,
-    ...receiptRowCommands,
-    ...reverseCommands,
-    ...extraOps
+    ...receiptRowCommands
   ];
 
   // Execute through WriteDataSource
@@ -480,12 +401,9 @@ async function updateReceipt(username, id, data, extraOps = []) {
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
 
-async function deleteReceipt(username, id, extraOps = []) {
+async function deleteReceipt(username, id) {
   if (!username) throw new Error('[FinancialService:delete] username is required.');
   if (!id)       throw new Error('[FinancialService:delete] id is required.');
-
-  // Generate reverse ledger operations using the normalized model
-  const reverseLedgerCommands = await _buildReverseOps(id, username);
 
   // Prepare delete command for Receipt via ReceiptRepository (Delete carries id only)
   const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
@@ -502,174 +420,16 @@ async function deleteReceipt(username, id, extraOps = []) {
     )[0]
   );
 
-  // Combine all commands: reverse financial effects → delete rows → delete header
+  // Combine all commands: delete rows → delete header
   const allCommands = [
-    ...reverseLedgerCommands,
     ...receiptRowDeleteCommands,
-    receiptDeleteCommand,
-    ...extraOps
+    receiptDeleteCommand
   ];
 
   // Execute through WriteDataSource
   await WriteDataSource.execute(allCommands, { username });
 
-  return {
-    id,
-    deleted: true,
-    reversed: {
-      treasury_count: reverseLedgerCommands.filter(c => c.aggregate === 'Treasury').length,
-      ledger_count: reverseLedgerCommands.filter(c => c.aggregate === 'Ledger').length,
-    },
-  };
-}
-
-// ─── PUBLIC: updateReceiptStatus ─────────────────────────────────────────────
-
-async function updateReceiptStatus(username, receiptId, status) {
-  if (!username) throw new Error('[FinancialService:updateReceiptStatus] username is required.');
-  if (!receiptId) throw new Error('[FinancialService:updateReceiptStatus] receiptId is required.');
-
-  const normalized = _normalizePayoutStatus(status);
-  if (!normalized) {
-    throw new Error('[FinancialService:updateReceiptStatus] status must be paid or unpaid.');
-  }
-
-  const result = await DB.transaction(async (tx) => {
-    const existing = await ReceiptRepository.getById(String(receiptId), { tx });
-    if (!existing) {
-      throw new Error(`[FinancialService:updateReceiptStatus] Receipt ${receiptId} not found.`);
-    }
-    if (existing.username !== username) {
-      throw new Error('[FinancialService:updateReceiptStatus] cross-user access is forbidden.');
-    }
-
-    const currentStatus = String(existing.payout_status || RECEIPT_PAYOUT_STATUS.UNPAID);
-
-    // ── Same status → no-op ─────────────────────────────────────────────
-    if (currentStatus === normalized) {
-      return { receipt: existing, changed: false };
-    }
-
-    // Use transitionReceiptState to safely validate transition and get new state copy!
-    const transitionedReceipt = transitionReceiptState(existing, normalized);
-    const now = transitionedReceipt.paid_at || DateUtils.nowLocal();
-    const paidAmount = Number(existing.paid) || 0;   // already in cents (DB)
-
-    // ── unpaid → paid: CREATE financial entries ─────────────────────────
-    if (normalized === RECEIPT_PAYOUT_STATUS.PAID) {
-      const ops = [];
-
-      // Update receipt status
-      ops.push({
-        op: 'update',
-        store: STORE.RECEIPTS,
-        id: String(receiptId),
-        patch: {
-          payout_status: transitionedReceipt.payout_status,
-          paid_at: transitionedReceipt.paid_at,
-        },
-      });
-
-      // entity_ledger: receipt_payment — withdraw from client balance
-      if (paidAmount > 0) {
-        ops.push({
-          op: 'add',
-          store: STORE.LEDGER,
-          payload: {
-            username,
-            owner_id       : String(existing.client_id),
-            owner_name     : existing.client_name || null,
-            client_id      : String(existing.client_id),
-            client_type    : existing.client_type || 'owner',
-            client_name    : existing.client_name || null,
-            vehicle_id     : null,
-            vehicle_plate  : null,
-            type           : 'receipt_payment',
-            amount         : paidAmount,
-            reference_type : REF_TYPE,
-            reference_id   : String(receiptId),
-            receipt_number : existing.receipt_number || null,
-            date           : existing.receipt_date || now,
-            applied_at     : now,
-            is_reversed    : false,
-            note           : `صرف نموذج ${existing.receipt_number || receiptId}`,
-          },
-        });
-
-        // treasury: cash_out — cash leaves the drawer
-        ops.push({
-          op: 'add',
-          store: STORE.TREASURY,
-          payload: {
-            username,
-            type           : 'withdraw',
-            effect         : 'receipt_payout',
-            amount         : paidAmount,
-            account_type   : 'cash',
-            reference_type : REF_TYPE,
-            reference_id   : String(receiptId),
-            receipt_number : existing.receipt_number || null,
-            client_id      : String(existing.client_id),
-            client_type    : existing.client_type || 'owner',
-            client_name    : existing.client_name || null,
-            date           : existing.receipt_date || now,
-            applied_at     : now,
-            is_reversed    : false,
-            note           : `صرف نموذج ${existing.receipt_number || receiptId}`,
-          },
-        });
-      }
-
-      const results = await tx.runOps(ops);
-      return { receipt: results[0], changed: true };
-    }
-
-    // ── paid → unpaid: REVERSE financial entries ────────────────────────
-    if (normalized === RECEIPT_PAYOUT_STATUS.UNPAID) {
-      const reversePatch = {
-        is_reversed: true,
-        reversed_at: now,
-        reversed_by: username,
-      };
-
-      const ops = [];
-
-      // Find and reverse all active payout entries for this receipt
-      const ledgerEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', String(receiptId));
-      for (const entry of ledgerEntries) {
-        if (entry.reference_type !== REF_TYPE) continue;
-        if (entry.type !== 'receipt_payment') continue;
-        if (entry.is_reversed === true) continue;
-        ops.push({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch });
-      }
-
-      const treasuryEntries = await tx.getByIndex(STORE.TREASURY, 'by_reference_id', String(receiptId));
-      for (const entry of treasuryEntries) {
-        if (entry.reference_type !== REF_TYPE) continue;
-        if (entry.effect !== 'receipt_payout') continue;
-        if (entry.is_reversed === true) continue;
-        ops.push({ op: 'update', store: STORE.TREASURY, id: entry.id, patch: reversePatch });
-      }
-
-      // Update receipt status
-      ops.push({
-        op: 'update',
-        store: STORE.RECEIPTS,
-        id: String(receiptId),
-        patch: {
-          payout_status: transitionedReceipt.payout_status,
-          paid_at: transitionedReceipt.paid_at,
-        },
-      });
-
-      const results = await tx.runOps(ops);
-      return { receipt: results[results.length - 1], changed: true };
-    }
-
-    throw new Error('[FinancialService:updateReceiptStatus] unexpected status value.');
-  }, { username, stores: [STORE.RECEIPTS, STORE.LEDGER, STORE.TREASURY] });
-
-  return Money.decimalizeRecord(result.receipt);
+  return { id, deleted: true };
 }
 
 // ─── PUBLIC: rebuildVehicleBalance ────────────────────────────────────────────
@@ -1098,11 +858,6 @@ async function getClientBalance(client_id) {
       continue;
     }
 
-    if (entry.type === 'receipt_payment') {
-      withdraw_total += Math.abs(cents);
-      continue;
-    }
-
     if (entry.type === 'deposit') deposit_total += cents;
     if (entry.type === 'withdraw') withdraw_total += cents;
   }
@@ -1244,72 +999,13 @@ async function createOfficeDeposit(username, data) {
 // ─── EXPORT ────────────────────────────────────────────────────────────────────
 
 
-/**
- * Auto-update balance for a specific client's unpaid receipts.
- * Called when a receipt is paid or a salfa is given.
- * Finds other unpaid receipts for the SAME client and updates their balance.
- */
-async function updateClientUnpaidBalances(clientId, username) {
-  if (!clientId || !username) return;
-
-  const allReceipts = await ReceiptRepository.getAll(username);
-  const unpaid = allReceipts.filter(r =>
-    String(r.payout_status || RECEIPT_PAYOUT_STATUS.UNPAID) === RECEIPT_PAYOUT_STATUS.UNPAID
-    && String(r.client_id) === String(clientId)
-  );
-  if (unpaid.length === 0) return;
-
-  let updated = false;
-
-  for (const receipt of unpaid) {
-    try {
-      const ledger = await getClientLedger(String(receipt.client_id));
-
-      let balanceCents = 0;
-      for (const entry of ledger) {
-        const cents = Money.toCents(entry.amount);
-        if (entry.reference_id === String(receipt.id) && entry.reference_type === 'receipt') {
-          continue;
-        }
-        if (entry.type === 'receipt_payment') {
-          balanceCents -= Math.abs(cents);
-        } else if (entry.type === 'deposit') {
-          balanceCents += cents;
-        } else if (entry.type === 'withdraw') {
-          balanceCents -= cents;
-        } else if (entry.entity_type === 'office' || entry.type === OFFICE_LEDGER_TYPES.DEPOSIT || entry.type === OFFICE_LEDGER_TYPES.WITHDRAW_AUTO) {
-          if (cents >= 0) balanceCents += cents;
-          else balanceCents -= Math.abs(cents);
-        }
-      }
-
-      const newPreviousBalance = balanceCents;
-      const currentPrevious = Number(receipt.previous_balance) || 0;
-
-      if (newPreviousBalance !== currentPrevious) {
-        await ReceiptRepository.update(receipt.id, {
-          previous_balance: newPreviousBalance,
-          paid: newPreviousBalance,
-        }, { username });
-
-        updated = true;
-      }
-    } catch (err) {
-      console.warn('[updateClientUnpaidBalances] Error updating receipt', receipt.id, err);
-    }
-  }
-
-  return updated;
-}
-
-
 // ─── DRIVER KARTA SETTLEMENT (Phase 6B) ──────────────────────────────────────
 
 const KARTA_REF_TYPE = 'receipt_row';
 const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
 // Vehicle-balance leg of a karta settlement — follows the existing ledger
 // architecture (rebuildVehicleBalance reads type deposit/withdraw by_vehicle;
-// origin classification via `effect`, exactly like 'salfa' / 'receipt_payout').
+// origin classification via `effect`, exactly like 'salfa').
 const KARTA_CHARGE_EFFECT = 'karta_settlement_charge';
 
 async function _getActiveKartaSettlements() {
@@ -1475,7 +1171,7 @@ async function createKartaSettlement(username, data) {
   //   1. driver settlement payment (driver is paid: type driver_karta_payment)
   //   2. vehicle charge (the selected vehicle's balance is reduced by the
   //      settlement price: type 'withdraw' + effect tag, the exact convention
-  //      used by createDriverDeposit's vehicle leg and 'salfa'/'receipt_payout')
+  //      used by createDriverDeposit's vehicle leg and 'salfa')
   // Both legs share reference_type/reference_id → they reverse together.
   await DB.transaction(async (tx) => {
     // Leg 1 — driver settlement payment
@@ -1619,7 +1315,7 @@ async function updateKartaSettlement(username, data) {
 
   const ops = [
     // 1) Previous version → audit history (flag-flip reversal — the
-    //    receipt_payout / reverseKartaSettlement convention). Balances are
+    //    reverseKartaSettlement convention). Balances are
     //    derived, so the previously charged vehicle restores automatically.
     ...activeLegs.map(leg => ({ op: 'update', store: STORE.LEDGER, id: leg.id, patch: reversePatch })),
     // 2) Replacement legs for THE SAME logical settlement (edited version).
@@ -1646,8 +1342,7 @@ async function reverseKartaSettlement(username, settlementReferenceId) {
   await DB.transaction(async (tx) => {
     const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
     // Both settlement legs reverse ATOMICALLY: the driver payment
-    // (type-based, existing) and the vehicle charge leg (effect-based — the
-    // same reversal convention as 'receipt_payout' at updateReceiptStatus).
+    // (type-based, existing) and the vehicle charge leg (effect-based).
     const active = entries.filter(e =>
       e.reference_type === KARTA_REF_TYPE &&
       (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
@@ -1691,8 +1386,6 @@ export const FinancialService = Object.freeze({
   deleteDriverSalfa,
   createOfficeDeposit,
   resolveHamolaPrice,
-  updateReceiptStatus,
-  updateClientUnpaidBalances,
   getDriverKartas,
   getDriverUnpaidKartas,
   getDriverPaidKartas,

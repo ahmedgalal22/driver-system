@@ -4,7 +4,6 @@
  *
  * Treasury entries (effect column — MySQL ENUM):
  *   capital_deposit   ← إيداع رأس مال
- *   receipt_payout    ← صرف كارتة (تلقائي من updateReceiptStatus)
  *   salfa             ← سلفة لعميل/شخص آخر
  *   expense           ← مصروف
  *   salary            ← مرتب
@@ -25,18 +24,6 @@
  *            summary-card DOM text.  This is DOM-driven finance.
  *            FIX: Print now reads from a cached `_lastRenderedEntries` array
  *                 and `_lastRenderedSummary` object — raw data only.
- *
- *   ISSUE-3: editEntry() for a SALFA does NOT call
- *            FinancialService.updateClientUnpaidBalances().  If a salfa
- *            amount is edited, the client's unpaid receipts become stale.
- *            FIX: editEntry() now calls updateClientUnpaidBalances() for
- *                 salfa entries that have a client_id.
- *
- *   ISSUE-4: deleteEntry() for a SALFA does NOT call
- *            FinancialService.updateClientUnpaidBalances().  Reversed salf
- *            leaves unpaid receipt balances stale.
- *            FIX: deleteEntry() now calls updateClientUnpaidBalances() after
- *                 the reversal transaction.
  *
  *   ISSUE-5: getSummary() is dead code — never called.  _refreshPage()
  *            computes summaries via _computeFilteredSummary() which is a
@@ -68,7 +55,6 @@
  */
 
 import { Money } from './money.js';
-import { FinancialService } from './financial.js';
 import { AuthModule } from './auth.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
 import { DBProvider } from './services/dbProvider.js';
@@ -88,7 +74,6 @@ const TREASURY_ENTRY_TYPE = Object.freeze({
 
 const TREASURY_EFFECT = Object.freeze({
   CAPITAL_DEPOSIT  : 'capital_deposit',
-  RECEIPT_PAYOUT   : 'receipt_payout',
   SALFA            : 'salfa',
   EXPENSE          : 'expense',
   SALARY           : 'salary',
@@ -103,11 +88,6 @@ const TREASURY_EDITABLE_EFFECTS = Object.freeze([
   TREASURY_EFFECT.SALARY,
 ]);
 
-const TREASURY_PAYOUT_EFFECTS = Object.freeze([
-  TREASURY_EFFECT.RECEIPT_PAYOUT,
-  TREASURY_EFFECT.SALFA,
-]);
-
 const TREASURY_EXPENSE_EFFECTS = Object.freeze([
   TREASURY_EFFECT.EXPENSE,
   TREASURY_EFFECT.SALARY,
@@ -115,7 +95,6 @@ const TREASURY_EXPENSE_EFFECTS = Object.freeze([
 
 const TREASURY_TAB = Object.freeze({
   ALL      : 'all',
-  PAYOUTS  : 'payouts',
   EXPENSES : 'expenses',
 });
 
@@ -142,7 +121,6 @@ const CLIENT_TYPE = Object.freeze({
 const LEDGER_ENTRY_TYPE = Object.freeze({
   DEPOSIT         : 'deposit',
   WITHDRAW        : 'withdraw',
-  RECEIPT_PAYMENT : 'receipt_payment',
 });
 
 const DOMAIN_EVENT = Object.freeze({
@@ -202,7 +180,6 @@ function _nowISO() {
 function _effectLabel(effect) {
   switch (effect) {
     case EFFECTS.CAPITAL_DEPOSIT:  return 'إيداع رأس مال';
-    case EFFECTS.RECEIPT_PAYOUT:   return 'صرف كارتة';
     case EFFECTS.SALFA:            return 'سلفة';
     case EFFECTS.EXPENSE:          return 'مصروف';
     case EFFECTS.SALARY:           return 'مرتب';
@@ -340,11 +317,6 @@ async function createSalfa(username, { client_id, client_type, client_name, amou
 
   const results = await DBProvider.transaction(ops, { username });
 
-  // Auto-update unpaid receipts for this client
-  if (client_id && client_type === CLIENT_TYPE.OWNER) {
-    await FinancialService.updateClientUnpaidBalances(client_id, username);
-  }
-
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.TREASURY_CHANGED));
   return Money.decimalizeRecord(results[0]);
 }
@@ -393,12 +365,10 @@ async function createExpense(username, { subtype, description, employee_name, am
 /**
  * Edit a treasury entry (تعديل حركة)
  *
- * STABILIZATION NOTE (ISSUE-3 + ISSUE-9):
- *   For salfa entries with a client_id:
- *   - The corresponding vehicle_ledger entry's amount is also patched atomically.
- *   - After the DB write, updateClientUnpaidBalances() is called to rebalance
- *     any unpaid receipts belonging to this client.
- *   This ensures the ledger and unpaid balances are always in sync.
+ * STABILIZATION NOTE (ISSUE-9):
+ *   For salfa entries with a client_id, the corresponding vehicle_ledger
+ *   entry's amount is patched atomically in the same transaction — ledger
+ *   and treasury stay in sync.
  */
 async function editEntry(username, entryId, patch) {
   if (!username) throw new Error('[Treasury] username required');
@@ -446,11 +416,6 @@ async function editEntry(username, entryId, patch) {
   await DBProvider.transaction(ops, { username });
   const updated = await TreasuryRepository.getById(entryId);
 
-  // ISSUE-3 FIX: Rebalance unpaid receipts for the affected client
-  if (isSalfaWithClient) {
-    await FinancialService.updateClientUnpaidBalances(existing.client_id, username);
-  }
-
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.TREASURY_CHANGED));
   return Money.decimalizeRecord(updated);
 }
@@ -458,9 +423,8 @@ async function editEntry(username, entryId, patch) {
 /**
  * Delete (reverse) a treasury entry (حذف / عكس حركة)
  *
- * STABILIZATION NOTE (ISSUE-4):
- *   For salfa entries with a client_id, after the reversal transaction,
- *   updateClientUnpaidBalances() is called to rebalance unpaid receipts.
+ * For salfa entries with a client_id, the linked vehicle_ledger entry is
+ * reversed in the same transaction.
  */
 async function deleteEntry(username, entryId) {
   if (!username) throw new Error('[Treasury] username required');
@@ -504,11 +468,6 @@ async function deleteEntry(username, entryId) {
 
   await DBProvider.transaction(ops, { username });
 
-  // ISSUE-4 FIX: Rebalance unpaid receipts for the affected client
-  if (isSalfaWithClient) {
-    await FinancialService.updateClientUnpaidBalances(existing.client_id, username);
-  }
-
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.TREASURY_CHANGED));
 }
 
@@ -532,7 +491,6 @@ async function getSummary(username, filters = null) {
   }
 
   let total_in = 0;
-  let total_payout = 0;
   let total_salfa = 0;
   let total_expense = 0;
 
@@ -542,7 +500,6 @@ async function getSummary(username, filters = null) {
     if (e.type === TREASURY_ENTRY_TYPE.DEPOSIT) {
       total_in += amt;
     }
-    if (e.effect === EFFECTS.RECEIPT_PAYOUT) total_payout += amt;
     if (e.effect === EFFECTS.SALFA) total_salfa += amt;
     if (e.effect === EFFECTS.EXPENSE || e.effect === EFFECTS.SALARY) total_expense += amt;
 
@@ -560,7 +517,6 @@ async function getSummary(username, filters = null) {
   return {
     balance: Money.toDecimal(balance_in - balance_out),
     total_in: Money.toDecimal(total_in),
-    total_payout: Money.toDecimal(total_payout),
     total_salfa: Money.toDecimal(total_salfa),
     total_expense: Money.toDecimal(total_expense),
 
@@ -585,9 +541,7 @@ async function getEntries(username, filters = null) {
     });
   }
 
-  if (filters?.tab === TREASURY_TAB.PAYOUTS) {
-    entries = entries.filter(e => TREASURY_PAYOUT_EFFECTS.includes(e.effect));
-  } else if (filters?.tab === TREASURY_TAB.EXPENSES) {
+  if (filters?.tab === TREASURY_TAB.EXPENSES) {
     entries = entries.filter(e => TREASURY_EXPENSE_EFFECTS.includes(e.effect));
   }
 
@@ -619,14 +573,14 @@ const STATE = {
   from: '',
   to: '',
   editingId: null,
-  search: { all: '', payouts: '', expenses: '' },
+  search: { all: '', expenses: '' },
   _salfaClients: [],       // ISSUE-7 FIX: client list stored in state, not on DOM node
   _shellRendered: false,   // ISSUE-1 FIX: idempotent shell rendering
 };
 
 // ── Render-cache for data-driven print (ISSUE-2 FIX) ──
 let _lastRenderedEntries = [];
-let _lastRenderedSummary = { balance: 0, total_in: 0, total_payout: 0, total_salfa: 0, total_expense: 0 };
+let _lastRenderedSummary = { balance: 0, total_in: 0, total_salfa: 0, total_expense: 0 };
 
 // ── Async generation counter (ISSUE-6 FIX) ──
 let _refreshGen = 0;
@@ -700,7 +654,6 @@ function _renderShell() {
       <!-- Tabs -->
       <div class="tabs mb-4" role="tablist">
         <button type="button" data-action="treasury-tab" data-tab="all" class="tab-btn active-purple">📊 الكل</button>
-        <button type="button" data-action="treasury-tab" data-tab="payouts" class="tab-btn">📋 صرف كارتات وسلفيات</button>
         <button type="button" data-action="treasury-tab" data-tab="expenses" class="tab-btn">📦 مصروفات ومرتبات</button>
       </div>
 
@@ -748,7 +701,6 @@ function _renderSummary(summary) {
   container.innerHTML = `
     ${card('رصيد الخزنة', summary.balance, 'linear-gradient(135deg,#1e40af,#3b82f6)')}
     ${card('إجمالي الداخل', summary.total_in, 'linear-gradient(135deg,#059669,#10b981)')}
-    ${card('صرف الكارتات', summary.total_payout, 'linear-gradient(135deg,#7c3aed,#8b5cf6)')}
     ${card('السلفيات', summary.total_salfa, 'linear-gradient(135deg,#0891b2,#06b6d4)')}
     ${card('المصروفات والمرتبات', summary.total_expense, 'linear-gradient(135deg,#dc2626,#ef4444)')}
   `;
@@ -805,9 +757,7 @@ function _renderTabs() {
 function _syncSearchPlaceholder() {
   const searchEl = document.getElementById('treasurySearch');
   if (!searchEl) return;
-  if (STATE.tab === TREASURY_TAB.PAYOUTS) {
-    searchEl.placeholder = '🔍 ابحث داخل صرف الكارتات والسلفيات...';
-  } else if (STATE.tab === TREASURY_TAB.EXPENSES) {
+  if (STATE.tab === TREASURY_TAB.EXPENSES) {
     searchEl.placeholder = '🔍 ابحث داخل المصروفات والمرتبات...';
   } else {
     searchEl.placeholder = '🔍 ابحث داخل جميع الحركات...';
@@ -1074,7 +1024,7 @@ async function _saveExpense() {
  * Zero DOM-driven financial values.
  */
 function _printTreasuryTab() {
-  const tabLabels = { all: 'جميع الحركات', payouts: 'صرف كارتات وسلفيات', expenses: 'مصروفات ومرتبات' };
+  const tabLabels = { all: 'جميع الحركات', expenses: 'مصروفات ومرتبات' };
   const tabTitle = tabLabels[STATE.tab] || 'الخزنة';
 
   const entries = _lastRenderedEntries;
@@ -1100,7 +1050,6 @@ function _printTreasuryTab() {
   const summaryItems = [
     { label: 'رصيد الخزنة', value: Money.fmt(summary.balance) },
     { label: 'إجمالي الداخل', value: Money.fmt(summary.total_in) },
-    { label: 'صرف الكارتات', value: Money.fmt(summary.total_payout) },
     { label: 'السلفيات', value: Money.fmt(summary.total_salfa) },
     { label: 'المصروفات والمرتبات', value: Money.fmt(summary.total_expense) },
   ];
@@ -1148,7 +1097,6 @@ function _printTreasuryTab() {
 
 function _computeFilteredSummary(entries) {
   let total_in = 0;
-  let total_payout = 0;
   let total_salfa = 0;
   let total_expense = 0;
   let balance_in = 0;
@@ -1158,7 +1106,6 @@ function _computeFilteredSummary(entries) {
     const amt = Money.toCents(e.amount);
     if (e.type === TREASURY_ENTRY_TYPE.DEPOSIT) { total_in += amt; balance_in += amt; }
     if (e.type === TREASURY_ENTRY_TYPE.WITHDRAW) balance_out += amt;
-    if (e.effect === EFFECTS.RECEIPT_PAYOUT) total_payout += amt;
     if (e.effect === EFFECTS.SALFA) total_salfa += amt;
     if (e.effect === EFFECTS.EXPENSE || e.effect === EFFECTS.SALARY) total_expense += amt;
   }
@@ -1166,7 +1113,6 @@ function _computeFilteredSummary(entries) {
   return {
     balance: Money.toDecimal(balance_in - balance_out),
     total_in: Money.toDecimal(total_in),
-    total_payout: Money.toDecimal(total_payout),
     total_salfa: Money.toDecimal(total_salfa),
     total_expense: Money.toDecimal(total_expense),
   };

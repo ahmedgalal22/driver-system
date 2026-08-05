@@ -8,10 +8,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 W="${TMPDIR:-/tmp}/wpt-round-trip"
-rm -rf "$W"; mkdir -p "$W/services" "$W/constants" "$W/_src"
+rm -rf "$W"; mkdir -p "$W/services" "$W/_src"
 cp "$ROOT"/{database.js,financial.js,money.js,dateUtils.js} "$W/"
 cp "$ROOT"/services/*.js "$W/services/"
-cp "$ROOT"/constants/payoutStatus.js "$W/constants/"
 cp "$(dirname "${BASH_SOURCE[0]}")"/../write-path/idb-shim.mjs "$W/"
 # Production sources read as TEXT for real function extraction + fingerprints
 cp "$ROOT"/receipts.js "$W/_src/receipts.js"

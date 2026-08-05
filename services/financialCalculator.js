@@ -8,7 +8,6 @@ import { Money } from '../money.js';
 // ── Domain constants (self-contained — no external import dependency) ──────
 const _ENTRY_TYPE_DEPOSIT = 'deposit';
 const _EFFECT = Object.freeze({
-  RECEIPT_PAYOUT   : 'receipt_payout',
   SALFA            : 'salfa',
   EXPENSE          : 'expense',
   SALARY           : 'salary',
@@ -58,7 +57,7 @@ export function calculateWeightTotal(row) {
  * Calculates totals for a full receipt based on its rows.
  * Returns: { total, balance }
  */
-export function calculateReceiptTotals(rows, previous_balance = 0, paid = 0) {
+export function calculateReceiptTotals(rows, previous_balance = 0) {
   const dataRows = (rows || []).filter(r => r && r._type !== 'separator' && r.type !== 'separator' && r.row_type !== 'separator');
   
   let totalCents = 0;
@@ -68,9 +67,8 @@ export function calculateReceiptTotals(rows, previous_balance = 0, paid = 0) {
   const total = Money.toDecimal(totalCents);
 
   const prevBalCents = Money.toCents(previous_balance);
-  const paidCents = Money.toCents(paid);
 
-  const balance = Money.toDecimal(totalCents + prevBalCents - paidCents);
+  const balance = Money.toDecimal(totalCents + prevBalCents);
 
   return {
     total,
@@ -83,7 +81,6 @@ export function calculateReceiptTotals(rows, previous_balance = 0, paid = 0) {
  */
 export function calculateTreasuryTotals(entries) {
   let total_in = 0;
-  let total_payout = 0;
   let total_salfa = 0;
   let total_expense = 0;
 
@@ -94,7 +91,6 @@ export function calculateTreasuryTotals(entries) {
     if (e.type === _ENTRY_TYPE_DEPOSIT) {
       total_in += amt;
     }
-    if (e.effect === _EFFECT.RECEIPT_PAYOUT) total_payout += amt;
     if (e.effect === _EFFECT.SALFA) total_salfa += amt;
     if (e.effect === _EFFECT.EXPENSE || e.effect === _EFFECT.SALARY) total_expense += amt;
 
@@ -102,7 +98,6 @@ export function calculateTreasuryTotals(entries) {
 
   return {
     total_in: Money.toDecimal(total_in),
-    total_payout: Money.toDecimal(total_payout),
     total_salfa: Money.toDecimal(total_salfa),
     total_expense: Money.toDecimal(total_expense),
 

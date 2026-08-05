@@ -15,7 +15,6 @@ import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { calculateRowNet, calculateReceiptTotals } from './services/financialCalculator.js';
-import { RECEIPT_PAYOUT_STATUS } from './constants/payoutStatus.js';
 import { DateUtils } from './dateUtils.js';
 
 
@@ -92,11 +91,6 @@ function _validate(rawData) {
   }
 
   // general_discount removed from system
-  const paid = Number(rawData.paid ?? 0);
-  if (!Number.isFinite(paid) || paid < 0) {
-    throw new Error('[ReceiptsModule] paid must be a non-negative number.');
-  }
-
   for (const row of dataRows) {
     if (!row || typeof row !== 'object') {
       throw new Error('[ReceiptsModule] Each data row must be a plain object.');
@@ -174,9 +168,8 @@ function _normalize(rawData) {
   const dataRows = rows.filter(r => r.row_type !== ROW_TYPES.SEPARATOR);
 
   const previous_balance = Number(rawData.previous_balance) || 0;
-  const paid             = Number(rawData.paid)             || 0;
 
-  const calcs = calculateReceiptTotals(rows, previous_balance, paid);
+  const calcs = calculateReceiptTotals(rows, previous_balance);
   const total = calcs.total;
   const balance = calcs.balance;
   const row_count        = dataRows.length;
@@ -202,7 +195,6 @@ function _normalize(rawData) {
     total,
     previous_balance,
     general_discount,
-    paid,
     balance,
   };
 }
@@ -292,7 +284,6 @@ function _buildServicePayload(n) {
     total            : n.total,
     general_discount : n.general_discount,
     previous_balance : n.previous_balance,
-    paid             : n.paid,
     balance          : n.balance,
   };
 }
@@ -1200,11 +1191,6 @@ function renderTotals() {
               <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">رصيد العميل</div>
               <div style="font-size:18px;font-weight:bold;margin:0;" id="receiptBalance" data-previous="0">0.00</div>
             </td>
-            <td class="totals-cell" style="background:#16a34a;color:white;border:1px solid #e5e7eb;padding:8px;text-align:center;">
-              <div style="font-size:10px;opacity:.9;margin:0 0 4px 0;">المدفوع</div>
-              <input type="number" id="paidAmount" value="0" min="0" step="0.01" data-auto="1"
-                style="width:100%;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);border-radius:6px;padding:3px 6px;font-size:15px;font-weight:bold;color:white;text-align:center;box-sizing:border-box;">
-            </td>
           </tr>
         </table>
       </div>
@@ -1480,9 +1466,7 @@ async function updateSelectedClientBalanceExcluding(excludeReceiptId) {
     if (excludeReceiptId && entry.reference_id === String(excludeReceiptId) && entry.reference_type === 'receipt') {
       continue;
     }
-    if (entry.type === 'receipt_payment') {
-      balance -= Math.abs(cents);
-    } else if (entry.type === 'deposit') {
+    if (entry.type === 'deposit') {
       balance += cents;
     } else if (entry.type === 'withdraw') {
       balance -= cents;
@@ -2025,11 +2009,8 @@ function calculateTotals() {
   const balEl = document.getElementById('receiptBalance');
   const previousBalance = parseFloat(balEl?.dataset.previous || '0') || 0;
 
-  const paidEl = document.getElementById('paidAmount');
-  const paidAuto = paidEl ? paidEl.dataset.auto !== '0' : true;
-  
   // Calculate using our unified financial calculator!
-  const calcs = calculateReceiptTotals(rowObjs, previousBalance, 0);
+  const calcs = calculateReceiptTotals(rowObjs, previousBalance);
   const total = calcs.total;
 
   const totalEl = document.getElementById('totalAmount');
@@ -2051,17 +2032,12 @@ function calculateTotals() {
     }
   });
 
-  // المدفوع auto-fill = المبلغ الذي يصفّي رصيد العميل (الإجمالي + الرصيد السابق)
-  if (paidEl && paidAuto) paidEl.value = Money.fmt(calcs.balance);
-  const paid = parseFloat(paidEl?.value) || 0;
-  const projectedBalance = calcs.balance - paid;
-
-  // Show: previous balance when no rows yet, projected balance otherwise
+  // رصيد العميل المعروض: الرصيد السابق ما لم توجد صفوف، وإلا الرصيد المتوقع (الإجمالي + السابق)
   if (balEl) {
     if (total === 0 && previousBalance !== 0) {
       balEl.textContent = Money.fmt(previousBalance);
     } else {
-      balEl.textContent = Money.fmt(projectedBalance);
+      balEl.textContent = Money.fmt(calcs.balance);
     }
   }
 }
@@ -2643,7 +2619,6 @@ async function collectRawData() {
     company_phone    : normalizeOptionalString(companyPhone),
     previous_balance : previousBalance,
     general_discount : generalDiscount,
-    paid             : parseFloat(document.getElementById('paidAmount')?.value) || 0,
     total            : parseFloat(document.getElementById('totalAmount')?.textContent) || 0,
     rows             : await collectReceiptRows(),
   };
@@ -2955,7 +2930,6 @@ function printReceipt() {
   if (totalsContainer) {
     const rowCount   = document.getElementById('rowCount')?.textContent || '0';
     const total      = document.getElementById('totalAmount')?.textContent || '0.00';
-    const paid       = document.getElementById('paidAmount')?.value || '0';
     const balance    = document.getElementById('receiptBalance')?.textContent || '0.00';
 
     totalsHTML = `
@@ -2965,7 +2939,6 @@ function printReceipt() {
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">عدد الكارتات</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">الإجمالي</th>
             <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">رصيد العميل</th>
-            <th style="background:#fff;color:#000;padding:5px 8px;border:1.5px solid #000;text-align:center;font-size:8pt;font-weight:700;">المدفوع</th>
           </tr>
         </thead>
         <tbody>
@@ -2973,7 +2946,6 @@ function printReceipt() {
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${rowCount}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${total}</td>
             <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${balance}</td>
-            <td style="background:#fff;color:#000;padding:6px 8px;border:1.5px solid #000;text-align:center;font-size:12pt;font-weight:800;">${paid}</td>
           </tr>
         </tbody>
       </table>`;
@@ -3049,9 +3021,6 @@ function clearReceiptSilent() {
   const tbody = document.getElementById('receiptTableBody');
   if (tbody) tbody.innerHTML = '';
   
-  const paidEl = document.getElementById('paidAmount');
-  if (paidEl) { paidEl.value = '0'; paidEl.dataset.auto = '1'; }
-
   const balEl = document.getElementById('receiptBalance');
   if (balEl) { balEl.textContent = '0.00'; balEl.dataset.previous = '0'; }
   
@@ -3103,22 +3072,9 @@ async function loadReceiptForEdit(receiptData) {
   // Financial fields are stored as cents in DB — convert to decimals for UI
   // general_discount removed from system
   const balEl           = document.getElementById('receiptBalance');
-  const paidEl = document.getElementById('paidAmount');
-  const isPaid = String(receiptData.payout_status || RECEIPT_PAYOUT_STATUS.UNPAID) === RECEIPT_PAYOUT_STATUS.PAID;
-
-  if (isPaid) {
-    // "تم صرفه" — keep historical balance as saved (no live update)
-    const previousBalance = Money.fmtCents(receiptData.previous_balance);
-    if (balEl) balEl.dataset.previous = String(previousBalance);
-    const paid = Money.fmtCents(receiptData.paid ?? receiptData.totals?.paid ?? 0);
-    setV('paidAmount', paid);
-    if (paidEl) paidEl.dataset.auto = '0'; // keep saved paid value
-  } else {
-    // "لم يتم صرفه" — use saved previous_balance as-is
-    const previousBalance = Money.fmtCents(receiptData.previous_balance);
-    if (balEl) balEl.dataset.previous = String(previousBalance);
-    if (paidEl) paidEl.dataset.auto = '1'; // auto-update paid (يصفّي الرصيد)
-  }
+  // Use the saved previous_balance as-is
+  const previousBalance = Money.fmtCents(receiptData.previous_balance);
+  if (balEl) balEl.dataset.previous = String(previousBalance);
 
 
   const tbody       = document.getElementById('receiptTableBody');
@@ -3202,11 +3158,8 @@ async function loadReceiptForEdit(receiptData) {
 
   ensureReceiptArrowRow();
 
-  // Both paid and unpaid: use the saved previous_balance as-is.
-  // Live rebalancing only happens via:
-  //   1. createSalfa → updateClientUnpaidBalances (treasury.js)
-  //   2. toggle-receipt-status → PAID (allReceipts.js)
-  // Editing a receipt does NOT recalculate the client balance.
+  // Edit prefill uses the saved previous_balance as-is;
+  // editing a receipt does NOT recalculate the client balance.
   calculateTotals();
 
   const saveBtn = document.querySelector('#receiptPage button[data-action="save-receipt"]');
@@ -3265,11 +3218,6 @@ function attachPageListeners() {
 
   // ── delegated: input ───────────────────────────────────────────────────────
   document.addEventListener('input', function (e) {
-    if (e.target.id === 'paidAmount') {
-      e.target.dataset.auto = '0';
-      calculateTotals();
-      return;
-    }
     if (e.target.id === 'clientInput') {
       _onClientChange(e.target);
       return;

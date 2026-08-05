@@ -296,22 +296,16 @@ function _dateLabel(value) {
 function _ledgerType(type) {
   if (type === 'deposit') return 'إضافة';
   if (type === 'withdraw') return 'سداد';
-  if (type === 'receipt_payment') return 'صرف نموذج';
   if (type === 'OFFICE_DEPOSIT') return 'إيداع شركة';
   if (type === 'OFFICE_WITHDRAW_AUTO') return 'سحب شركة';
   return type || '-';
 }
 
 function _ledgerNote(entry) {
-  const receiptNum = entry.receipt_number || '';
   const refType = entry.reference_type || '';
   const type = entry.type || '';
   const note = entry.note || '';
 
-  // Receipt payment — نموذج صرف تم صرفه
-  if (type === 'receipt_payment') {
-    return receiptNum ? 'سحب نموذج صرف — إذن: ' + receiptNum : 'سحب نموذج صرف';
-  }
   // Client balance — manual deposit/withdraw
   if (refType === 'client_balance') {
     if (type === 'deposit') return note || 'إيداع رصيد يدوي';
@@ -687,17 +681,14 @@ function _sortByPriority(list) {
   });
 }
 
-async function _getUnpaidKartaCount(clientId) {
+async function _getKartaCount(clientId) {
   // Normalized read path (Step 6): persisted receipts never embed rows.
   // Headers come from the client-scoped read-repository query; rows are
   // loaded per receipt via ReceiptReadRepository. DB.findByFields excludes
   // soft-deleted records by default (deleted guard is therefore implicit).
   const clientReceipts = await ReceiptReadRepository.getReceiptsByClient(clientId);
-  const unpaid = (clientReceipts || []).filter(
-    r => String(r.payout_status || 'unpaid') === 'unpaid'
-  );
   const rowLists = await Promise.all(
-    unpaid.map(r => ReceiptReadRepository.getReceiptRowsByReceipt(r.id))
+    (clientReceipts || []).map(r => ReceiptReadRepository.getReceiptRowsByReceipt(r.id))
   );
   // NOTE: the frozen ReceiptRow contract persists data rows only (no
   // separators), so each persisted row counts as one karta; the row_type
@@ -771,7 +762,7 @@ async function loadOwners() {
       vehicle_number: o.vehicle_number || '',
     }));
     const ownerSnaps = await Promise.all(ownerList.map(_clientSnapshot));
-    const ownerKartas = await Promise.all(ownerList.map(o => _getUnpaidKartaCount(o.id)));
+    const ownerKartas = await Promise.all(ownerList.map(o => _getKartaCount(o.id)));
     const sortedOwners = _sortByPriority(ownerSnaps);
 
     if (sortedOwners.length === 0) {

@@ -150,7 +150,7 @@ const FORM_PAYLOAD = {
   owner_name: 'مالك الاختبار',
   company_name: null, company_phone: null,
   previous_balance: 500, general_discount: 0,
-  paid: 0, total: 0,
+  total: 0,
   rows: [
     // Row A: driver selected on the row (id-keyed) — collector output shape after
     // Phase 6 (driver per receipt row): driver_id = select value, driver_name =
@@ -220,9 +220,10 @@ ok(persistedHeader.client_id === 'owner-1' && persistedHeader.client_name === '�
    && persistedHeader.receipt_date === '2026-07-29', 'KEPT: client_id / client_name / receipt_date');
 ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === undefined
    && persistedHeader.net_due === undefined && persistedHeader.net_total === undefined
-   && persistedHeader.previous_balance === Money.toCents(500) && persistedHeader.paid === 0,
-   `REMOVED (General Add + Net Due + Net Total phases): header.general_add / header.net_due / header.net_total not persisted (total=${persistedHeader.total}, previous_balance=${persistedHeader.previous_balance})`);
-ok(persistedHeader.payout_status === 'unpaid', 'KEPT: payout_status');
+   && persistedHeader.previous_balance === Money.toCents(500) && persistedHeader.paid === undefined,
+   `REMOVED (General Add + Net Due + Net Total + Paid phases): header.general_add / header.net_due / header.net_total / header.paid not persisted (total=${persistedHeader.total}, previous_balance=${persistedHeader.previous_balance})`);
+ok(persistedHeader.payout_status === undefined && persistedHeader.paid_at === undefined,
+   `REMOVED-CONTRACT (Paid phase): payout_status / paid_at never persisted (payout_status=${persistedHeader.payout_status})`);
 
 // Row losses / survivors
 ok(persistedRows.length === 2, `LOST: separator row dropped — only 2 data rows persisted (3 pushed incl. separator)`);
@@ -385,7 +386,7 @@ const rebuiltTotals = calculateReceiptTotals(
       add: uiA.add, sarf: uiA.sarf },
     // row B — entered values (same reconstruction established)
     { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
-  ], 500, 0);
+  ], 500);
 console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance}`);
 ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === 1670,
    `REMOVED-CONTRACT (Net Due + Net Total phases): calculator returns {total, balance} only — total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance} (1170/1670)`);

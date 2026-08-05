@@ -98,7 +98,6 @@ function fmtCents(cents) {
 const FIELDS = Object.freeze([
   'amount',
   'total',
-  'paid',
   'remaining',
   'balance',
   'subtotal',
