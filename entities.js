@@ -1319,6 +1319,65 @@ async function _getClient(type, id) {
   return OwnersModule.getClientByType(type, id);
 }
 
+// ── رصيد العميل — UI-ONLY restoration ──────────────────────────────────────
+// Exact pre-removal «الحركات» section template (9a1dc57~1), fed an
+// ALWAYS-EMPTY ledger: no balance feature, no reads, no writes. The date
+// inputs and تطبيق/مسح التحديد buttons render visually but have NO handlers
+// and perform NO action.
+function _renderLedger(client) {
+  const ledger = []; // UI-only: the client-ledger feature remains removed
+  return `
+    <section class="mb-8">
+      <h3 class="text-lg font-bold mb-4">الحركات</h3>
+      <div class="filter-row mb-6 flex-wrap">
+        <div class="form-group mb-0">
+          <label class="label mb-2 text-muted text-xs" for="clientFromDate">من</label>
+          <input id="clientFromDate" type="date" class="input input-sm">
+        </div>
+        <div class="form-group mb-0">
+          <label class="label mb-2 text-muted text-xs" for="clientToDate">إلى</label>
+          <input id="clientToDate" type="date" class="input input-sm">
+        </div>
+        <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}"
+          class="btn btn-primary btn-sm mb-4">
+          تطبيق
+        </button>
+        <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}"
+          class="btn btn-secondary btn-sm mb-4">
+          مسح التحديد
+        </button>
+      </div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>المبلغ</th>
+              <th>المركبة</th>
+              <th>ملاحظة</th>
+            </tr>
+          </thead>
+          <tbody id="clientLedgerBody">
+            ${ledger.length ? ledger.map(e => `
+              <tr>
+                <td>${_dateLabel(e.date || e.applied_at)}</td>
+                <td class="font-semibold">${_fmt(e.amount)}</td>
+                <td>${e.vehicle_plate || '-'}</td>
+                <td>${_ledgerNote(e)}</td>
+              </tr>
+            `).join('') : `
+              <tr>
+                <td colspan="4" class="text-muted text-center">لا توجد حركات</td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+
 function _ensureVehicleModal() {
   if (document.getElementById('vehicleModal')) return;
   const div = document.createElement('div');
@@ -1416,6 +1475,11 @@ async function showOwnerDetails(id, type = 'owner') {
     ownerType: type,
   }));
 
+  // رصيد العميل — UI-ONLY placeholders: the balance card shows a static 0.00
+  // placeholder and the «الحركات» ledger always renders its empty state. No
+  // balance reads/computation; إيداع/سحب buttons are visual only (the modal
+  // and all handlers remain removed).
+  const ledgerHtml = _renderLedger(client);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
@@ -1429,6 +1493,24 @@ async function showOwnerDetails(id, type = 'owner') {
         <span class="ent-details-type">مركبة</span>
       </div>
 
+      <div class="stat-grid mb-8">
+        <div class="card">
+          <p class="text-muted text-xs mb-2">الرصيد الحالي</p>
+          <div class="text-3xl font-bold ${_balanceClass(0)} mb-6">${_fmt(0)}</div>
+          <div class="flex gap-2 flex-wrap justify-end">
+            <button type="button" data-action="open-balance-entry" data-entry-type="deposit"
+              class="btn btn-success btn-sm">
+              إيداع رصيد
+            </button>
+            <button type="button" data-action="open-balance-entry" data-entry-type="withdraw"
+              class="btn btn-danger btn-sm">
+              سحب رصيد
+            </button>
+          </div>
+        </div>
+      </div>
+
+      ${ledgerHtml}
       ${relatedHtml}
     </div>
   `;
