@@ -1,13 +1,13 @@
 /**
- * financial.js — treasury, ledger, shared financial operations
+ * financial.js — receipts, vehicle_ledger, shared financial operations
  * ─────────────────────────────────────────────────────────────────────────────
  * DESIGN DECISION: Pre-generated UUID for receipts
  *   receipts.id is a UUID string (not autoIncrement integer).
- *   This lets us pass reference_id to treasury + vehicle_ledger entries
+ *   This lets us pass reference_id to vehicle_ledger entries
  *   BEFORE any insert fires — enabling a single atomic DB.transaction()
- *   across all three stores with zero orphan-record risk.
+ *   across stores with zero orphan-record risk.
  *
- * RULE 2  : ALL money operations live here. Zero treasury/ledger writes elsewhere.
+ * RULE 2  : ALL money operations live here. Zero receipt/ledger writes elsewhere.
  * RULE 3  : Every operation executes inside ONE DB.transaction() call.
  * RULE 4  : update/delete MUST reverse old entries before applying new ones.
  * RULE 5  : Every financial record carries { reference_type, reference_id }.
@@ -33,7 +33,6 @@ import { DateUtils } from './dateUtils.js';
 
 const STORE = Object.freeze({
   RECEIPTS : 'receipts',
-  TREASURY : 'treasury',
   LEDGER   : 'vehicle_ledger',
   OFFICES  : 'offices',
 });

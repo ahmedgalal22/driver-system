@@ -1498,7 +1498,6 @@ async function initAllReceiptsPage() {
   // Replaces 4 independent listeners that each kicked an async refresh.
   window.addEventListener('receipts:changed',    _scheduleAllReceiptsRefresh);
   window.addEventListener('offices:changed',     _scheduleAllReceiptsRefresh);
-  window.addEventListener('treasury:changed',    _scheduleAllReceiptsRefresh);
 
   await refreshAllReceiptsPage(true);
 }

@@ -4,13 +4,12 @@ import { PersistenceCommandType } from './persistenceCommand.js';
 // ── Explicit aggregate → physical store map ────────────────────────────────
 // Store names are a data-layer detail and MUST NOT be derived from aggregate
 // names (the previous `aggregate.toLowerCase() + 's'` derivation produced
-// 'receiptrows' / 'ledgers' / 'treasurys', which do not exist — every
+// 'receiptrows' / 'ledgers', which do not exist — every
 // transaction was rejected with "[DB] Invalid store").
 const AGGREGATE_STORES = Object.freeze({
   Receipt    : 'receipts',
   ReceiptRow : 'receipt_rows',
   Ledger     : 'vehicle_ledger',
-  Treasury   : 'treasury',
 });
 
 function _resolveStore(aggregate) {

@@ -5,15 +5,6 @@
 
 import { Money } from '../money.js';
 
-// ── Domain constants (self-contained — no external import dependency) ──────
-const _ENTRY_TYPE_DEPOSIT = 'deposit';
-const _EFFECT = Object.freeze({
-  SALFA            : 'salfa',
-  EXPENSE          : 'expense',
-  SALARY           : 'salary',
-
-});
-
 /**
  * Calculates the net value of a single data row.
  * Formula: ((weight + weight2) - deficit) * noloon - (ohda + officeAmount + discount) + add - sarf
@@ -68,33 +59,5 @@ export function calculateReceiptTotals(rows) {
 
   return {
     total
-  };
-}
-
-/**
- * Calculates aggregate totals for Treasury entries.
- */
-export function calculateTreasuryTotals(entries) {
-  let total_in = 0;
-  let total_salfa = 0;
-  let total_expense = 0;
-
-
-  for (const e of (entries || [])) {
-    if (!e) continue;
-    const amt = Number(e.amount) || 0; // already in cents
-    if (e.type === _ENTRY_TYPE_DEPOSIT) {
-      total_in += amt;
-    }
-    if (e.effect === _EFFECT.SALFA) total_salfa += amt;
-    if (e.effect === _EFFECT.EXPENSE || e.effect === _EFFECT.SALARY) total_expense += amt;
-
-  }
-
-  return {
-    total_in: Money.toDecimal(total_in),
-    total_salfa: Money.toDecimal(total_salfa),
-    total_expense: Money.toDecimal(total_expense),
-
   };
 }

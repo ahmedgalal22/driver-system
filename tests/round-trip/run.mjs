@@ -153,8 +153,21 @@ ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.t
   'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
 ok(!/name:\s*'counters'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
-ok(DATABASE_SRC.includes('const DB_VERSION = 13;'),
-  'schema bumped to v13 — clean reset purges persisted receipt_number headers');
+ok(DATABASE_SRC.includes('const DB_VERSION = 14;'),
+  'schema bumped to v14 — clean reset purges removed Treasury stores (treasury / mainCapitalTreasury)');
+ok(!/name:\s*'treasury'/.test(DATABASE_SRC) && !/name:\s*'mainCapitalTreasury'/.test(DATABASE_SRC),
+  'REMOVED-CONTRACT (Treasury phase, schema): treasury + mainCapitalTreasury object stores dropped — no Treasury store exists');
+ok(!/by_entry_type|by_account_type|entry_type|account_type/.test(DATABASE_SRC),
+  'REMOVED-CONTRACT (Treasury phase, schema): treasury-only indexes (by_entry_type / by_account_type) and their keyPaths dropped with the store');
+
+// ══ Treasury (الخزنة) phase — PERMANENT removal census (production sources) ══
+for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', ALLRECEIPTS_SRC], ['financial.js', FINANCIAL_SRC]]) {
+  ok(!src.includes("STORE.TREASURY") && !src.includes("TREASURY : 'treasury'") && !src.includes('treasury:changed')
+     && !/treasuryRepository|initTreasuryPage/.test(src),
+    `REMOVED-CONTRACT (Treasury phase): ${label} carries ZERO Treasury references (store key / change event / repository / page init)`);
+}
+ok(FINANCIAL_SRC.includes("LEDGER   : 'vehicle_ledger'"),
+  'KEEP-CONTRACT: financial.js driver/salfa financials still write exclusively to vehicle_ledger');
 
 // UX upgrade (driver quick-create): non-listed driver names are no longer
 // rejected at save — the user is asked to add the driver instead.

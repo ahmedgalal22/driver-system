@@ -31,7 +31,7 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 13;             // v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
+  const DB_VERSION = 14;             // v14: Treasury (الخزنة) subsystem removed — treasury + mainCapitalTreasury stores dropped (clean reset); v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
 
   /**
    * STORES schema.
@@ -107,27 +107,6 @@ const DB = (() => {
     },
 
     /**
-     * treasury: cash ledger — deposit/withdraw with effect/reference fields.
-     * Amounts in integer cents.
-     */
-    treasury: {
-      name: 'treasury',
-      keyPath: 'id',
-      autoIncrement: true,
-      indexes: [
-        { name: 'by_entry_type',         keyPath: 'entry_type',                      options: { unique: false } },
-        { name: 'by_type',               keyPath: 'type',                            options: { unique: false } },
-        { name: 'by_effect',             keyPath: 'effect',                          options: { unique: false } },
-        { name: 'by_account_type',       keyPath: 'account_type',                    options: { unique: false } },
-        { name: 'by_reference_id',       keyPath: 'reference_id',                    options: { unique: false } },
-        { name: 'by_reference_type',     keyPath: 'reference_type',                  options: { unique: false } },
-        { name: 'by_is_reversed',        keyPath: 'is_reversed',                     options: { unique: false } },
-        { name: 'by_ref_active',         keyPath: ['reference_id', 'is_reversed'],   options: { unique: false } },
-        { name: 'by_deleted',            keyPath: 'deleted_at' },
-      ],
-    },
-
-    /**
      * vehicleOwners: vehicle owners (clients) scoped by username.
      */
     vehicleOwners: {
@@ -169,19 +148,6 @@ const DB = (() => {
       ],
     },
 
-    /**
-     * mainCapitalTreasury: owner primary capital book (dashboard).
-     */
-    mainCapitalTreasury: {
-      name          : 'mainCapitalTreasury',
-      keyPath       : 'id',
-      autoIncrement : false,
-      indexes: [
-        { name: 'by_username', keyPath: 'username',   options: { unique: false } },
-        { name: 'by_type',     keyPath: 'type',       options: { unique: false } },
-        { name: 'by_deleted',  keyPath: 'deleted_at',  options: { unique: false } },
-      ],
-    },
 
   };
 

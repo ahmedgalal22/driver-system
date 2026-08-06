@@ -8,7 +8,6 @@ import { initReceiptPage } from './receipts.js';
 import { initAllReceiptsPage } from './allReceipts.js';
 import { attachOwnersPageListeners, loadOwners } from './entities.js';
 import { attachOfficesPageListeners, initOfficesPage, loadOffices } from './offices.js';
-import { initTreasuryPage } from './treasury.js';
 import { initHomePage } from './home.js';
 import { initSidebarLayout } from './sidebarLayout.js';
 import { initDashboardPage } from './dashboard.js';
@@ -26,7 +25,6 @@ const PAGE_MAP = {
   ownerDetailsPage: 'ownerDetailsPage',
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
-  treasuryPage: 'treasuryPage',
   officeDetailsPage: 'officeDetailsPage',
 };
 const PAGE_KEY_NORMALIZE = {
@@ -40,7 +38,6 @@ const PAGE_KEY_NORMALIZE = {
   ownerDetailsPage: 'ownerDetailsPage',
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
-  treasuryPage: 'treasuryPage',
   officeDetailsPage: 'officeDetailsPage',
 };
 
@@ -126,10 +123,6 @@ async function showPage(pageName) {
       await showPage('homePage');
     }
   }
-  if (pageName === 'treasuryPage' || targetId === 'treasuryPage') {
-    initHomePage();
-    initTreasuryPage();
-  }
   if (pageName === 'homePage' || targetId === 'homePage') {
     initHomePage();
   }
@@ -182,7 +175,6 @@ async function boot() {
     initOfficesPage();
     attachOwnersPageListeners();
     attachOfficesPageListeners();
-    initTreasuryPage();
     const lastPage = _readLastPage();
     const ctx = _readLastPageContext();
     let restored = false;
