@@ -117,7 +117,8 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["date         : normalizeOptionalString(_field(row, 'receipt-date'))", 'collector maps row date'],
   ["const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));", 'collector reads the row driver NAME text (autocomplete input) — exact name → id resolution at save'],
   ["hit = await _promptCreateDriverForRow(row, rowDriverText);", 'unknown driver name → «add driver?» prompt at save (replaces the old rejection)'],
-  ["driverNameById.set(String(hit.name || '').trim(), hit);", 'prompt-resolved driver cached for later rows in the same save (no double prompt)'],
+  ["let hit = _findDriverIndexHit(driverIndex, rowDriverText);", 'save-time driver resolution is two-tier: exact trimmed name, then normalized «visually identical» name'],
+  ["driverIndex.push({ rec: hit, trimmed: String(hit.name || '').trim(), norm: normalizeDriverName(hit.name) });", 'prompt-resolved driver cached for later rows in the same save (no double prompt)'],
   ["await ClientRepository.createDriverUnique(_currentUsername(), driverName);", 'quick-create reuses the drivers-store creation path (duplicate-safe normalized lookup)'],
   ["input.value = String(record.name || driverName);", 'newly created driver is auto-selected on the row before the save continues'],
   ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
@@ -141,14 +142,38 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
 // rejected at save — the user is asked to add the driver instead.
 ok(!RECEIPTS_SRC.includes('اسم السائق "${rowDriverText}" غير موجود في القائمة'),
   'REMOVED-CONTRACT (UX upgrade): the «driver not in the list» save-time rejection is gone — quick-create prompt instead (kept client/office «غير موجود في القائمة» warnings untouched)');
-fingerprint(RECEIPTS_SRC, 'السائق غير موجود. هل تريد إضافته؟',
-  'quick-create prompt asks «السائق غير موجود. هل تريد إضافته؟» (إضافة / إلغاء)');
+fingerprint(RECEIPTS_SRC, 'لم يتم العثور على السائق',
+  'quick-create prompt says «لم يتم العثور على السائق "name"»');
+fingerprint(RECEIPTS_SRC, '>إضافة السائق</button>',
+  'prompt button: إضافة السائق (create path)');
+fingerprint(RECEIPTS_SRC, '>متابعة البحث</button>',
+  'prompt button: متابعة البحث (abort + keep searching)');
+ok(!RECEIPTS_SRC.includes('السائق غير موجود. هل تريد إضافته؟'),
+  'REMOVED-CONTRACT (dialog copy): old «السائق غير موجود. هل تريد إضافته؟» wording replaced by the three-way prompt');
+fingerprint(RECEIPTS_SRC, "err.keepSearching = (choice === 'search');",
+  'متابعة البحث carries keepSearching so saveReceipt reselects the typed text for continued searching');
 fingerprint(RECEIPTS_SRC, 'err.code = DRIVER_CREATE_CANCELLED;',
-  'إلغاء throws the DRIVER_CREATE_CANCELLED sentinel (save aborts, no error alert)');
+  'إلغاء/متابعة البحث throw the DRIVER_CREATE_CANCELLED sentinel (save aborts, no error alert)');
 fingerprint(RECEIPTS_SRC, 'err?.code === DRIVER_CREATE_CANCELLED',
   'saveReceipt catches the cancel sentinel — focus returns to the row driver field, nothing persisted');
 fingerprint(RECEIPTS_SRC, 'await _receiptLoadDriverOptions();',
   'autocomplete source refreshed immediately after quick-create');
+fingerprint(RECEIPTS_SRC, '_driverACClose();\n  return record;',
+  'quick-create closes the popup after auto-select — the save continues, no reopen needed');
+
+// UX polish (fuzzy search + ranking + highlight + extended keyboard):
+fingerprint(RECEIPTS_SRC, 'const n = normalizeNameWithMap(String(d.name || \'\'));',
+  'driver cache pre-normalizes names once at load (per-keystroke filtering reuses it)');
+fingerprint(RECEIPTS_SRC, 'else if ((s = _driverACWordIndex(t, qn)) !== -1) { rank = 2; }',
+  'ranking: exact → starts-with → word-starts-with → contains');
+fingerprint(RECEIPTS_SRC, 'out.sort((a, b) => a.rank - b.rank);',
+  'suggestions are ranked, not just filtered (stable within a rank)');
+fingerprint(RECEIPTS_SRC, "mark.className = 'driver-ac-match';",
+  'matched span highlighted via DOM-built <span> (no HTML injection)');
+fingerprint(RECEIPTS_SRC, "_driverAC.items.length === 1",
+  'Enter/Tab auto-selects the single remaining suggestion');
+fingerprint(RECEIPTS_SRC, "['Home', 'End', 'PageUp', 'PageDown'].includes(key)",
+  'extended keyboard support: Home / End / PageUp / PageDown while the list is open');
 
 // REAL repository on the shim DB: duplicate-safe driver quick-create —
 // a second attempt with the same (trim-normalized) name returns the SAME
@@ -164,6 +189,23 @@ const drvStoreRows = (await ClientRepository.getDriversForUser(U))
   .filter(d => d && d.deleted_at == null && String(d.name || '').trim() === 'السائق أحمد');
 ok(drvStoreRows.length === 1,
   `drivers store holds exactly ONE «السائق أحمد» after two quick-create attempts (got ${drvStoreRows.length})`);
+
+// EXTENDED duplicate rule (UX polish): visually identical drivers — differing
+// only by hamza-on-alef, repeated spaces, diacritics or tatweel — must reuse
+// the SAME record, never persist a look-alike duplicate.
+const { normalizeDriverName } = await import('./services/nameNorm.js');
+ok(normalizeDriverName('  أحْمــد   علي ') === 'احمد علي'
+   && normalizeDriverName('إبراهيم') === 'ابراهيم',
+  'shared normalizer: trim + collapse spaces + strip diacritics/tatweel + alef-fold أ/إ/آ→ا (canonical form)');
+const h1 = await ClientRepository.createDriverUnique(U, 'احمد علي');
+const h2 = await ClientRepository.createDriverUnique(U, 'أحمد   علي'); // alef-hamza + multi-space
+const h3 = await ClientRepository.createDriverUnique(U, 'أَحْمـد عَلـي'); // diacritics + tatweel
+ok(h1.id != null && String(h2.id) === String(h1.id) && String(h3.id) === String(h1.id),
+  'duplicate prevention extended: hamza-fold + collapsed spaces + diacritics/tatweel → existing record reused');
+const hamzaRows = (await ClientRepository.getDriversForUser(U))
+  .filter(d => d && d.deleted_at == null && normalizeDriverName(d.name) === 'احمد علي');
+ok(hamzaRows.length === 1,
+  `drivers store holds exactly ONE «احمد علي» after three visually-identical attempts (got ${hamzaRows.length})`);
 
 const rowA_net = calculateRowNet({
   weight: 50, weight2: 10, deficit: 2, noloon: 20, ohda: 150,

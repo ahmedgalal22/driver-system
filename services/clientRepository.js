@@ -1,4 +1,5 @@
 import { DBProvider } from './dbProvider.js';
+import { normalizeDriverName } from './nameNorm.js';
 
 export const ClientRepository = {
   // ── Vehicle Owners ──────────────────────────────────────────────────────
@@ -68,19 +69,22 @@ export const ClientRepository = {
   },
   /**
    * Duplicate-safe driver creation (quick-add flows, e.g. the receipt-row
-   * driver autocomplete). Performs a normalized (leading/trailing-space
-   * insensitive) lookup among the user's non-deleted drivers; an existing
-   * record with the same name is returned as-is — a new driver is saved ONLY
-   * when no match exists. Uses the exact saveDriver payload the owners/drivers
-   * page uses (phone: null) — one creation path for the whole system.
+   * driver autocomplete). Lookup ignores leading/trailing whitespace, multiple
+   * consecutive spaces, Arabic diacritics/tatweel and the alef family
+   * (أ / إ / آ / ٱ → ا) — visually identical drivers are never created twice.
+   * Two-tier resolution: an exact (trimmed) name wins over a normalization-only
+   * coincidence, so pre-existing near-duplicate records stay addressable.
+   * Uses the exact saveDriver payload the owners/drivers page uses
+   * (phone: null) — one creation path for the whole system.
    */
   async createDriverUnique(username, name) {
     const trimmed = String(name ?? '').trim();
     if (!username) throw new Error('[ClientRepository:createDriverUnique] username is required.');
     if (!trimmed)  throw new Error('[ClientRepository:createDriverUnique] name is required.');
-    const existing = (await this.getDriversForUser(username))
-      .filter(d => d && d.deleted_at == null)
-      .find(d => String(d.name || '').trim() === trimmed);
+    const list = (await this.getDriversForUser(username))
+      .filter(d => d && d.deleted_at == null);
+    const existing = list.find(d => String(d.name || '').trim() === trimmed)
+      || list.find(d => normalizeDriverName(d.name) === normalizeDriverName(trimmed));
     if (existing) return existing;
     return this.saveDriver({ username, name: trimmed, phone: null }, { username });
   },

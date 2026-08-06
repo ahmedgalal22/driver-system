@@ -2825,6 +2825,17 @@ input[type="number"] {
 .driver-ac-item:hover,
 .driver-ac-item--active { background: #dbeafe; color: #1e40af; }
 
+/* Matched portion of a suggestion (query span) — highlighted in-place */
+.driver-ac-match {
+  background: #fde68a;
+  color: inherit;
+  font-weight: 800;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.driver-ac-item--active .driver-ac-match,
+.driver-ac-item:hover .driver-ac-match { background: #fcd34d; color: #1e3a8a; }
+
 .driver-ac-empty {
   padding: 6px 10px;
   color: #9ca3af;

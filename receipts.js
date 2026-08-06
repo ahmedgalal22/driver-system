@@ -14,6 +14,7 @@ import { DBProvider } from './services/dbProvider.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
 import { ClientRepository } from './services/clientRepository.js';
+import { normalizeDriverName, normalizeNameWithMap } from './services/nameNorm.js';
 import { calculateRowNet, calculateReceiptTotals } from './services/financialCalculator.js';
 import { DateUtils } from './dateUtils.js';
 
@@ -1278,17 +1279,24 @@ async function loadOfficesForReceipt() {
 // authoritative driver_id is resolved from the store at save time. Unknown
 // names trigger the quick-create prompt at save (never a silent persist).
 
-let _receiptDriversCache = []; // [{ id, name }] — refreshed at page boot / after quick-create
+// Each entry carries its PRE-NORMALIZED form (built once here, reused on every
+// keystroke — no per-keystroke name re-normalization). norm.text is the
+// canonical comparison form, norm.ltext its lowercase (case-insensitive
+// search), norm.map aligned original-string indices (for match highlighting).
+let _receiptDriversCache = []; // [{ id, name, norm }] — refreshed at page boot / after quick-create
 
 async function _receiptLoadDriverOptions() {
   const username = _currentUsername();
   if (!username) return;
   _receiptDriversCache = (await ClientRepository.getDriversForUser(username))
     .filter(d => d && d.deleted_at == null)
-    .map(d => ({ id: String(d.id), name: String(d.name || '') }));
+    .map(d => {
+      const n = normalizeNameWithMap(String(d.name || ''));
+      return { id: String(d.id), name: String(d.name || ''), norm: { ...n, ltext: n.text.toLowerCase() } };
+    });
   // Keep an open-dropdown view in sync with the refreshed source.
   if (_driverAC.open && _driverAC.input) {
-    _driverAC.items  = _driverACMatches(_driverAC.input.value);
+    _driverAC.items  = _driverACRankedItems(_driverAC.input.value);
     if (_driverAC.active >= _driverAC.items.length) _driverAC.active = -1;
     _driverACRender();
   }
@@ -1346,10 +1354,45 @@ function _driverACListEl() {
   return el;
 }
 
-function _driverACMatches(query) {
-  const q = String(query || '').trim();
-  if (!q) return _receiptDriversCache.slice();
-  return _receiptDriversCache.filter(d => d.name.includes(q));
+// Query is normalized with the SAME pipeline as the stored names, then folded
+// to lowercase — natural search: احمد→أحمد, محم→محمد, عبد→عبد الله, عل→علي
+// (diacritics, tatweel, extra spaces and case all ignored).
+// Ranking priority: (0) exact · (1) starts-with · (2) word-starts-with ·
+// (3) contains. Items: { d, rank, s, e } — s/e are NORMALIZED indices of the
+// matched span (mapped back to original coordinates only at render time).
+function _driverACWordIndex(text, q) {
+  let from = 1, idx;
+  while ((idx = text.indexOf(q, from)) !== -1) {
+    if (text[idx - 1] === ' ') return idx;
+    from = idx + 1;
+  }
+  return -1;
+}
+
+function _driverACRankedItems(query) {
+  const qn = normalizeDriverName(query).toLowerCase();
+  if (!qn) return _receiptDriversCache.map(d => ({ d, rank: 0, s: -1, e: -1 }));
+  const out = [];
+  for (const d of _receiptDriversCache) {
+    const t = d.norm.ltext;
+    let rank = -1, s = -1;
+    if (t === qn)                   { rank = 0; s = 0; }
+    else if (t.startsWith(qn))      { rank = 1; s = 0; }
+    else if ((s = _driverACWordIndex(t, qn)) !== -1) { rank = 2; }
+    else if ((s = t.indexOf(qn)) !== -1)             { rank = 3; }
+    if (rank !== -1) out.push({ d, rank, s, e: s + qn.length });
+  }
+  out.sort((a, b) => a.rank - b.rank); // stable — store order kept within a rank
+  return out;
+}
+
+/** Map a normalized span [s,e) back to original-string coordinates (inclusive
+ *  of trailing diacritics so the highlight covers the full visible word). */
+function _driverACOrigSpan(d, s, e) {
+  const { name, norm } = d;
+  let os = norm.map[s], oe = norm.map[e - 1] + 1;
+  while (oe < name.length && /[\u0640\u064B-\u065F\u0670]/.test(name[oe])) oe++;
+  return [os, oe];
 }
 
 function _driverACRender() {
@@ -1364,12 +1407,24 @@ function _driverACRender() {
     el.appendChild(empty);
     return;
   }
-  _driverAC.items.forEach((d, i) => {
+  _driverAC.items.forEach((it, i) => {
     const opt = document.createElement('div');
     opt.className = 'driver-ac-item' + (i === _driverAC.active ? ' driver-ac-item--active' : '');
     opt.setAttribute('role', 'option');
     opt.dataset.idx = String(i);
-    opt.textContent = d.name; // textContent — driver names are never injected as HTML
+    // DOM nodes only (textContent/TextNode) — the matched span is highlighted
+    // via .driver-ac-match with zero HTML injection risk.
+    if (it.s >= 0) {
+      const [os, oe] = _driverACOrigSpan(it.d, it.s, it.e);
+      opt.appendChild(document.createTextNode(it.d.name.slice(0, os)));
+      const mark = document.createElement('span');
+      mark.className = 'driver-ac-match';
+      mark.textContent = it.d.name.slice(os, oe);
+      opt.appendChild(mark);
+      opt.appendChild(document.createTextNode(it.d.name.slice(oe)));
+    } else {
+      opt.textContent = it.d.name;
+    }
     el.appendChild(opt);
   });
 }
@@ -1392,7 +1447,7 @@ function _driverACPosition() {
 
 function _driverACOpen(input) {
   _driverAC.input  = input;
-  _driverAC.items  = _driverACMatches(input.value);
+  _driverAC.items  = _driverACRankedItems(input.value);
   _driverAC.active = -1;
   _driverAC.open   = true;
   const el = _driverACListEl();
@@ -1422,10 +1477,10 @@ function _driverACMove(delta) {
   _driverACListEl().children[_driverAC.active]?.scrollIntoView({ block: 'nearest' });
 }
 
-function _driverACCommit(driver) {
-  if (!driver || !_driverAC.input) { _driverACClose(); return; }
+function _driverACCommit(item) {
+  if (!item || !_driverAC.input) { _driverACClose(); return; }
   const input = _driverAC.input;
-  input.value = driver.name; // text only — id resolved at save (exact name match)
+  input.value = item.d.name; // text only — id resolved at save (name → id)
   _driverACClose();
   input.focus();
 }
@@ -1433,21 +1488,35 @@ function _driverACCommit(driver) {
 /**
  * keydown handler — wired in CAPTURE phase so it pre-empts the row's
  * bubble-phase table navigation while the dropdown is open.
+ * ↑/↓ cycle · Home/End first/last · PageUp/PageDown ±10 · Enter/Tab commit the
+ * highlight (or the single remaining match) · Esc dismisses.
  */
 function _driverACKeydown(e) {
   if (!_driverAC.open || e.target !== _driverAC.input) return;
   const key = e.key;
+  const n   = _driverAC.items.length;
   if (key === 'ArrowDown' || key === 'ArrowUp') {
     e.preventDefault(); e.stopPropagation();
     _driverACMove(key === 'ArrowDown' ? 1 : -1);
+  } else if (['Home', 'End', 'PageUp', 'PageDown'].includes(key)) {
+    e.preventDefault(); e.stopPropagation();
+    if (!n) return;
+    if (key === 'Home')           _driverAC.active = 0;
+    else if (key === 'End')       _driverAC.active = n - 1;
+    else if (key === 'PageDown')  _driverAC.active = Math.min(_driverAC.active + 10, n - 1);
+    else                          _driverAC.active = Math.max(_driverAC.active - 10, 0);
+    _driverACRender();
+    _driverACListEl().children[_driverAC.active]?.scrollIntoView({ block: 'nearest' });
   } else if (key === 'Escape') {
     e.preventDefault(); e.stopPropagation();
     _driverACClose();
-  } else if (key === 'Enter' && _driverAC.active >= 0) {
-    e.preventDefault(); e.stopPropagation();
-    _driverACCommit(_driverAC.items[_driverAC.active]); // pick — stay in the field
-  } else if (key === 'Tab' && _driverAC.active >= 0) {
-    _driverACCommit(_driverAC.items[_driverAC.active]); // pick — default Tab moves on
+  } else if ((key === 'Enter' || key === 'Tab') && _driverAC.active >= 0) {
+    if (key === 'Enter') { e.preventDefault(); e.stopPropagation(); }
+    _driverACCommit(_driverAC.items[_driverAC.active]); // Tab commits, then moves on
+  } else if ((key === 'Enter' || key === 'Tab') && _driverAC.items.length === 1) {
+    // Exactly one suggestion left: Enter/Tab selects it without further steps.
+    if (key === 'Enter') { e.preventDefault(); e.stopPropagation(); }
+    _driverACCommit(_driverAC.items[0]);
   } else if (key === 'Enter' || key === 'Tab') {
     _driverACClose(); // no highlight: row nav (Enter) / default focus move (Tab)
   }
@@ -1455,34 +1524,61 @@ function _driverACKeydown(e) {
 
 // ─── QUICK-CREATE DRIVER AT SAVE (unknown driver name → prompt) ──────────────
 // Old <select>-era behavior REJECTED non-listed names at save; now the user is
-// asked «السائق غير موجود. هل تريد إضافته؟». إضافة creates the driver through
-// the SAME repository path the owners/drivers page uses (duplicate-safe),
-// refreshes the autocomplete cache, auto-selects the new driver on the row and
-// the save continues. إلغاء aborts the save via a sentinel error and focus
-// returns to the row's driver field — nothing is persisted.
+// told «لم يتم العثور على السائق "..."» and offered إضافة السائق / متابعة البحث
+// / إلغاء. إضافة السائق creates the driver through the SAME repository path the
+// owners/drivers page uses (duplicate-safe), refreshes the autocomplete cache,
+// auto-selects the new driver on the row, closes the popup and the save
+// continues. متابعة البحث / إلغاء abort the save via a sentinel error and focus
+// returns to the row's driver field (متابعة البحث also reselects the text for
+// continued searching) — nothing is persisted.
 
 const DRIVER_CREATE_CANCELLED = 'DRIVER_CREATE_CANCELLED';
 
+/**
+ * Two-tier name → driver-record resolution over a per-save index
+ * ([{ rec, trimmed, norm }]): an exact (trimmed) name match wins; otherwise a
+ * canonical-normalization match (collapsed spaces, diacritics/tatweel stripped,
+ * أ/إ/آ→ا) — the SAME duplicate rule as ClientRepository.createDriverUnique,
+ * so a "visually identical" typed name resolves to the existing driver instead
+ * of prompting to create a duplicate.
+ */
+function _findDriverIndexHit(driverIndex, text) {
+  const t = String(text || '').trim();
+  const exact = driverIndex.find(x => x.trimmed === t);
+  if (exact) return exact.rec;
+  const qn = normalizeDriverName(text);
+  const near = driverIndex.find(x => x.norm === qn);
+  return near ? near.rec : null;
+}
+
 async function _promptCreateDriverForRow(row, driverName) {
-  const wantsCreate = await _confirmDriverCreate(driverName);
-  if (!wantsCreate) {
+  const choice = await _confirmDriverCreate(driverName);
+  if (choice !== 'add') {
     const err = new Error('تم إلغاء إضافة السائق');
     err.code = DRIVER_CREATE_CANCELLED;
     err.focusEl = row.querySelector('.receipt-data');
+    err.keepSearching = (choice === 'search'); // «متابعة البحث» — text reselected for continued searching
     throw err;
   }
-  // Normalized (trim) lookup happens INSIDE createDriverUnique — an existing
-  // driver with the same name is reused, never duplicated.
+  // NORMALIZED lookup happens INSIDE createDriverUnique (trim + collapsed
+  // spaces + diacritics/tatweel strip + أ/إ/آ→ا): a visually identical
+  // existing driver is reused, never duplicated.
   const record = await ClientRepository.createDriverUnique(_currentUsername(), driverName);
   // Immediately refresh the autocomplete source so the new driver is suggested.
   await _receiptLoadDriverOptions();
-  // Auto-select the newly created driver on this row.
+  // Auto-select the newly created driver on this row, close the popup, and let
+  // the save continue — the user never has to reopen the autocomplete.
   const input = row.querySelector('.receipt-data');
   if (input) input.value = String(record.name || driverName);
+  _driverACClose();
   return record;
 }
 
-/** Promise-based confirm: «السائق غير موجود. هل تريد إضافته؟» → إضافة / إلغاء. */
+/**
+ * Promise-based prompt for an unknown driver name:
+ *   «لم يتم العثور على السائق "name"» → إضافة السائق / متابعة البحث / إلغاء
+ * Resolves 'add' | 'search' | 'cancel' (Enter = إضافة السائق, Esc = متابعة البحث).
+ */
 function _confirmDriverCreate(driverName) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -1490,21 +1586,23 @@ function _confirmDriverCreate(driverName) {
     overlay.innerHTML = `
       <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm" role="dialog" aria-modal="true">
         <h3 class="text-lg font-bold mb-3">➕ إضافة سائق</h3>
-        <p class="mb-1 text-gray-700">السائق غير موجود. هل تريد إضافته؟</p>
+        <p class="mb-1 text-gray-700">لم يتم العثور على السائق</p>
         <p class="driver-create-name mb-5 font-bold text-blue-700"></p>
         <div class="flex gap-2 justify-end">
+          <button type="button" data-driver-create="add" class="btn btn-primary btn-sm">إضافة السائق</button>
+          <button type="button" data-driver-create="search" class="btn btn-secondary btn-sm">متابعة البحث</button>
           <button type="button" data-driver-create="cancel" class="btn btn-secondary btn-sm">إلغاء</button>
-          <button type="button" data-driver-create="add" class="btn btn-primary btn-sm">إضافة</button>
         </div>
       </div>`;
-    overlay.querySelector('.driver-create-name').textContent = `«${driverName}»`;
+    overlay.querySelector('.driver-create-name').textContent = `"${driverName}"`;
     const done = (val) => { overlay.remove(); resolve(val); };
-    overlay.querySelector('[data-driver-create="add"]').addEventListener('click', () => done(true));
-    overlay.querySelector('[data-driver-create="cancel"]').addEventListener('click', () => done(false));
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); }); // backdrop = إلغاء
+    overlay.querySelector('[data-driver-create="add"]').addEventListener('click', () => done('add'));
+    overlay.querySelector('[data-driver-create="search"]').addEventListener('click', () => done('search'));
+    overlay.querySelector('[data-driver-create="cancel"]').addEventListener('click', () => done('cancel'));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done('cancel'); }); // backdrop = إلغاء
     overlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); done(false); }
-      if (e.key === 'Enter')  { e.preventDefault(); done(true);  }
+      if (e.key === 'Escape') { e.preventDefault(); done('search'); } // back to the field, keep searching
+      if (e.key === 'Enter')  { e.preventDefault(); done('add');    }
     });
     document.body.appendChild(overlay);
     overlay.querySelector('[data-driver-create="add"]').focus();
@@ -2339,7 +2437,7 @@ async function collectReceiptRows() {
   const rows        = document.querySelectorAll('#receiptTableBody tr');
   const receiptRows = [];
   const owners = await OwnersModule.getAllOwners();
-  let driverNameById = null; // lazy (trimmed) name → driver record map (drivers store), loaded on first non-empty pick; quick-created drivers are added so repeated names prompt once
+  let driverIndex = null; // lazy [{ rec, trimmed, norm }] — loaded from the drivers store on first non-empty pick; quick-created drivers are appended so repeated names prompt once
 
   for (const row of rows) {
     if (row.id === 'receiptFillArrowRow') continue;
@@ -2369,26 +2467,26 @@ async function collectReceiptRows() {
     }
     // Driver comes from THIS ROW's autocomplete input (Receipt Row → Driver),
     // never from the vehicle. The input holds the driver NAME; the authoritative
-    // id is resolved here from the drivers store (exact trimmed name → id), and
-    // driver_name is denormalized from that record (id → name). Unknown names
-    // are NOT rejected (old <select>-era behavior): the user is asked to
-    // quick-create the driver (duplicate-safe) or cancel back to the field.
-    // Vehicles are never written with any driver attribute.
+    // id is resolved here from the drivers store (two-tier: exact trimmed name,
+    // then normalized «visually identical» name → id), and driver_name is
+    // denormalized from that record (id → name). Unknown names are NOT rejected
+    // (old <select>-era behavior): the user is asked to quick-create the driver
+    // (duplicate-safe) or cancel back to the field. Vehicles are never written
+    // with any driver attribute.
     const rowDriverText = normalizeOptionalString(_field(row, 'receipt-data'));
     let rowDriverId = null;
     let rowDriverName = null;
     if (rowDriverText) {
-      if (!driverNameById) {
-        driverNameById = new Map();
+      if (!driverIndex) {
         const ds = (await ClientRepository.getDriversForUser(_currentUsername()))
           .filter(d => d && d.deleted_at == null);
-        ds.forEach(d => driverNameById.set(String(d.name || '').trim(), d));
+        driverIndex = ds.map(d => ({ rec: d, trimmed: String(d.name || '').trim(), norm: normalizeDriverName(d.name) }));
       }
-      let hit = driverNameById.get(rowDriverText);
+      let hit = _findDriverIndexHit(driverIndex, rowDriverText);
       if (!hit) {
         hit = await _promptCreateDriverForRow(row, rowDriverText);
         // Later rows carrying the same new name resolve without prompting again.
-        driverNameById.set(String(hit.name || '').trim(), hit);
+        driverIndex.push({ rec: hit, trimmed: String(hit.name || '').trim(), norm: normalizeDriverName(hit.name) });
       }
       rowDriverId   = String(hit.id);
       rowDriverName = hit.name || null;
@@ -2597,9 +2695,11 @@ async function saveReceipt() {
     if (err?.code === DRIVER_CREATE_CANCELLED) {
       // User declined the quick-create prompt: silently abort the save and
       // return focus to the offending Driver Name field — nothing persisted.
+      // «متابعة البحث» additionally selects the typed text so searching
+      // continues with one keystroke.
       _isSaving = false;
       const el = err.focusEl;
-      if (el) { el.focus(); try { el.select(); } catch (_) {} }
+      if (el) { el.focus(); if (err.keepSearching) { try { el.select(); } catch (_) {} } }
       return;
     }
     alert(err.message || '❌ حدث خطأ أثناء تجهيز بيانات الحفظ');
@@ -3325,9 +3425,11 @@ document.addEventListener('click', function (e) {
   if (_isDriverRowInput(e.target) && !_driverAC.open) _driverACOpen(e.target);
 });
 document.addEventListener('input', function (e) {
-  // Typing filters the suggestion list naturally (substring match).
+  // Typing re-ranks the suggestion list (normalized: diacritics / tatweel /
+  // extra spaces / case ignored) using the pre-normalized cache — O(drivers)
+  // cheap string compares per keystroke, no regex re-normalization.
   if (_driverAC.open && e.target === _driverAC.input) {
-    _driverAC.items  = _driverACMatches(e.target.value);
+    _driverAC.items  = _driverACRankedItems(e.target.value);
     _driverAC.active = -1;
     _driverACRender();
     _driverACPosition();
