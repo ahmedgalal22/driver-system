@@ -268,6 +268,12 @@ async function create(username, rawData) {
 
   const result = await FinancialService.createReceipt(username, servicePayload);
 
+  try {
+    await _syncCompanyLoadDetailsFromReceipt(username, normalized);
+  } catch (syncErr) {
+    console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
+  }
+
   return { result, normalized };
 }
 
@@ -284,6 +290,12 @@ async function update(username, id, rawData) {
   const servicePayload = _buildServicePayload(normalized);
 
   const result = await FinancialService.updateReceipt(username, id, servicePayload);
+
+  try {
+    await _syncCompanyLoadDetailsFromReceipt(username, normalized);
+  } catch (syncErr) {
+    console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
+  }
 
   return { result, normalized };
 }
@@ -315,6 +327,77 @@ async function getOfficesForUser(username) {
 
 async function getOffices(username) {
   return getOfficesForUser(username);
+}
+
+// ─── SYNC company load details (hamola) from receipt rows ───────────────────
+// After a successful receipt save: auto-learn NEW (التحميل + الجهة + النوع)
+// combinations into the office's Hamola Details master data. Master data
+// ONLY — no pricing, no money fields. Never fails the receipt save. Skips
+// rows without a company. No duplicates.
+
+function _hamolaKey(row) {
+  const loading = String(row?.loading_place ?? row?.loading ?? '').trim().toLowerCase();
+  const destination = String(row?.destination_place ?? row?.direction ?? row?.taktik ?? '').trim().toLowerCase();
+  const itemType = String(row?.item_type ?? row?.type ?? '').trim().toLowerCase();
+  return [loading, destination, itemType].join('|');
+}
+
+async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
+  if (!username || !rawData) return;
+
+  const dataRows = Array.isArray(rawData.rows) ? rawData.rows : [];
+
+  const filteredRows = dataRows.filter(
+    (r) => r && r._type !== ROW_TYPES.SEPARATOR && r.type !== 'separator' && r.row_type !== 'separator'
+  );
+
+  // Group by company (office name on the row)
+  const byCompany = new Map();
+  for (const row of filteredRows) {
+    const companyName = String(row.office || '').trim();
+    if (!companyName) continue;
+    const loading = String(row.loading || '').trim();
+    const destination = String(row.taktik || row.direction || '').trim();
+    // a hamola record requires loading + destination (master data only)
+    if (!loading || !destination) continue;
+    const payload = {
+      loading_place: loading,
+      destination_place: destination,
+      item_type: String(row.type || '').trim() || null,
+    };
+    const list = byCompany.get(companyName) || [];
+    list.push(payload);
+    byCompany.set(companyName, list);
+  }
+
+  if (byCompany.size === 0) return;
+
+  const offices = await OfficesService.getOffices(username);
+  const officeByName = new Map(
+    (offices || []).map((o) => [String(o.name || '').trim().toLowerCase(), o])
+  );
+
+  for (const [companyName, candidates] of byCompany.entries()) {
+    const office = officeByName.get(companyName.toLowerCase());
+    if (!office?.id) continue;
+
+    // Fresh office for current hamolaRows
+    const full = await OfficesService.getOfficeById(office.id, username);
+    if (!full) continue;
+
+    const existing = Array.isArray(full.hamolaRows) ? full.hamolaRows : [];
+    const existingKeys = new Set(existing.map(_hamolaKey));
+
+    // Dedupe within this receipt too
+    const seenNew = new Set();
+    for (const cand of candidates) {
+      const key = _hamolaKey(cand);
+      if (existingKeys.has(key) || seenNew.has(key)) continue;
+      seenNew.add(key);
+      await OfficesService.addHamolaRow(username, full.id, cand);
+      existingKeys.add(key);
+    }
+  }
 }
 
 
@@ -1785,6 +1868,9 @@ function attachRowCalculation(row) {
   const discount  = row.querySelector('.receipt-discount');
   const sarf      = row.querySelector('.receipt-sarf');
   const net       = row.querySelector('.receipt-net');
+  const officeInp  = row.querySelector('.receipt-office');
+  const loadingInp = row.querySelector('.receipt-loading');
+  const taktikInp  = row.querySelector('.receipt-taktik');
   if (!net) return;
 
   function calculateNet() {
@@ -1825,6 +1911,103 @@ function attachRowCalculation(row) {
   add       && add.addEventListener('input',       calculateNet);
   discount  && discount.addEventListener('input',  calculateNet);
   sarf      && sarf.addEventListener('input',      calculateNet);
+
+  // ── Office → Hamola Details (master data only: التحميل/الجهة/النوع) ──
+  // Selecting a company loads that office's Hamola Details as suggestion
+  // lists for التحميل/الجهة; picking التحميل auto-fills الجهة and النوع from
+  // the matched master-data record. NO pricing, NO money fields — نولون/مكتب
+  // are never touched. Free typing stays allowed so new combinations can be
+  // learned at save time (_syncCompanyLoadDetailsFromReceipt).
+
+  async function getOfficeHamolaForRow(officeName) {
+    if (!officeName) return [];
+    const username = _currentUsername();
+    if (!username) return [];
+    const offices = await ReceiptsModule.getOffices(username);
+    const office  = offices.find(o => o.name.trim() === officeName.trim());
+    if (!office?.id) return [];
+    return office?.hamolaRows || [];
+  }
+
+  function setDL(id, values) {
+    let dl = document.getElementById(id);
+    if (!dl) { dl = document.createElement('datalist'); dl.id = id; document.body.appendChild(dl); }
+    dl.innerHTML = values.map(v => `<option value="${v}"></option>`).join('');
+  }
+
+  if (officeInp) {
+    officeInp.addEventListener('change', async function () {
+      const hamola   = await getOfficeHamolaForRow(this.value.trim());
+      const loadVals = [...new Set(
+        hamola.map(r => String(r.loading_place || r.loading || '').trim()).filter(Boolean)
+      )];
+      const dirVals  = [...new Set(
+        hamola.map(r => String(r.destination_place || r.direction || r.taktik || '').trim()).filter(Boolean)
+      )];
+      const uid      = 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
+      setDL('dl_rl_' + uid, loadVals);
+      setDL('dl_rd_' + uid, dirVals);
+      if (loadingInp) loadingInp.setAttribute('list', 'dl_rl_' + uid);
+      if (taktikInp)  taktikInp.setAttribute('list',  'dl_rd_' + uid);
+      row._hamolaData = hamola;
+      // Auto-fill loading+destination when only ONE valid option exists
+      if (loadVals.length === 1 && loadingInp) {
+        loadingInp.value = loadVals[0];
+      } else if (loadingInp) {
+        loadingInp.value = '';
+      }
+      if (dirVals.length === 1 && taktikInp) {
+        taktikInp.value = dirVals[0];
+      } else if (taktikInp) {
+        taktikInp.value = '';
+      }
+
+      // ── autoFillFromHamola: remove previous listeners before adding new ones ──
+      // (prevents listener accumulation when the office is changed repeatedly)
+      function autoFillFromHamola() {
+        const loadVal   = loadingInp?.value.trim() || '';
+        const taktikVal = taktikInp?.value.trim()  || '';
+        if (!loadVal) return;
+        // الجهة — infer from التحميل alone when it maps to exactly ONE destination
+        if (!taktikVal && taktikInp) {
+          const dests = [...new Set(
+            hamola
+              .filter(h => String(h.loading_place || h.loading || '').trim() === loadVal)
+              .map(h => String(h.destination_place || h.direction || h.taktik || '').trim())
+              .filter(Boolean)
+          )];
+          if (dests.length === 1) taktikInp.value = dests[0];
+        }
+        const taktikNow = taktikInp?.value.trim() || '';
+        const matchRow  = hamola.find(h =>
+          String(h.loading_place || h.loading || '').trim() === loadVal
+          && String(h.destination_place || h.direction || h.taktik || '').trim() === taktikNow
+        );
+        if (!matchRow) return;
+        // النوع
+        const typeVal = String(matchRow.item_type ?? matchRow.type ?? '').trim();
+        const typeInp = row.querySelector('.receipt-type');
+        if (typeInp && typeVal) {
+          typeInp.value = typeVal;
+        }
+      }
+      // Remove previous autoFillFromHamola listeners before re-adding
+      if (row._autoFillLoadingHandler && loadingInp) {
+        loadingInp.removeEventListener('change', row._autoFillLoadingHandler);
+      }
+      if (row._autoFillTaktikHandler && taktikInp) {
+        taktikInp.removeEventListener('change', row._autoFillTaktikHandler);
+      }
+      row._autoFillLoadingHandler = autoFillFromHamola;
+      row._autoFillTaktikHandler = autoFillFromHamola;
+      if (loadingInp) loadingInp.addEventListener('change', autoFillFromHamola);
+      if (taktikInp)  taktikInp.addEventListener('change',  autoFillFromHamola);
+      // Auto-trigger the fill when both loading and destination were auto-filled
+      if (loadVals.length === 1 && dirVals.length === 1) {
+        autoFillFromHamola();
+      }
+    });
+  }
 
 }
 

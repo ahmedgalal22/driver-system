@@ -46,25 +46,11 @@ function _optionalText(value) {
   return text === '' ? null : text;
 }
 
-function _requireNumber(value, label) {
-  if (value === undefined || value === null) {
-    throw new Error(`[OfficesService] ${label} is required.`);
-  }
-  if (typeof value === 'string' && value.trim() === '') {
-    throw new Error(`[OfficesService] ${label} is required.`);
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    throw new Error(`[OfficesService] ${label} must be a number.`);
-  }
-  return n;
-}
-
 // ── Hamola rows (تفاصيل الحمولة) — office-level reference master data ──
 // A hamola row is plain reference data embedded on the office record
-// (office.hamolaRows). It is managed only from the Office Details page and
-// feeds NOTHING else — no receipt read/write path, no FinancialService call,
-// and no calculation consumes it.
+// (office.hamolaRows): التحميل + الجهة + النوع ONLY — no pricing, no money
+// fields. The receipt form uses it as a lookup/auto-fill source and learns
+// new combinations at save time. It feeds no financial calculation.
 function _normalizeHamolaRow(input, keepId = false) {
   if (!input || typeof input !== 'object') {
     throw new Error('[OfficesService] hamola row must be a plain object.');
@@ -78,22 +64,25 @@ function _normalizeHamolaRow(input, keepId = false) {
     input.destination_place ?? input.direction ?? input.taktik,
     'destination_place'
   );
-  const nolon = _requireNumber(input.nolon ?? input.noloon, 'nolon');
-  const office_amount = Number(input.office_amount ?? input.maktab ?? 0) || 0;
   const item_type = _optionalText(input.item_type ?? input.type) || null;
 
   return {
     id: keepId && input.id ? String(input.id) : _uuid(),
     loading_place,
     destination_place,
-    nolon,
-    office_amount,
     item_type,
   };
 }
 
 function _applyHamolaPatch(existing, patch) {
-  const next = { ...existing };
+  // Rebuild a clean master-data record (never spreads the old row) so only the
+  // three reference fields survive every edit — no stale keys of any kind.
+  const next = {
+    id: existing.id,
+    loading_place: existing.loading_place,
+    destination_place: existing.destination_place,
+    item_type: existing.item_type ?? null,
+  };
 
   if ('loading_place' in patch || 'loading' in patch) {
     next.loading_place = _requireText(
@@ -106,12 +95,6 @@ function _applyHamolaPatch(existing, patch) {
       patch.destination_place ?? patch.direction ?? patch.taktik,
       'destination_place'
     );
-  }
-  if ('nolon' in patch || 'noloon' in patch) {
-    next.nolon = _requireNumber(patch.nolon ?? patch.noloon, 'nolon');
-  }
-  if ('office_amount' in patch || 'maktab' in patch) {
-    next.office_amount = Number(patch.office_amount ?? patch.maktab ?? 0) || 0;
   }
   if ('item_type' in patch || 'type' in patch) {
     next.item_type = _optionalText(patch.item_type ?? patch.type) || null;
@@ -688,14 +671,6 @@ function _renderHamolaModal() {
             <input id="hamolaDestination" type="text" class="input input-sm" />
           </div>
           <div>
-            <label class="label mb-1" for="hamolaNolon">النولون</label>
-            <input id="hamolaNolon" type="number" step="0.01" class="input input-sm" />
-          </div>
-          <div>
-            <label class="label mb-1" for="hamolaMaktab">المكتب</label>
-            <input id="hamolaMaktab" type="number" step="0.01" class="input input-sm" />
-          </div>
-          <div>
             <label class="label mb-1" for="hamolaType">النوع</label>
             <input id="hamolaType" type="text" class="input input-sm" />
           </div>
@@ -718,15 +693,13 @@ function _renderHamolaTable(rows) {
         <td>${_text(r.loading_place)}</td>
         <td>${_text(r.destination_place)}</td>
         <td>${_text(r.item_type)}</td>
-        <td>${_fmt(r.nolon)}</td>
-        <td>${_fmt(r.office_amount)}</td>
         <td>
           <button type="button" data-action="hamola-edit" data-id="${r.id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
           <button type="button" data-action="hamola-delete" data-id="${r.id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
         </td>
       </tr>`;
       }).join('')
-    : `<tr><td colspan="6" class="text-center text-muted p-6" style="color:#94a3b8;">لا توجد بيانات — اضغط إضافة حمولة</td></tr>`;
+    : `<tr><td colspan="4" class="text-center text-muted p-6" style="color:#94a3b8;">لا توجد بيانات — اضغط إضافة حمولة</td></tr>`;
 
   return `
     <div class="flex justify-between items-center flex-wrap gap-3 mb-4">
@@ -742,8 +715,6 @@ function _renderHamolaTable(rows) {
             <th style="color:#fff;">التحميل</th>
             <th style="color:#fff;">الجهة</th>
             <th style="color:#fff;">النوع</th>
-            <th style="color:#fff;">النولون</th>
-            <th style="color:#fff;">مبلغ المكتب</th>
             <th style="color:#fff;">إجراءات</th>
           </tr>
         </thead>
@@ -1035,15 +1006,10 @@ function _openHamolaModal(title, row = null) {
 
   const loading = document.getElementById('hamolaLoading');
   const destination = document.getElementById('hamolaDestination');
-  const nolon = document.getElementById('hamolaNolon');
+  const typeInp = document.getElementById('hamolaType');
 
   if (loading) loading.value = row?.loading_place || '';
   if (destination) destination.value = row?.destination_place || '';
-  if (nolon) nolon.value = row?.nolon ?? '';
-
-  const maktab = document.getElementById('hamolaMaktab');
-  const typeInp = document.getElementById('hamolaType');
-  if (maktab) maktab.value = row?.office_amount ?? '';
   if (typeInp) typeInp.value = row?.item_type ?? '';
 
   modal?.classList.remove('hidden');
@@ -1059,8 +1025,6 @@ async function _saveHamolaRow() {
 
   const loading = document.getElementById('hamolaLoading')?.value;
   const destination = document.getElementById('hamolaDestination')?.value;
-  const nolon = document.getElementById('hamolaNolon')?.value;
-  const maktab = document.getElementById('hamolaMaktab')?.value;
   const itemType = document.getElementById('hamolaType')?.value;
 
   try {
@@ -1068,16 +1032,12 @@ async function _saveHamolaRow() {
       await OfficesModule.updateHamolaRow(_detailsOfficeId, _hamolaEditId, {
         loading_place: loading,
         destination_place: destination,
-        nolon,
-        office_amount: maktab,
         item_type: itemType,
       });
     } else {
       await OfficesModule.addHamolaRow(_detailsOfficeId, {
         loading_place: loading,
         destination_place: destination,
-        nolon,
-        office_amount: maktab,
         item_type: itemType,
       });
     }
