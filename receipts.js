@@ -1283,16 +1283,49 @@ async function loadOfficesForReceipt() {
 // keystroke — no per-keystroke name re-normalization). norm.text is the
 // canonical comparison form, norm.ltext its lowercase (case-insensitive
 // search), norm.map aligned original-string indices (for match highlighting).
-let _receiptDriversCache = []; // [{ id, name, norm }] — refreshed at page boot / after quick-create
+// meta carries SUGGESTION-LINE-2 usage info (phone / karta count / last
+// vehicle / last use) computed once per load — never per keystroke.
+let _receiptDriversCache = []; // [{ id, name, norm, meta }] — refreshed at page boot / after quick-create
 
 async function _receiptLoadDriverOptions() {
   const username = _currentUsername();
   if (!username) return;
-  _receiptDriversCache = (await ClientRepository.getDriversForUser(username))
+  // ONE pass over receipt_rows groups usage per driver (karta count, last
+  // vehicle, last use date); phone comes free from the driver record. A
+  // driver with no usage data renders the suggestion as name-only.
+  const [drivers, rows] = await Promise.all([
+    ClientRepository.getDriversForUser(username),
+    DBProvider.getAll('receipt_rows'),
+  ]);
+  const usageByDriver = new Map(); // driverId → { kartas, lastVehicle, lastDate, _key }
+  for (const r of (rows || [])) {
+    if (!r || r.deleted_at != null || r.driver_id == null) continue;
+    const did = String(r.driver_id);
+    const key = String(r.date || r.created_at || '');
+    let u = usageByDriver.get(did);
+    if (!u) { u = { kartas: 0, lastVehicle: null, lastDate: '', _key: '' }; usageByDriver.set(did, u); }
+    u.kartas++;
+    if (key >= u._key) {
+      u._key        = key;
+      u.lastDate    = String(r.date || '').slice(0, 10);
+      u.lastVehicle = r.vehicle_plate || null;
+    }
+  }
+  _receiptDriversCache = drivers
     .filter(d => d && d.deleted_at == null)
     .map(d => {
       const n = normalizeNameWithMap(String(d.name || ''));
-      return { id: String(d.id), name: String(d.name || ''), norm: { ...n, ltext: n.text.toLowerCase() } };
+      const u = usageByDriver.get(String(d.id)) || null;
+      return {
+        id: String(d.id), name: String(d.name || ''),
+        norm: { ...n, ltext: n.text.toLowerCase() },
+        meta: {
+          phone: d.phone || null,
+          kartas: u?.kartas || 0,
+          lastVehicle: u?.lastVehicle || null,
+          lastDate: u?.lastDate || '',
+        },
+      };
     });
   // Keep an open-dropdown view in sync with the refreshed source.
   if (_driverAC.open && _driverAC.input) {
@@ -1395,6 +1428,18 @@ function _driverACOrigSpan(d, s, e) {
   return [os, oe];
 }
 
+/** Secondary suggestion line (visually lighter): best available usage bits —
+ *  vehicle / karta count / last use / phone. '' when nothing is available. */
+function _driverACMetaText(meta) {
+  if (!meta) return '';
+  const bits = [];
+  if (meta.lastVehicle) bits.push(`🚚 السيارة: ${meta.lastVehicle}`);
+  if (meta.kartas)      bits.push(`عدد الكارتات: ${meta.kartas}`);
+  if (meta.lastDate)    bits.push(`آخر استخدام: ${meta.lastDate}`);
+  if (meta.phone)       bits.push(`📞 ${meta.phone}`);
+  return bits.slice(0, 3).join(' · ');
+}
+
 function _driverACRender() {
   const el = _driverACListEl();
   el.innerHTML = '';
@@ -1412,18 +1457,29 @@ function _driverACRender() {
     opt.className = 'driver-ac-item' + (i === _driverAC.active ? ' driver-ac-item--active' : '');
     opt.setAttribute('role', 'option');
     opt.dataset.idx = String(i);
-    // DOM nodes only (textContent/TextNode) — the matched span is highlighted
-    // via .driver-ac-match with zero HTML injection risk.
+    // Line 1 — driver NAME. The matched span is highlighted ONLY here (never in
+    // the metadata). DOM nodes only — zero HTML injection risk.
+    const line1 = document.createElement('div');
+    line1.className = 'driver-ac-name';
     if (it.s >= 0) {
       const [os, oe] = _driverACOrigSpan(it.d, it.s, it.e);
-      opt.appendChild(document.createTextNode(it.d.name.slice(0, os)));
+      line1.appendChild(document.createTextNode(it.d.name.slice(0, os)));
       const mark = document.createElement('span');
       mark.className = 'driver-ac-match';
       mark.textContent = it.d.name.slice(os, oe);
-      opt.appendChild(mark);
-      opt.appendChild(document.createTextNode(it.d.name.slice(oe)));
+      line1.appendChild(mark);
+      line1.appendChild(document.createTextNode(it.d.name.slice(oe)));
     } else {
-      opt.textContent = it.d.name;
+      line1.textContent = it.d.name;
+    }
+    opt.appendChild(line1);
+    // Line 2 — optional metadata (lighter); gracefully omitted when unavailable.
+    const metaText = _driverACMetaText(it.d.meta);
+    if (metaText) {
+      const line2 = document.createElement('div');
+      line2.className = 'driver-ac-meta';
+      line2.textContent = metaText;
+      opt.appendChild(line2);
     }
     el.appendChild(opt);
   });

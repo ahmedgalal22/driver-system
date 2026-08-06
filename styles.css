@@ -2836,6 +2836,21 @@ input[type="number"] {
 .driver-ac-item--active .driver-ac-match,
 .driver-ac-item:hover .driver-ac-match { background: #fcd34d; color: #1e3a8a; }
 
+/* Suggestion lines: name on line 1, lighter usage metadata on line 2 */
+.driver-ac-name,
+.driver-ac-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.driver-ac-meta {
+  font-size: 0.6875rem;
+  color: #6b7280;
+  margin-top: 1px;
+}
+.driver-ac-item--active .driver-ac-meta,
+.driver-ac-item:hover .driver-ac-meta { color: #61749b; }
+
 .driver-ac-empty {
   padding: 6px 10px;
   color: #9ca3af;

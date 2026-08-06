@@ -175,6 +175,32 @@ fingerprint(RECEIPTS_SRC, "_driverAC.items.length === 1",
 fingerprint(RECEIPTS_SRC, "['Home', 'End', 'PageUp', 'PageDown'].includes(key)",
   'extended keyboard support: Home / End / PageUp / PageDown while the list is open');
 
+// UX polish (rich suggestion rendering — lighter metadata second line):
+fingerprint(RECEIPTS_SRC, "DBProvider.getAll('receipt_rows'),",
+  'suggestion metadata computed ONCE per cache load — single receipt_rows pass, never per keystroke');
+fingerprint(RECEIPTS_SRC, "line1.className = 'driver-ac-name';",
+  'suggestion line 1 is the driver name (match highlight stays here only)');
+fingerprint(RECEIPTS_SRC, "line2.className = 'driver-ac-meta';",
+  'suggestion line 2 is the lighter metadata line (omitted when unavailable)');
+fingerprint(RECEIPTS_SRC, '`🚚 السيارة: ${meta.lastVehicle}`',
+  'metadata bit: last vehicle plate');
+fingerprint(RECEIPTS_SRC, '`عدد الكارتات: ${meta.kartas}`',
+  'metadata bit: karta count');
+fingerprint(RECEIPTS_SRC, '`آخر استخدام: ${meta.lastDate}`',
+  'metadata bit: last use date');
+
+// REAL metadata-line builder (extracted verbatim) — composition + graceful fallback
+const { _driverACMetaText } = new Function(
+  `${extractFn(RECEIPTS_SRC, '_driverACMetaText')}; return { _driverACMetaText };`
+)();
+ok(_driverACMetaText({ phone: '0100', kartas: 38, lastVehicle: 'ع ص ب 1234', lastDate: '2026-07-14' })
+   === '🚚 السيارة: ع ص ب 1234 · عدد الكارتات: 38 · آخر استخدام: 2026-07-14',
+  'meta line composes vehicle + karta count + last use (usage bits win over phone)');
+ok(_driverACMetaText({ phone: '0100', kartas: 0, lastVehicle: null, lastDate: '' }) === '📞 0100',
+  'meta line falls back to phone when the driver has no usage yet');
+ok(_driverACMetaText(null) === '' && _driverACMetaText({}) === '',
+  'meta line is empty when no metadata exists at all — suggestion renders name-only');
+
 // REAL repository on the shim DB: duplicate-safe driver quick-create —
 // a second attempt with the same (trim-normalized) name returns the SAME
 // record instead of persisting a duplicate.
