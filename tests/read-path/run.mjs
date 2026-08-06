@@ -195,52 +195,13 @@ ok(sumA.net === 1200 && sumA.net === expectedNetA,
 ok(sumB.net === 600, `summary: شركة ب net = 600 from persisted row net (got ${sumB.net})`);
 ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (fixture rows carry no persisted weights; slot read proven)');
 
-// EXTRACTED VERBATIM cards loop core — offices.js (_getOfficeCards)
-function _officeCardsLoop(allReceipts_arg, rowsProjection_arg, officeName) {
-  const cards = [];
-  for (const receipt of allReceipts_arg) {
-    if (receipt.deleted_at !== null) continue;
-    const rows = rowsProjection_arg.get(String(receipt.id)) || [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-      const rowOffice = String(row.office || '').trim().toLowerCase();
-      if (rowOffice !== officeName) continue;
-      cards.push({
-        receipt_id: receipt.id,
-        client_name: receipt.client_name || receipt.owner_name || '',
-        receipt_date: receipt.receipt_date || '',
-        row_index: i,
-        _rowId: row.row_id ?? null,
-        kartano: row.kartano || '', date: row.date || '', car: row.vehicle_plate || '',
-        driver: row.driver_name || '', weight: Number(row.weight) || 0,
-        noloon: Money.toDecimal(row.driver_price ?? 0),
-        loading: row.loading || '',
-        taktik: row.destination || '',
-        type: row.type || '', notes: '',
-      });
-    }
-  }
-  return cards;
-}
-const cardsA = _officeCardsLoop(activeReceipts, receiptRowsProjection, 'شركة أ');
-const cardsB = _officeCardsLoop(activeReceipts, receiptRowsProjection, 'شركة ب');
-const headerR1 = await ReceiptRepository.getById(R1);
-ok(cardsA.length === 2 && cardsB.length === 1, `office filter: شركة أ→2 cards, شركة ب→1 card (got ${cardsA.length}/${cardsB.length})`);
-const cardByCar = Object.fromEntries(cardsA.map(c => [c.car, c]));
-const c1 = cardByCar['111 أ ب'], c3 = cardByCar['333 هـ و'];
-ok(!!c1 && !!c3 && c1.noloon === 11 && c3.noloon === 10
-    && c1.taktik === 'القاهرة' && c3.taktik === 'المنصورة' && c1.loading === 'طنطا',
-  'cards: persisted slots revived (car/loading/destination→الجهة/نولون via REAL Money)');
-ok(c1.receipt_id === R1 && typeof c1._rowId === 'string' && liveRows.some(r => r.row_id === c1._rowId),
-  'cards: _rowId = persisted ReceiptRow PK, receipt_id FK intact');
-ok(c1.kartano === '' && c1.date === '' && c1.driver === '' && c1.weight === 0 && c1.type === '' && c1.notes === '',
-  'cards: slots restored from persisted row — fixture rows carry none → blank/0 (kartano/date/driver/weight/type/notes)');
-ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27'
-    && c1.payout_status === undefined,
-  'cards: header metadata propagated (client_name, receipt_date); REMOVED-CONTRACT (Paid phase): payout_status no longer on office cards');
-ok(c1.receipt_number === undefined,
-  'REMOVED-CONTRACT (Receipt Number phase): office cards no longer carry receipt_number — receipt_id (UUID) is the only reference');
+// REMOVED-CONTRACT (كارتات Tab Removal — Office Details): the details-page
+// «الكارتات» tab + its cards renderer (_getOfficeCards/_renderOfficeCards) are
+// permanently deleted from offices.js. The office-cards cluster that used to
+// verify them here is gone with the feature; the static census in GROUP 4
+// pins the absence. The offices LIST summary (getOfficeFinancialSummary)
+// above is a kept, separate surface (verified by the summary asserts).
+const headerR1 = await ReceiptRepository.getById(R1); // kept for GROUP 5
 
 // loud failure on unknown office — preserved semantics
 await FinancialService.createReceipt(U, hdr({ total: 100,
@@ -267,9 +228,13 @@ ok(offSrc.includes("import { ReceiptRepository } from './services/receiptReposit
 ok(!offSrc.includes('OfficeRepository.getReceipts(') && !offSrc.includes('OfficeRepository.getReceiptById('),
   'offices.js: OfficeRepository receipt-store reads eliminated (methods now unused — Step 8 cleanup candidates)');
 ok(!/Array\.isArray\(\s*receipt\.rows/.test(offSrc), 'offices.js: ZERO executable embedded receipt.rows accessors');
-ok(offSrc.includes('item.net += shape.net;') && offSrc.includes('_rowId: row.row_id ?? null,')
+ok(offSrc.includes('item.net += shape.net;')
     && offSrc.includes('noloon: Money.toDecimal(row.driver_price ?? 0),'),
-  'extraction-bound: summary/cards/shape markers present verbatim in offices.js');
+  'extraction-bound: summary/shape markers present verbatim in offices.js');
+ok(!offSrc.includes('_getOfficeCards') && !offSrc.includes('_renderOfficeCards')
+   && !offSrc.includes('officeCardsSearch') && !offSrc.includes('data-tab="cards"')
+   && !offSrc.includes('_officeCardsSearchQuery') && !offSrc.includes('_officeCardsCache'),
+  'REMOVED-CONTRACT (كارتات Tab Removal): offices.js carries ZERO details «الكارتات» tab — button/renderer/search/state all deleted');
 ok(!offSrc.includes('receipt_number') && !dashSrc.includes('receipt_number'),
   'census (Receipt Number phase): offices.js / dashboard.js carry ZERO receipt_number references');
 

@@ -473,8 +473,6 @@ let _editingOfficeId = null;
 let _editingOfficeDraft = null;
 let _activeDetailsTab = 'hamola';
 let _detailsOfficeId = null;
-let _officeCardsSearchQuery = '';
-let _officeCardsCache = [];
 let _hamolaEditId = null;
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 
@@ -644,7 +642,6 @@ function _renderDetailsShell(office) {
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
         <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد الشركة</button>
         <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
-        <button type="button" data-tab="cards" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'cards' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'cards' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'cards' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'cards' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">📋 الكارتات</button>
       </div>
 
       <div id="officeDetailsContent"></div>
@@ -908,153 +905,6 @@ async function showOfficeDetails(id) {
 }
 
 
-/**
- * Get all receipt rows linked to a specific office/company.
- * Each row includes parent receipt metadata for display.
- *
- * Normalized read: headers come from ReceiptRepository, rows from the frozen
- * ReceiptReadRepository projected by receipt id — the in-memory equivalent of
- * the MySQL-ready join below (never an embedded receipt.rows):
- *   SELECT rr.*, r.client_name
- *   FROM receipt_rows rr
- *   JOIN receipts r ON rr.receipt_id = r.id
- *   WHERE rr.office = ?
- *
- * Every card column is restored straight from its persisted slot — kartano,
- * date, driver name, weight, type, car, loading, taktik, office, money via
- * cents→decimal. Only row notes stay blank: rows have no persisted notes slot.
- */
-async function _getOfficeCards(office) {
-  const username = _moduleSessionUsername();
-  const officeName = String(office.name || '').trim().toLowerCase();
-  const allReceipts = await ReceiptRepository.getAll(username);
-  const rowsProjection = await _loadReceiptRowsProjection(allReceipts);
-
-  const cards = [];
-  for (const receipt of allReceipts) {
-    if (receipt.deleted_at !== null) continue; // defensive — DB.getAll already excludes
-    const rows = rowsProjection.get(String(receipt.id)) || [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue; // separators are UI-local — never persisted in receipt_rows
-      const rowOffice = String(row.office || '').trim().toLowerCase();
-      if (rowOffice !== officeName) continue;
-
-      cards.push({
-        receipt_id: receipt.id,
-        client_name: receipt.client_name || receipt.owner_name || '',
-        receipt_date: receipt.receipt_date || '',
-        row_index: i,
-        _rowId: row.row_id ?? null,                     // persisted ReceiptRow PK
-        kartano: row.kartano || '',                     // persisted
-        date: row.date || '',                           // persisted
-        car: row.vehicle_plate || '',
-        driver: row.driver_name || '',                  // persisted driver name
-        weight: Number(row.weight) || 0,                // persisted (original form → numeric for summation)
-        noloon: Money.toDecimal(row.driver_price ?? 0), // driver_price → نولون (cents→decimal)
-        loading: row.loading || '',
-        taktik: row.destination || '',                  // destination → الجهة
-        type: row.type || '',                           // persisted
-        notes: '',                                      // row notes: no persisted slot
-      });
-    }
-  }
-
-  // Sort by receipt date descending
-  cards.sort((a, b) => {
-    const da = new Date(b.receipt_date || 0).getTime();
-    const db = new Date(a.receipt_date || 0).getTime();
-    return da - db;
-  });
-
-  return cards;
-}
-
-function _renderOfficeCards(allCards) {
-  // ── Filter by search query ──
-  const query = _officeCardsSearchQuery.trim().toLowerCase();
-  const cards = query
-    ? allCards.filter(c => {
-        const hay = [
-          c.client_name, c.kartano, c.date, c.car,
-          c.driver, c.loading, c.taktik, c.type, c.notes,
-          String(c.weight), String(c.noloon),
-        ].join(' ').toLowerCase();
-        return hay.includes(query);
-      })
-    : allCards;
-
-  const totalWeight = cards.reduce((s, c) => s + c.weight, 0);
-  const totalNoloon = cards.reduce((s, c) => s + c.noloon, 0);
-
-  const summaryHTML = `
-    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-      <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#6b7280,#4b5563);border-radius:12px;padding:12px 16px;color:#fff;">
-        <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">عدد الكارتات</p>
-        <p style="font-size:1.25rem;font-weight:800;margin:0;">${cards.length}</p>
-      </div>
-      <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#0f766e,#0d9488);border-radius:12px;padding:12px 16px;color:#fff;">
-        <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي الوزن</p>
-        <p style="font-size:1.25rem;font-weight:800;margin:0;">${_fmt(totalWeight)}</p>
-      </div>
-      <div style="flex:1;min-width:120px;background:linear-gradient(135deg,#2563eb,#1d4ed8);border-radius:12px;padding:12px 16px;color:#fff;">
-        <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي النولون</p>
-        <p style="font-size:1.25rem;font-weight:800;margin:0;">${_fmt(totalNoloon)}</p>
-      </div>
-    </div>`;
-
-  const searchHTML = `
-    <div style="margin-bottom:12px;">
-      <input id="officeCardsSearch" type="text" placeholder="🔍 ابحث داخل الكارتات..." value="${_toText(_officeCardsSearchQuery)}"
-        style="width:100%;padding:10px 16px;border:1.5px solid #d1d5db;border-radius:12px;font-family:inherit;font-size:0.875rem;outline:none;box-sizing:border-box;" />
-    </div>`;
-
-  if (allCards.length === 0) {
-    return summaryHTML + '<div style="text-align:center;padding:32px;color:#94a3b8;">لا توجد كارتات لهذه الشركة</div>';
-  }
-
-  if (cards.length === 0 && query) {
-    return summaryHTML + searchHTML + '<div style="text-align:center;padding:24px;color:#94a3b8;">لا توجد نتائج للبحث</div>';
-  }
-
-  const tableRows = cards.map(c => `
-    <tr>
-      <td>${_text(c.client_name)}</td>
-      <td>${_text(c.kartano)}</td>
-      <td>${_text(c.date)}</td>
-      <td>${_text(c.car)}</td>
-      <td>${_text(c.driver)}</td>
-      <td>${_fmt(c.weight)}</td>
-      <td>${_fmt(c.noloon)}</td>
-      <td>${_text(c.loading)}</td>
-      <td>${_text(c.taktik)}</td>
-      <td>${_text(c.type)}</td>
-      <td>${_text(c.notes)}</td>
-    </tr>
-  `).join('');
-
-  return summaryHTML + searchHTML + `
-    <div class="table-wrapper" style="max-height:60vh;overflow-y:auto;">
-      <table class="table">
-        <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
-          <tr>
-            <th style="color:#fff;">العميل</th>
-            <th style="color:#fff;">رقم الكارتة</th>
-            <th style="color:#fff;">التاريخ</th>
-            <th style="color:#fff;">رقم المركبة</th>
-            <th style="color:#fff;">السائق</th>
-            <th style="color:#fff;">الوزن</th>
-            <th style="color:#fff;">النولون</th>
-            <th style="color:#fff;">التحميل</th>
-            <th style="color:#fff;">الجهة</th>
-            <th style="color:#fff;">النوع</th>
-            <th style="color:#fff;">ملاحظات</th>
-          </tr>
-        </thead>
-        <tbody>${tableRows}</tbody>
-      </table>
-    </div>`;
-}
 
 async function _renderDetailsContent(office) {
   const content = document.getElementById('officeDetailsContent');
@@ -1069,13 +919,6 @@ async function _renderDetailsContent(office) {
 
   if (_activeDetailsTab === 'hamola') {
     content.innerHTML = _renderHamolaTable(office.hamolaRows || []);
-  }
-
-  if (_activeDetailsTab === 'cards') {
-    content.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;">جاري التحميل...</div>';
-    const cardsData = await _getOfficeCards(office);
-    _officeCardsCache = cardsData;
-    content.innerHTML = _renderOfficeCards(cardsData);
   }
 }
 
@@ -1242,8 +1085,6 @@ function attachOfficesPageListeners() {
     if (target.closest('[data-action="office-back"]')) {
       _activeDetailsTab = 'hamola';
       _detailsOfficeId = null;
-      _officeCardsSearchQuery = '';
-      _officeCardsCache = [];
       if (typeof window.showPage === 'function') await window.showPage('officesPage');
       return;
     }
@@ -1267,8 +1108,6 @@ function attachOfficesPageListeners() {
     const tabBtn = target.closest('[data-tab]');
     if (tabBtn) {
       _activeDetailsTab = tabBtn.dataset.tab;
-      _officeCardsSearchQuery = '';
-      _officeCardsCache = [];
       if (_detailsOfficeId) {
         const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
         // Re-render full shell to update tab active state
@@ -1323,20 +1162,6 @@ function attachOfficesPageListeners() {
       _searchQuery = target.value || '';
       await loadOffices();
       return;
-    }
-    // Office cards search — re-render from cache, no DB call
-    if (target?.id === 'officeCardsSearch') {
-      _officeCardsSearchQuery = target.value || '';
-      const content = document.getElementById('officeDetailsContent');
-      if (content && _officeCardsCache.length > 0) {
-        content.innerHTML = _renderOfficeCards(_officeCardsCache);
-        // Restore focus to search input after re-render
-        const searchInput = document.getElementById('officeCardsSearch');
-        if (searchInput) {
-          searchInput.focus();
-          searchInput.selectionStart = searchInput.selectionEnd = searchInput.value.length;
-        }
-      }
     }
   });
 
