@@ -618,7 +618,7 @@ async function showOfficeDetails(id) {
  * Normalized read: headers come from ReceiptRepository, rows from the frozen
  * ReceiptReadRepository projected by receipt id — the in-memory equivalent of
  * the MySQL-ready join below (never an embedded receipt.rows):
- *   SELECT rr.*, r.receipt_number, r.client_name
+ *   SELECT rr.*, r.client_name
  *   FROM receipt_rows rr
  *   JOIN receipts r ON rr.receipt_id = r.id
  *   WHERE rr.office = ?
@@ -645,7 +645,6 @@ async function _getOfficeCards(office) {
 
       cards.push({
         receipt_id: receipt.id,
-        receipt_number: receipt.receipt_number || '',   // persisted header slot
         client_name: receipt.client_name || receipt.owner_name || '',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
@@ -680,7 +679,7 @@ function _renderOfficeCards(allCards) {
   const cards = query
     ? allCards.filter(c => {
         const hay = [
-          c.receipt_number, c.client_name, c.kartano, c.date, c.car,
+          c.client_name, c.kartano, c.date, c.car,
           c.driver, c.loading, c.taktik, c.type, c.notes,
           String(c.weight), String(c.noloon),
         ].join(' ').toLowerCase();
@@ -723,7 +722,6 @@ function _renderOfficeCards(allCards) {
 
   const tableRows = cards.map(c => `
     <tr>
-      <td>${_text(c.receipt_number)}</td>
       <td>${_text(c.client_name)}</td>
       <td>${_text(c.kartano)}</td>
       <td>${_text(c.date)}</td>
@@ -743,7 +741,6 @@ function _renderOfficeCards(allCards) {
       <table class="table">
         <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
           <tr>
-            <th style="color:#fff;">رقم الإذن</th>
             <th style="color:#fff;">العميل</th>
             <th style="color:#fff;">رقم الكارتة</th>
             <th style="color:#fff;">التاريخ</th>

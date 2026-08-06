@@ -135,8 +135,26 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["ohda         : _num(row, 'receipt-ohda')", 'collector maps ohda'],
   ["sarf         : _num(row, 'receipt-sarf')", 'collector maps sarf'],
   ["receiptRows.push({ _type: 'separator', vehicleName, subtotal, notes, isAuto })", 'collector emits separator rows'],
-  ["receipt_number   : (receiptNumberInput || '').trim(),", 'header collector maps receipt_number'],
 ].forEach(([s, l]) => fingerprint(RECEIPTS_SRC, s, l));
+
+// ══ Receipt Number phase — PERMANENT removal census (production sources) ══
+ok(!RECEIPTS_SRC.includes('receipt_number') && !RECEIPTS_SRC.includes('receiptNumber'),
+  'REMOVED-CONTRACT (Receipt Number phase): receipts.js carries ZERO receipt_number/receiptNumber references (collector/normalize/payload/UI/print/validation)');
+ok(!RECEIPTS_SRC.includes('peekNextReceiptNumber') && !RECEIPTS_SRC.includes('allocateReceiptNumber')
+   && !RECEIPTS_SRC.includes('generateReceiptNumber') && !RECEIPTS_SRC.includes('getReceiptByNumber')
+   && !RECEIPTS_SRC.includes('assignReceiptNumber') && !RECEIPTS_SRC.includes('COUNTER_STORE'),
+  'REMOVED-CONTRACT (Receipt Number phase): every numbering function + the counter plumbing removed from receipts.js');
+ok(!ALLRECEIPTS_SRC.includes('receipt_number') && !ALLRECEIPTS_SRC.includes('receiptNumber'),
+  'REMOVED-CONTRACT (Receipt Number phase): allReceipts.js ZERO (filters/cards/prints/titles)');
+ok(!FINANCIAL_SRC.includes('receipt_number'),
+  'REMOVED-CONTRACT (Receipt Number phase): financial.js ZERO (header builder / validate shape / getDriverKartas)');
+const DATABASE_SRC = readFileSync('./database.js', 'utf8');
+ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.test(DATABASE_SRC),
+  'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
+ok(!/name:\s*'counters'/.test(DATABASE_SRC),
+  'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
+ok(DATABASE_SRC.includes('const DB_VERSION = 13;'),
+  'schema bumped to v13 — clean reset purges persisted receipt_number headers');
 
 // UX upgrade (driver quick-create): non-listed driver names are no longer
 // rejected at save — the user is asked to add the driver instead.
@@ -245,7 +263,6 @@ const rowB_net = calculateRowNet({
 const FORM_PAYLOAD = {
   id: undefined,
   receipt_date: '2026-07-29',
-  receipt_number: '42',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك الاختبار',
   owner_name: 'مالك الاختبار',
   company_name: null, company_phone: null,
@@ -282,9 +299,9 @@ console.log(`entered rows: data A net=${rowA_net}, separator, data B net=${rowB_
 console.log('\n══ STAGE B — service payload construction (REAL receipts.js normalizers) ══');
 const normalized = _normalize(FORM_PAYLOAD);
 const servicePayload = _buildServicePayload(normalized);
-servicePayload.receipt_number = String(FORM_PAYLOAD.receipt_number); // assignReceiptNumber effect
 const payloadRowKeys = Object.keys(servicePayload.rows[0]).sort();
-ok(servicePayload.receipt_number === '42', `receipt_number survives into service payload (got ${J(servicePayload.receipt_number)})`);
+ok(servicePayload.receipt_number === undefined,
+  `REMOVED-CONTRACT (Receipt Number phase): service payload carries no receipt_number — the internal UUID id is the only key (got ${J(servicePayload.receipt_number)})`);
 ok(payloadRowKeys.includes('kartano') && payloadRowKeys.includes('weight') && payloadRowKeys.includes('type')
    && payloadRowKeys.includes('officeAmount') && payloadRowKeys.includes('data'),
    `service-payload row still carries full UI vocabulary: [${payloadRowKeys.join(',')}]`);
@@ -311,7 +328,8 @@ console.log('persisted header keys:', headerKeys.join(', '));
 console.log('persisted row keys   :', rowKeys.join(', '));
 
 // Header fields
-ok(persistedHeader.receipt_number === '42', `KEPT (Phase 5 — Step 2): header.receipt_number persisted (got ${J(persistedHeader.receipt_number)})`);
+ok(persistedHeader.receipt_number === undefined && typeof persistedHeader.id === 'string',
+  `REMOVED-CONTRACT (Receipt Number phase): header.receipt_number NOT persisted; receipts keyed by internal UUID id only (header keys: ${headerKeys.join(', ')})`);
 ok(persistedHeader.owner_name === undefined, 'LOST: header.owner_name NOT persisted (display falls back to client_name)');
 ok(persistedHeader.row_count === undefined, 'LOST: header.row_count NOT persisted (card falls back to counting rows)');
 ok(persistedHeader.vehicle_id === undefined, 'LOST: header.vehicle_id NOT persisted');
@@ -391,11 +409,10 @@ ok(Number(dmap.weight) === 50 && Number(dmap.weight2) === 10 && Number(dmap.defi
 ok(Number(dmap.officeAmount) === 75 && Number(dmap.add) === 40 && Number(dmap.discount) === 25,
    `AllForms RESTORED: مكتب=${J(dmap.officeAmount)} / إضافة=${J(dmap.add)} / خصم=${J(dmap.discount)} (cents→decimal)`);
 // Card header
-fingerprint(ALLRECEIPTS_SRC, "${esc(record.receipt_number || '—')}", 'card إذن الصرف reads record.receipt_number');
 fingerprint(ALLRECEIPTS_SRC, "${esc(record.owner_name || record.client_name || '—')}", 'card owner falls back to client_name');
-const cardIzn = read.receipt.receipt_number || '—';
 const cardOwner = read.receipt.owner_name || read.receipt.client_name || '—';
-ok(cardIzn === '42', `AllForms card: إذن الصرف displays the persisted number ${J(cardIzn)} (Phase 5)`);
+ok(!ALLRECEIPTS_SRC.includes('إذن الصرف'),
+  'REMOVED-CONTRACT (Receipt Number phase): AllForms card header no longer displays «إذن الصرف» — owner/date/time identify the card');
 ok(cardOwner === 'مالك الاختبار', 'AllForms card: owner displays via client_name fallback (OK)');
 ok((read.receipt.row_count != null ? read.receipt.row_count : read.rows.filter(r => r._type !== 'separator').length) === 2,
    'AllForms card: عدد الكارتات survives via row-count fallback (OK)');
@@ -406,7 +423,6 @@ ok((read.receipt.row_count != null ? read.receipt.row_count : read.rows.filter(r
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══');
 [
-  "setV('receiptNumber',     receiptData.receipt_number || receiptData.receiptNumber || '');",
   "setF('receipt-kartano',       ui.kartano);",
   "setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');",
   "setF('receipt-car',           ui.car);",
@@ -422,14 +438,10 @@ ok(!RECEIPTS_SRC.includes('receiptDriversList'),
   'REMOVED-CONTRACT (UX upgrade): native <datalist> binding gone — the shared custom dropdown drives suggestions');
 fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)",
   'edit bridge surfaces persisted driver_id for the row driver autocomplete');
-fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="hidden">',
-  'receipt number lives in a hidden conduit input — the header renders التاريخ + صاحب المركبة / الصريّف only (UI-only removal)');
-ok(!RECEIPTS_SRC.includes('<input id="receiptNumber" type="text"'),
-  'REMOVED (UI-only): إذن الصرف field no longer visible/editable in the receipt form header');
-fingerprint(RECEIPTS_SRC, 'el.value = await ReceiptsModule.peekNextReceiptNumber();',
-  'numbering untouched — generateReceiptNumber still allocates the next number from the counter into the conduit');
-fingerprint(RECEIPTS_SRC, "const receiptNumber = document.getElementById('receiptNumber')?.value || '';",
-  'printing untouched — printReceipt still reads the internal number (رقم الإذن is printed)');
+ok(!RECEIPTS_SRC.includes('id="receiptNumber"'),
+  'REMOVED-CONTRACT (UI): no #receiptNumber element anywhere — visible or hidden');
+ok(!RECEIPTS_SRC.includes('رقم الإذن'),
+  'REMOVED-CONTRACT (print): the form print header no longer shows «رقم الإذن»');
 
 const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id map */ '');
 // Sim of the drivers-store backed map used by loadReceiptForEdit (id → record name)
@@ -460,20 +472,21 @@ ok(editFields['receipt-kartano'] === 'K-100' && editFields['receipt-date'] === '
    `Edit RESTORED: kartano / row date / driver autocomplete shows the driver NAME resolved id→name via the driver record (${J(editFields['receipt-data'])}) / type / weights / officeAmount / discount / add reconstructed exactly as entered`);
 ok(uiA.data === 'السائق أحمد',
    `Edit display denorm: ui.data still resolves the driver NAME from the persisted denorm (got ${J(uiA.data)}) — print/snapshots keep showing names`);
-const editReceiptNumber = read.receipt.receipt_number || read.receipt.receiptNumber || '';
-ok(editReceiptNumber === '42', `Edit header: receiptNumber input reconstructed from persisted ${J(editReceiptNumber)} — save gate unblocked`);
+ok(read.receipt.receipt_number === undefined,
+  'REMOVED-CONTRACT (Receipt Number phase): the read pipeline yields no receipt_number — edit reconstruction has nothing numbering-related to restore');
 
 // ════════════════════════════════════════════════════════════════════════════
-// STAGE G — Edit-save consequences (REAL validation gate + REAL calculator on
-// reconstructed values)
+// STAGE G — Edit-save consequences (validation gates that remain + REAL
+// calculator on reconstructed values)
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n══ STAGE G — what happens if the user now presses حفظ التعديلات ══');
-fingerprint(RECEIPTS_SRC, "    alert('رقم النموذج مطلوب');", 'validateBeforeSave receipt_number gate');
-fingerprint(RECEIPTS_SRC, '  if (!rawData.receipt_number) {', 'gate condition: !rawData.receipt_number');
-fingerprint(RECEIPTS_SRC, '  if (!el || ReceiptState.isEditing) return;', 'generateReceiptNumber refuses in edit mode');
-const gateBlocks = !(editReceiptNumber); // validateBeforeSave: if (!rawData.receipt_number) → alert + return false
-ok(gateBlocks === false,
-   'EDIT SAVE UNBLOCKED: reconstructed receipt_number "42" passes validateBeforeSave (Phase 5 — Steps 2+3)');
+ok(!RECEIPTS_SRC.includes('if (!rawData.receipt_number)')
+   && !RECEIPTS_SRC.includes("alert('رقم النموذج مطلوب')"),
+  'REMOVED-CONTRACT (save gate): validateBeforeSave no longer gates on receipt_number («رقم النموذج مطلوب» gone)');
+fingerprint(RECEIPTS_SRC, "  if (!rawData.client_id || !rawData.client_type) {",
+  'validateBeforeSave still gates client selection (unchanged)');
+ok(!RECEIPTS_SRC.includes('getReceiptByNumber'),
+  'REMOVED-CONTRACT (save gate): the duplicate-number lookup block is gone with the numbering system');
 
 // calculateTotals()/recompute now runs on the RECONSTRUCTED inputs (REAL
 // calculateRowNet) — the unchanged business calculator must reproduce the

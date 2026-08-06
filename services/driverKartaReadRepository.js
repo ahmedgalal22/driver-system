@@ -34,7 +34,6 @@ export const DriverKartaReadRepository = {
         row,
         receipt: receipt ? {
           id: receipt.id,
-          receipt_number: receipt.receipt_number,
           receipt_date: receipt.receipt_date
         } : null
       };

@@ -31,7 +31,7 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 12;             // v12: final schema cleanup — dormant receipt header fields (shipping_number/company_info/receipt-side account_type) + obsolete receipts indexes (by_vehicle/by_office/by_type) removed; dormant office.hamolaRows purged (clean reset)
+  const DB_VERSION = 13;             // v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
 
   /**
    * STORES schema.
@@ -47,15 +47,6 @@ const DB = (() => {
       indexes: [
         { name: 'by_username', keyPath: 'username', options: { unique: true } },
         { name: 'by_deleted',  keyPath: 'deleted_at' },
-      ],
-    },
-
-    counters: {
-      name: 'counters',
-      keyPath: 'id',
-      autoIncrement: false,
-      indexes: [
-        { name: 'by_deleted', keyPath: 'deleted_at' },
       ],
     },
 
@@ -103,14 +94,14 @@ const DB = (() => {
 
     /**
      * receipts: dispatch/payment documents (كارتات).
-     * UUID keyPath. Money fields stored as integer cents.
+     * UUID keyPath. Money fields stored as integer cents. No user-facing
+     * numbering — the internal UUID (`id`) is the only identifier.
      */
     receipts: {
       name: 'receipts',
       keyPath: 'id',
       autoIncrement: false,
       indexes: [
-        { name: 'by_number',   keyPath: 'receipt_number', options: { unique: true  } },
         { name: 'by_deleted',  keyPath: 'deleted_at' },
       ],
     },

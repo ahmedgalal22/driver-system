@@ -52,7 +52,7 @@ const rowX = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_
   office: 'شركة أ', net: 100, sarf: 0 });
 
 const hdr = (over = {}) => ({
-  receipt_date: '2026-07-27', receipt_number: '1001',
+  receipt_date: '2026-07-27',
   client_id: 'owner-1', client_type: 'owner', client_name: 'مالك اختبار',
   total: 1150,
   ...over,
@@ -65,7 +65,7 @@ await FinancialService.updateReceipt(U, R1, hdr({
   rows: [row1(), row2(), row3()],
 }));
 const R2 = (await FinancialService.createReceipt(U, hdr({
-  receipt_number: '1002', total: 100, rows: [rowX()],
+  total: 100, rows: [rowX()],
 }))).receipt.id;
 await FinancialService.deleteReceipt(U, R2);
 
@@ -208,7 +208,6 @@ function _officeCardsLoop(allReceipts_arg, rowsProjection_arg, officeName) {
       if (rowOffice !== officeName) continue;
       cards.push({
         receipt_id: receipt.id,
-        receipt_number: receipt.receipt_number || '',
         client_name: receipt.client_name || receipt.owner_name || '',
         receipt_date: receipt.receipt_date || '',
         row_index: i,
@@ -240,10 +239,11 @@ ok(c1.kartano === '' && c1.date === '' && c1.driver === '' && c1.weight === 0 &&
 ok(c1.client_name === 'مالك اختبار' && c1.receipt_date === '2026-07-27'
     && c1.payout_status === undefined,
   'cards: header metadata propagated (client_name, receipt_date); REMOVED-CONTRACT (Paid phase): payout_status no longer on office cards');
-ok(c1.receipt_number === '1001', 'cards: receipt_number revived from persisted header (Phase 5 — Step 2)');
+ok(c1.receipt_number === undefined,
+  'REMOVED-CONTRACT (Receipt Number phase): office cards no longer carry receipt_number — receipt_id (UUID) is the only reference');
 
 // loud failure on unknown office — preserved semantics
-await FinancialService.createReceipt(U, hdr({ receipt_number: '1003', total: 100,
+await FinancialService.createReceipt(U, hdr({ total: 100,
   rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
 const badReceipts = await ReceiptRepository.getAll(U);
 const badProjection = await _loadReceiptRowsProjection(badReceipts);
@@ -270,11 +270,14 @@ ok(!/Array\.isArray\(\s*receipt\.rows/.test(offSrc), 'offices.js: ZERO executabl
 ok(offSrc.includes('item.net += shape.net;') && offSrc.includes('_rowId: row.row_id ?? null,')
     && offSrc.includes('noloon: Money.toDecimal(row.driver_price ?? 0),'),
   'extraction-bound: summary/cards/shape markers present verbatim in offices.js');
+ok(!offSrc.includes('receipt_number') && !dashSrc.includes('receipt_number'),
+  'census (Receipt Number phase): offices.js / dashboard.js carry ZERO receipt_number references');
 
 // ─── GROUP 5: ledger-header reroute equivalence (offices.js:445 → ReceiptRepository.getById) ──
 console.log('\n— GROUP 5: receipt header read-path (ReceiptRepository.getById) —');
 ok(!!headerR1 && headerR1.id === R1, 'ReceiptRepository.getById returns live header (same DB.getById chain as before)');
-ok(headerR1.receipt_number === '1001', 'header.receipt_number persisted (Phase 5 — Step 2) → reference_number source restored');
+ok(headerR1.receipt_number === undefined,
+  'REMOVED-CONTRACT (Receipt Number phase): persisted header carries no receipt_number — internal UUID id is the only identifier');
 ok((await ReceiptRepository.getById(R2)) === null, 'getById of soft-deleted receipt → null (semantics preserved)');
 
 console.log(`\n${failures === 0 ? '✅ ALL READ-PATH ASSERTIONS PASSED' : '❌ FAILURES: ' + failures}`);

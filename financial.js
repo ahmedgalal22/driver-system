@@ -113,9 +113,6 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
     client_type: cleanHeader.client_type,
     client_name: cleanHeader.client_name || null,
     receipt_date: cleanHeader.receipt_date,
-    // Restored header contract: sole user-visible header field previously dropped
-    // (already validated through _validate; by_number index exists in schema).
-    receipt_number: cleanHeader.receipt_number ?? null,
   };
 }
 
@@ -228,7 +225,6 @@ function _validate(data) {
     client_name: header.client_name,
     rows: dataRows,
     raw_rows: data.rows ?? [],
-    receipt_number: data.receipt_number ?? null,
   };
 }
 
@@ -777,7 +773,6 @@ async function getDriverKartas(driverId) {
     result.push({
       row_id: row.row_id,
       receipt_id: row.receipt_id,
-      receipt_number: receipt?.receipt_number || null,
       date: receipt?.receipt_date || null,
       vehicle_id: row.vehicle_id || null,
       vehicle_plate: row.vehicle_plate || null,

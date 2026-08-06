@@ -34,10 +34,6 @@ const ROW_PAYMENT = {
   PENDING : 'pending',
 };
 
-const STORE = 'receipts';
-const COUNTER_STORE = 'counters';
-const RECEIPT_NUMBER_COUNTER = 'receipt_number';
-
 // ─── UUID ─────────────────────────────────────────────────────────────────────
 
 function _uuid() {
@@ -164,7 +160,6 @@ function _normalize(rawData) {
   return {
     id             : receiptId,
     receipt_date   : rawData.receipt_date,
-    receipt_number : rawData.receipt_number  ?? null,
     client_id      : rawData.client_id != null ? String(rawData.client_id).trim() : null,
     client_type    : rawData.client_type,
     client_name    : normalizeOptionalString(rawData.client_name),
@@ -246,7 +241,6 @@ function _buildServicePayload(n) {
   return {
     id               : n.id,
     receipt_date     : n.receipt_date,
-    receipt_number   : n.receipt_number,
     client_id        : n.client_id,
     client_type      : n.client_type,
     client_name      : n.client_name,
@@ -262,20 +256,6 @@ function _buildServicePayload(n) {
   };
 }
 
-function isConstraintError(err) {
-  const msg = String(err?.message || '');
-  return err?.name === 'ConstraintError'
-    || msg.includes('ConstraintError')
-    || msg.includes('uniqueness requirements');
-}
-
-function assignReceiptNumber(data, number) {
-  return {
-    ...data,
-    receipt_number: number,
-  };
-}
-
 // ─── PUBLIC: create ───────────────────────────────────────────────────────────
 
 async function create(username, rawData) {
@@ -286,30 +266,9 @@ async function create(username, rawData) {
   const normalized     = _normalize(rawData);
   const servicePayload = _buildServicePayload(normalized);
 
-  // ── Receipt-number allocation + atomic save (with retry on constraint clash) ──
-  const MAX_RETRIES = 5;
-  let nextNumber = parseInt(
-    await allocateReceiptNumber(username, servicePayload.receipt_number),
-    10
-  );
-  if (isNaN(nextNumber)) throw new Error('[ReceiptsModule] Invalid receipt number seed');
+  const result = await FinancialService.createReceipt(username, servicePayload);
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const payloadWithNumber = assignReceiptNumber(servicePayload, String(nextNumber));
-      const result = await FinancialService.createReceipt(username, payloadWithNumber);
-
-      return { result, normalized };
-    } catch (err) {
-      if (isConstraintError(err) && attempt < MAX_RETRIES) {
-        const fresh = await allocateReceiptNumber(username);
-        nextNumber = parseInt(fresh, 10);
-        if (isNaN(nextNumber)) throw new Error('[ReceiptsModule] Invalid receipt number during retry');
-        continue;
-      }
-      throw err;
-    }
-  }
+  return { result, normalized };
 }
 
 
@@ -338,111 +297,6 @@ async function getAll(username) {
   return await ReceiptRepository.getAll(username);
 }
 
-async function _receiptNumberExistsInTx(tx, number) {
-  const asString = String(number);
-  const asNumber = Number(number);
-  const byString = await tx.getByIndex(STORE, 'by_number', asString, { includeDeleted: true });
-  if (byString.length > 0) return true;
-  if (Number.isFinite(asNumber)) {
-    const byNumber = await tx.getByIndex(STORE, 'by_number', asNumber, { includeDeleted: true });
-    if (byNumber.length > 0) return true;
-  }
-  return false;
-}
-
-function _resolveNextAvailableNumber(counterValue, existsChecker) {
-  let nextValue = Number(counterValue) || 0;
-  let nextNumber = '';
-  return (async () => {
-    do {
-      nextValue += 1;
-      nextNumber = String(nextValue);
-    } while (await existsChecker(nextNumber) || await existsChecker(nextValue));
-    return { nextValue, nextNumber };
-  })();
-}
-
-/**
- * Preview the next receipt number for the UI — does NOT advance the counter.
- */
-async function peekNextReceiptNumber(username = null) {
-  const owner = username || _currentUsername();
-  if (!owner) throw new Error('[ReceiptsModule:peekNextReceiptNumber] username is required.');
-
-  return DBProvider.transaction(async (tx) => {
-    const counter = await tx.getById(COUNTER_STORE, RECEIPT_NUMBER_COUNTER, { includeDeleted: true });
-    const counterValue = Number(counter?.value) || 0;
-    const exists = (n) => _receiptNumberExistsInTx(tx, n);
-    const { nextNumber } = await _resolveNextAvailableNumber(counterValue, exists);
-    return nextNumber;
-  }, { username: owner, stores: [COUNTER_STORE, STORE] });
-}
-
-/**
- * Reserve the next receipt number — advances the counter. Call only when saving a new receipt.
- */
-async function allocateReceiptNumber(username = null, preferred = null) {
-  const owner = username || _currentUsername();
-  if (!owner) throw new Error('[ReceiptsModule:allocateReceiptNumber] username is required.');
-
-  return DBProvider.transaction(async (tx) => {
-    const counter = await tx.getById(COUNTER_STORE, RECEIPT_NUMBER_COUNTER, { includeDeleted: true });
-    let counterValue = Number(counter?.value) || 0;
-    const exists = (n) => _receiptNumberExistsInTx(tx, n);
-
-    const preferredStr = preferred != null ? String(preferred).trim() : '';
-    if (preferredStr) {
-      const prefNum = parseInt(preferredStr, 10);
-      if (!Number.isNaN(prefNum) && prefNum > 0 && !(await exists(prefNum))) {
-        const newCounter = Math.max(counterValue, prefNum);
-        if (counter) {
-          await tx.update(COUNTER_STORE, RECEIPT_NUMBER_COUNTER, { value: newCounter }, { includeDeleted: true });
-        } else {
-          await tx.add(COUNTER_STORE, { id: RECEIPT_NUMBER_COUNTER, value: newCounter });
-        }
-        return preferredStr;
-      }
-    }
-
-    const { nextValue, nextNumber } = await _resolveNextAvailableNumber(counterValue, exists);
-    if (counter) {
-      await tx.update(COUNTER_STORE, RECEIPT_NUMBER_COUNTER, { value: nextValue }, { includeDeleted: true });
-    } else {
-      await tx.add(COUNTER_STORE, { id: RECEIPT_NUMBER_COUNTER, value: nextValue });
-    }
-    return nextNumber;
-  }, { username: owner, stores: [COUNTER_STORE, STORE] });
-}
-
-/**
- * Look up a persisted receipt by its receipt_number and return it with its rows.
- *
- * Read contract: returns `{ receipt, rows }` (same shape as
- * ReceiptReadRepository.getReceiptWithRows) — rows are NEVER embedded on the
- * receipt header object itself.
- *
- * Implementation note: the frozen repository surface exposes no by-number
- * lookup, so the header is located via ReceiptRepository.getAll() and its
- * rows are then loaded through ReceiptReadRepository (the normalized read
- * path). This is the only receipts-module read of `receipts` that does not
- * go through ReceiptReadRepository — documented as a frozen-API gap.
- */
-async function getReceiptByNumber(receipt_number, username = null) {
-  if (receipt_number == null || String(receipt_number).trim() === '') return null;
-  const owner  = username || _currentUsername();
-  const wanted = String(receipt_number).trim();
-
-  const all     = await ReceiptRepository.getAll(owner);
-  const receipt = (all || []).find(
-    r => String(r?.receipt_number ?? '').trim() === wanted
-  ) || null;
-  if (!receipt) return null;
-
-  // Load ReceiptRows through the normalized read path
-  return ReceiptReadRepository.getReceiptWithRows(receipt.id);
-}
-
-
 async function getVehicleById(vehicle_id) {
   if (!vehicle_id) return null;
   return ClientRepository.getVehicleById(vehicle_id);
@@ -470,8 +324,6 @@ const ReceiptsModule = Object.freeze({
   create,
   update,
   getAll,
-  peekNextReceiptNumber,
-  getReceiptByNumber,
   getVehicleById,
   getVehiclesByPlate,
   getOffices,
@@ -810,13 +662,6 @@ function renderMetaFields() {
         </div>
       </div>
     </div>
-    <!-- UI-only (Receipt Number header field removed): رقم إذن الصرف يبقى
-         معرّفًا داخليًا — يُخصَّص تلقائيًا من العدّاد ويُخزَّن كما كان، لكنه لم
-         يعد يظهر كخانة في ترويسة النموذج (الترويسة الآن: التاريخ + صاحب المركبة
-         / الصريّف فقط). نفس عنصر #receiptNumber — مخفيًا — يغذي كل المسارات
-         القائمة دون تغيير: generateReceiptNumber، collectRawData، التعديل،
-         الطباعة. -->
-    <input id="receiptNumber" type="hidden">
     <datalist id="ownersList"></datalist>`;
 }
 
@@ -1165,12 +1010,6 @@ function setCurrentDate() {
   const today = DateUtils.todayLocal();
   const el    = document.getElementById('receiptDate');
   if (el) el.value = today;
-}
-
-async function generateReceiptNumber() {
-  const el = document.getElementById('receiptNumber');
-  if (!el || ReceiptState.isEditing) return;
-  el.value = await ReceiptsModule.peekNextReceiptNumber();
 }
 
 function _assertCriticalSaveInputs(username, rawData) {
@@ -2601,14 +2440,12 @@ async function collectReceiptRows() {
 
 async function collectRawData() {
   const receiptDateInput = document.getElementById('receiptDate')?.value;
-  const receiptNumberInput = document.getElementById('receiptNumber')?.value;
   const client = _selectedClient();
   const companyName     = document.getElementById('companyName')?.value;
   const companyPhone    = document.getElementById('companyPhone')?.value;
   return {
     id               : ReceiptState.editingReceiptId || undefined,
     receipt_date     : (receiptDateInput || '').trim(),
-    receipt_number   : (receiptNumberInput || '').trim(),
     client_id        : client?.id || null,
     client_type      : client?.type || null,
     client_name      : client?.name || null,
@@ -2625,11 +2462,6 @@ async function collectRawData() {
 async function validateBeforeSave(rawData) {
   if (!rawData.receipt_date) {
     alert('الرجاء إدخال التاريخ');
-    return false;
-  }
-
-  if (!rawData.receipt_number) {
-    alert('رقم النموذج مطلوب');
     return false;
   }
 
@@ -2722,18 +2554,6 @@ async function validateBeforeSave(rawData) {
   if (invalidVehicleOwners.length > 0) {
     alert('⚠️ يجب أن تكون كل مركبة مرتبطة بمالك مركبة مسجل.');
     return false;
-  }
-
-  // receipt_number uniqueness
-  // NOTE: the frozen persisted Receipt header does not store receipt_number,
-  // so this lookup currently always returns null — it activates automatically
-  // once the header contract gains receipt_number (see step-6 report).
-  if (rawData.receipt_number) {
-    const existing = await ReceiptsModule.getReceiptByNumber(rawData.receipt_number, username);
-    if (existing?.receipt && existing.receipt.id !== rawData.id) {
-      alert(`⚠️ رقم النموذج "${rawData.receipt_number}" مستخدم بالفعل. برجاء توليد رقم جديد.`);
-      return false;
-    }
   }
 
   return true;
@@ -2831,7 +2651,6 @@ function printReceipt() {
   if (!table) return;
 
   const totalsContainer = document.getElementById('finalTotalsContainer');
-  const receiptNumber = document.getElementById('receiptNumber')?.value || '';
   const receiptDate   = document.getElementById('receiptDate')?.value || '';
   const clientName    = document.getElementById('clientInput')?.value?.trim() || '';
 
@@ -2852,7 +2671,6 @@ function printReceipt() {
     <div style="text-align:center; margin-bottom:12px; border-bottom:2px solid #1e3a8a; padding-bottom:8px;">
       <h2 style="margin:0; color:#1e3a8a; font-size:16pt;">نموذج الصرف</h2>
       <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:10pt;">
-        <span>رقم الإذن: <strong>${receiptNumber}</strong></span>
         <span>التاريخ: <strong>${receiptDate}</strong></span>
         ${clientName ? `<span>العميل: <strong>${clientName}</strong></span>` : ''}
       </div>
@@ -3008,9 +2826,6 @@ function clearReceiptSilent() {
   _vehicleAnalysisCache.clear();
   _exitEditMode();
 
-  const rnInput = document.getElementById('receiptNumber');
-  if (rnInput) rnInput.value = '';
-  
   const cn = document.getElementById('companyName');   if (cn) cn.value = '';
   const cp = document.getElementById('companyPhone');  if (cp) cp.value = '';
   const clientInp = document.getElementById('clientInput');
@@ -3024,7 +2839,6 @@ function clearReceiptSilent() {
   ensureReceiptArrowRow();
   addReceiptRow(1);
   calculateTotals();
-  generateReceiptNumber();
 }
 
 function clearReceipt() {
@@ -3060,7 +2874,6 @@ async function loadReceiptForEdit(receiptData) {
   const clientId = receiptData.client_id != null ? String(receiptData.client_id) : (receiptData.owner_id != null ? String(receiptData.owner_id) : '');
   const client = _clientsCache.find(c => c.type === clientType && c.id === clientId);
   setV('clientInput', client?.label || receiptData.client_name || receiptData.owner_name || receiptData.ownerName || '');
-  setV('receiptNumber',     receiptData.receipt_number || receiptData.receiptNumber || '');
   setV('companyName',       receiptData.company_name   || receiptData.companyName   || '');
   setV('companyPhone',      receiptData.company_phone  || receiptData.companyPhone  || '');
 
@@ -3450,8 +3263,6 @@ function initReceiptPage() {
   const tbody = document.getElementById('receiptTableBody');
   const dataRows = tbody ? [...tbody.querySelectorAll('tr')].filter(r => r.id !== 'receiptFillArrowRow') : [];
   if (dataRows.length === 0) addReceiptRow(1);
-
-  setTimeout(() => generateReceiptNumber(), 300);
 }
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────

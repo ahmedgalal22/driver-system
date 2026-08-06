@@ -975,7 +975,7 @@ async function _refreshPage() {
     ? allEntries.filter(e => {
         const hay = [
           e.note, e.description, e.client_name, e.employee_name,
-          e.receipt_number, _effectLabel(e.effect),
+          _effectLabel(e.effect),
           String(e.amount), e.date, e.reference_id,
         ].join(' ').toLowerCase();
         return hay.includes(query);

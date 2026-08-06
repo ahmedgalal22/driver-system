@@ -34,7 +34,6 @@ function createFilterState() {
     owner: '',
     company: '',
     date: '',
-    number: '',
     vehicle: '',
     karta: '',
     type: '',
@@ -239,7 +238,6 @@ function hasActiveRowFilters(filters) {
     || String(filters.company || '').trim()
     || String(filters.vehicle || '').trim()
     || String(filters.karta || '').trim()
-    || String(filters.number || '').trim()
     || String(filters.type || '').trim()
   );
 }
@@ -250,11 +248,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
   const company = String(filters.company || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
-  const number = String(filters.number || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
-
-  // Record-level filters: if active and record doesn't match, hide all rows
-  if (number && !rowContains(record.receipt_number, number)) return false;
 
   if (row._type === 'separator') {
     const hay = [row.vehicleName, row.notes, String(row.subtotal ?? '')].join(' ').toLowerCase();
@@ -313,7 +307,6 @@ function getReceiptCardsFiltered() {
   const global = String(filters.global || '').trim().toLowerCase();
   const owner = String(filters.owner || '').trim().toLowerCase();
   const company = String(filters.company || '').trim().toLowerCase();
-  const number = String(filters.number || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
@@ -329,7 +322,6 @@ function getReceiptCardsFiltered() {
       const haystack = [
         record.client_name,
         record.owner_name,
-        record.receipt_number,
         record.vehicle_id,
         record.receipt_date,
         record.company_name,
@@ -345,7 +337,6 @@ function getReceiptCardsFiltered() {
       if (global && !haystack.includes(global)) return false;
       if (owner && !rowContains(record.owner_name || record.client_name, owner) && !rows.some((row) => rowContains(row.owner_name, owner))) return false;
       if (company && !rowContains(record.company_name, company) && !rows.some((row) => rowContains(row.office, company))) return false;
-      if (number && !rowContains(record.receipt_number, number)) return false;
       if (vehicle && !rowContains(record.vehicle_id, vehicle) && !rows.some((row) => rowContains(row.carNo || row.car || row.vehicle_plate, vehicle))) return false;
       if (karta && !rows.some((row) => rowContains(row.kartaNo || row.kartano || row.karta, karta))) return false;
       if (typeFilter && !rows.some((row) => rowContains(row.type, typeFilter))) return false;
@@ -448,9 +439,6 @@ function renderReceiptsControls() {
         <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم الشركة" list="receiptCompaniesDatalist" />
       </label>
       <label>
-        <input data-filter-tab="receipts" data-filter-key="number" type="text" value="${esc(f.number)}" placeholder="  اذن الصرف" list="receiptNumbersDatalist" />
-      </label>
-      <label>
         <input data-filter-tab="receipts" data-filter-key="vehicle" type="text" value="${esc(f.vehicle)}" placeholder="رقم المركبة" list="receiptVehiclesDatalist" />
       </label>
       <label>
@@ -478,7 +466,6 @@ function renderReceiptsControls() {
     </div>
     <datalist id="receiptOwnersDatalist"></datalist>
     <datalist id="receiptCompaniesDatalist"></datalist>
-    <datalist id="receiptNumbersDatalist"></datalist>
     <datalist id="receiptVehiclesDatalist"></datalist>
     <datalist id="receiptKartasDatalist"></datalist>
   `;
@@ -556,8 +543,6 @@ function buildReceiptCardHtml(record, opts = {}) {
           <h3>${esc(title)}</h3>
           <p style="font-size:1rem;font-weight:700;color:#1e3a8a;margin:0 0 4px;">
             <span>صاحب المركبة: ${esc(record.owner_name || record.client_name || '—')}</span>
-            <span style="margin:0 8px;color:#cbd5e1;">|</span>
-            <span>إذن الصرف: ${esc(record.receipt_number || '—')}</span>
           </p>
         </div>
         ${actionsHtml}
@@ -632,7 +617,6 @@ function renderDatalists() {
   const receipts = STATE.receipts;
   setDatalist('receiptOwnersDatalist', receipts.map((r) => r.owner_name || r.client_name).filter(Boolean));
   setDatalist('receiptCompaniesDatalist', receipts.map((r) => r.company_name).filter(Boolean));
-  setDatalist('receiptNumbersDatalist', receipts.map((r) => r.receipt_number).filter(Boolean));
   setDatalist('receiptVehiclesDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.car || row.carNo || row.vehicle_plate)).filter(Boolean));
   setDatalist('receiptKartasDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.kartaNo)).filter(Boolean));}
 
@@ -788,7 +772,6 @@ function buildReceiptPrintBlock(record) {
       <header>
         <strong>${esc(receiptDisplayDate(record.receipt_date))}</strong>
         - ${esc(receiptDayName(record.receipt_date))}
-        - ${esc(record.receipt_number || '')}
       </header>
       <div class="print-meta">
         ${esc(record.owner_name || record.client_name || '')}
@@ -1061,12 +1044,11 @@ function _receiptPrintBuildTotalsRow(record, kartaCount) {
  *
  * Renders the document header block:
  *   - Header image (wasel.png) — absolute URL built from window.location, no DOM read.
- *   - Title, receipt number, date.
+ *   - Title, date.
  *   - Owner name.
  *   - Optional notes.
  */
 function _receiptPrintBuildHeader(record) {
-  const receiptNumber = esc(record.receipt_number || '—');
   const receiptDate   = esc(receiptDisplayDate(record.receipt_date));
   const dayName       = esc(receiptDayName(record.receipt_date));
   const ownerName     = esc(record.owner_name || record.client_name || '—');
@@ -1095,7 +1077,6 @@ function _receiptPrintBuildHeader(record) {
     <div class="print-header">
       <h2>نموذج الصرف</h2>
       <div class="print-header-info">
-        <span>إذن الصرف: <strong>${receiptNumber}</strong></span>
         <span>التاريخ: <strong>${receiptDate} — ${dayName}</strong></span>
       </div>
       <div class="print-header-info" style="margin-top:4px;">
@@ -1185,8 +1166,7 @@ function printSingleReceipt(record) {
 
   // ── Build & print ──────────────────────────────────────────────────────────
   try {
-    const receiptNumber = record.receipt_number ? ` — ${record.receipt_number}` : '';
-    const title         = `نموذج الصرف${receiptNumber}`;
+    const title         = 'نموذج الصرف';
     const body          = _receiptPrintBuildBody(record);
 
     const html = buildPrintDocument({
