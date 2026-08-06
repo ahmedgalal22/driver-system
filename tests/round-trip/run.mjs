@@ -422,7 +422,14 @@ ok(!RECEIPTS_SRC.includes('receiptDriversList'),
   'REMOVED-CONTRACT (UX upgrade): native <datalist> binding gone — the shared custom dropdown drives suggestions');
 fingerprint(RECEIPTS_SRC, "driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)",
   'edit bridge surfaces persisted driver_id for the row driver autocomplete');
-fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="text" readonly tabindex="-1"', 'receiptNumber input is readonly');
+fingerprint(RECEIPTS_SRC, '<input id="receiptNumber" type="hidden">',
+  'receipt number lives in a hidden conduit input — the header renders التاريخ + صاحب المركبة / الصريّف only (UI-only removal)');
+ok(!RECEIPTS_SRC.includes('<input id="receiptNumber" type="text"'),
+  'REMOVED (UI-only): إذن الصرف field no longer visible/editable in the receipt form header');
+fingerprint(RECEIPTS_SRC, 'el.value = await ReceiptsModule.peekNextReceiptNumber();',
+  'numbering untouched — generateReceiptNumber still allocates the next number from the counter into the conduit');
+fingerprint(RECEIPTS_SRC, "const receiptNumber = document.getElementById('receiptNumber')?.value || '';",
+  'printing untouched — printReceipt still reads the internal number (رقم الإذن is printed)');
 
 const uiA = _persistedRowToUiShape(read.rows.find(r => r.row_id === pA.row_id), /* driverName resolves via driver_id map */ '');
 // Sim of the drivers-store backed map used by loadReceiptForEdit (id → record name)

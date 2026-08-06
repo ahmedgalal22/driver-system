@@ -809,13 +809,14 @@ function renderMetaFields() {
           <datalist id="officesList"></datalist>
         </div>
       </div>
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">إذن الصرف</label>
-        <input id="receiptNumber" type="text" readonly tabindex="-1"
-          class="w-full px-4 py-2 border border-gray-200 rounded-lg text-gray-700 font-bold outline-none"
-          placeholder="">
-      </div>
     </div>
+    <!-- UI-only (Receipt Number header field removed): رقم إذن الصرف يبقى
+         معرّفًا داخليًا — يُخصَّص تلقائيًا من العدّاد ويُخزَّن كما كان، لكنه لم
+         يعد يظهر كخانة في ترويسة النموذج (الترويسة الآن: التاريخ + صاحب المركبة
+         / الصريّف فقط). نفس عنصر #receiptNumber — مخفيًا — يغذي كل المسارات
+         القائمة دون تغيير: generateReceiptNumber، collectRawData، التعديل،
+         الطباعة. -->
+    <input id="receiptNumber" type="hidden">
     <datalist id="ownersList"></datalist>`;
 }
 
