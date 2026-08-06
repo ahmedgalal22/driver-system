@@ -495,6 +495,11 @@ function _text(value) {
   return value == null ? '' : String(value);
 }
 
+// _balanceClass — visual class helper for the رصيد الشركة tab (UI only).
+function _balanceClass(value) {
+  return Number(value) < 0 ? 'balance-negative' : 'balance-positive';
+}
+
 function _renderListShell() {
   const page = document.getElementById('officesPage');
   if (!page) return;
@@ -637,6 +642,7 @@ function _renderDetailsShell(office) {
 
       <!-- التبويبات -->
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
+        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد الشركة</button>
         <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
         <button type="button" data-tab="cards" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'cards' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'cards' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'cards' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'cards' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">📋 الكارتات</button>
       </div>
@@ -719,6 +725,89 @@ function _renderHamolaTable(rows) {
           </tr>
         </thead>
         <tbody>${body}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ── رصيد الشركة tab — UI-ONLY restoration ──────────────────────────────────
+// Exact pre-removal renderer kept verbatim. It is fed an EMPTY entry list on
+// purpose: the balance/ledger/deposit functionality remains removed. The tab
+// therefore shows its placeholder card (الرصيد الحالي = 0.00), the original
+// 5-column empty table («لا توجد حركات»), and the original 💰 إيداع / سحب
+// button — which has NO handler and performs NO action.
+function _renderOfficeBalance(entries) {
+  function entryDate(entry) {
+    return entry.date || entry.applied_at || entry.created_at || '';
+  }
+
+  function entryTypeLabel(entry) {
+    if (entry.type === 'OFFICE_DEPOSIT' || entry.type === 'deposit') return 'إيداع';
+    if (entry.type === 'OFFICE_WITHDRAW_AUTO' || entry.type === 'withdraw') return 'سحب';
+    return _text(entry.type || '');
+  }
+
+  function entryDelta(entry) {
+    const amount = Number(entry.amount) || 0;
+    if (entry.type === 'OFFICE_DEPOSIT' || entry.type === 'OFFICE_WITHDRAW_AUTO') return amount;
+    if (entry.type === 'deposit') return Math.abs(amount);
+    if (entry.type === 'withdraw') return -Math.abs(amount);
+    return amount;
+  }
+
+  const sorted = entries.slice().sort((a, b) => {
+    const da = new Date(entryDate(a) || 0).getTime();
+    const db = new Date(entryDate(b) || 0).getTime();
+    return da - db;
+  });
+
+  let running = 0;
+  const withBalance = sorted.map((entry) => {
+    const delta = entryDelta(entry);
+    running += delta;
+    return { entry, delta, balance: running };
+  });
+
+  const currentBalance = withBalance.length
+    ? withBalance[withBalance.length - 1].balance
+    : 0;
+  const currentClass = _balanceClass(currentBalance);
+
+  const displayRows = withBalance.slice().reverse();
+  const rows = displayRows.length
+    ? displayRows.map(({ entry, delta, balance }) => `
+      <tr>
+        <td>${_text(entryDate(entry))}</td>
+        <td>${entryTypeLabel(entry)}</td>
+        <td>${delta < 0 ? '-' : ''}${_fmt(Math.abs(delta))}</td>
+        <td>${_fmt(balance)}</td>
+        <td>${_text(entry.reference_number || entry.reference_id || '-')}</td>
+      </tr>
+    `).join('')
+    : `<tr><td colspan="5" class="text-center text-muted p-4">لا توجد حركات</td></tr>`;
+
+  return `
+    <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;">
+      <div>
+        <p class="text-muted text-xs mb-1">الرصيد الحالي</p>
+        <p class="text-2xl font-bold ${currentClass}">${_fmt(currentBalance)}</p>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" data-action="office-deposit-open" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع / سحب</button>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="table">
+        <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
+          <tr>
+            <th style="color:#fff;">التاريخ</th>
+            <th style="color:#fff;">النوع</th>
+            <th style="color:#fff;">المبلغ</th>
+            <th style="color:#fff;">الرصيد بعد العملية</th>
+            <th style="color:#fff;">المرجع</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
       </table>
     </div>
   `;
@@ -970,6 +1059,13 @@ function _renderOfficeCards(allCards) {
 async function _renderDetailsContent(office) {
   const content = document.getElementById('officeDetailsContent');
   if (!content) return;
+
+  if (_activeDetailsTab === 'balance') {
+    // UI-only tab: placeholder card + empty ledger table — no ledger reads,
+    // no balance computation (the feature itself remains removed).
+    content.innerHTML = _renderOfficeBalance([]);
+    return;
+  }
 
   if (_activeDetailsTab === 'hamola') {
     content.innerHTML = _renderHamolaTable(office.hamolaRows || []);
