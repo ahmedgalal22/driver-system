@@ -46,6 +46,80 @@ function _optionalText(value) {
   return text === '' ? null : text;
 }
 
+function _requireNumber(value, label) {
+  if (value === undefined || value === null) {
+    throw new Error(`[OfficesService] ${label} is required.`);
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    throw new Error(`[OfficesService] ${label} is required.`);
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new Error(`[OfficesService] ${label} must be a number.`);
+  }
+  return n;
+}
+
+// ── Hamola rows (تفاصيل الحمولة) — office-level reference master data ──
+// A hamola row is plain reference data embedded on the office record
+// (office.hamolaRows). It is managed only from the Office Details page and
+// feeds NOTHING else — no receipt read/write path, no FinancialService call,
+// and no calculation consumes it.
+function _normalizeHamolaRow(input, keepId = false) {
+  if (!input || typeof input !== 'object') {
+    throw new Error('[OfficesService] hamola row must be a plain object.');
+  }
+
+  const loading_place = _requireText(
+    input.loading_place ?? input.loading,
+    'loading_place'
+  );
+  const destination_place = _requireText(
+    input.destination_place ?? input.direction ?? input.taktik,
+    'destination_place'
+  );
+  const nolon = _requireNumber(input.nolon ?? input.noloon, 'nolon');
+  const office_amount = Number(input.office_amount ?? input.maktab ?? 0) || 0;
+  const item_type = _optionalText(input.item_type ?? input.type) || null;
+
+  return {
+    id: keepId && input.id ? String(input.id) : _uuid(),
+    loading_place,
+    destination_place,
+    nolon,
+    office_amount,
+    item_type,
+  };
+}
+
+function _applyHamolaPatch(existing, patch) {
+  const next = { ...existing };
+
+  if ('loading_place' in patch || 'loading' in patch) {
+    next.loading_place = _requireText(
+      patch.loading_place ?? patch.loading,
+      'loading_place'
+    );
+  }
+  if ('destination_place' in patch || 'direction' in patch || 'taktik' in patch) {
+    next.destination_place = _requireText(
+      patch.destination_place ?? patch.direction ?? patch.taktik,
+      'destination_place'
+    );
+  }
+  if ('nolon' in patch || 'noloon' in patch) {
+    next.nolon = _requireNumber(patch.nolon ?? patch.noloon, 'nolon');
+  }
+  if ('office_amount' in patch || 'maktab' in patch) {
+    next.office_amount = Number(patch.office_amount ?? patch.maktab ?? 0) || 0;
+  }
+  if ('item_type' in patch || 'type' in patch) {
+    next.item_type = _optionalText(patch.item_type ?? patch.type) || null;
+  }
+
+  return next;
+}
+
 async function createOffices(username, rows) {
   _requireUsername(username, 'createOffices');
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -143,6 +217,68 @@ async function getOfficeById(id, username) {
     throw new Error('[OfficesService] cross-user access is forbidden.');
   }
   return office;
+}
+
+// ── Hamola CRUD (تفاصيل الحمولة) — independent office master-data editor ──
+// These functions persist ONLY office.hamolaRows on the office record itself.
+// They never touch receipts, receipt rows, FinancialService, or any financial
+// calculation.
+
+async function addHamolaRow(username, office_id, row) {
+  _requireUsername(username, 'addHamolaRow');
+  if (!office_id) throw new Error('[OfficesService:addHamolaRow] office_id is required.');
+  const office = await getOfficeById(office_id, username);
+  if (!office) throw new Error('[OfficesService] office not found.');
+
+  const nextRow = _normalizeHamolaRow(row, false);
+  const hamolaRows = [...(office.hamolaRows || []), nextRow];
+
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows }, { username });
+  window.dispatchEvent(new CustomEvent('offices:changed'));
+  return updated;
+}
+
+async function updateHamolaRow(username, office_id, row_id, patch) {
+  _requireUsername(username, 'updateHamolaRow');
+  if (!office_id) throw new Error('[OfficesService:updateHamolaRow] office_id is required.');
+  if (!row_id) throw new Error('[OfficesService:updateHamolaRow] row_id is required.');
+  if (!patch || typeof patch !== 'object') {
+    throw new Error('[OfficesService] patch must be a plain object.');
+  }
+
+  const office = await getOfficeById(office_id, username);
+  if (!office) throw new Error('[OfficesService] office not found.');
+
+  const rows = office.hamolaRows || [];
+  const idx = rows.findIndex((r) => String(r.id) === String(row_id));
+  if (idx === -1) throw new Error('[OfficesService] hamola row not found.');
+
+  const updatedRow = _applyHamolaPatch(rows[idx], patch);
+  const nextRows = rows.slice();
+  nextRows[idx] = updatedRow;
+
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows }, { username });
+  window.dispatchEvent(new CustomEvent('offices:changed'));
+  return updated;
+}
+
+async function deleteHamolaRow(username, office_id, row_id) {
+  _requireUsername(username, 'deleteHamolaRow');
+  if (!office_id) throw new Error('[OfficesService:deleteHamolaRow] office_id is required.');
+  if (!row_id) throw new Error('[OfficesService:deleteHamolaRow] row_id is required.');
+
+  const office = await getOfficeById(office_id, username);
+  if (!office) throw new Error('[OfficesService] office not found.');
+
+  const rows = office.hamolaRows || [];
+  const nextRows = rows.filter((r) => String(r.id) !== String(row_id));
+  if (nextRows.length === rows.length) {
+    throw new Error('[OfficesService] hamola row not found.');
+  }
+
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows }, { username });
+  window.dispatchEvent(new CustomEvent('offices:changed'));
+  return updated;
 }
 
 // _calcWeight replaced by financialCalculator import.
@@ -308,6 +444,9 @@ const OfficesService = Object.freeze({
   deleteOffice,
   getOffices,
   getOfficeById,
+  addHamolaRow,
+  updateHamolaRow,
+  deleteHamolaRow,
   getOfficeFinancialSummary,
 });
 
@@ -329,6 +468,12 @@ const OfficesModule = Object.freeze({
   createOffices: (rows) => OfficesService.createOffices(_moduleSessionUsername(), rows),
   updateOffice: (id, patch) => OfficesService.updateOffice(_moduleSessionUsername(), id, patch),
   deleteOffice: (id) => OfficesService.deleteOffice(_moduleSessionUsername(), id),
+  addHamolaRow: (office_id, row) =>
+    OfficesService.addHamolaRow(_moduleSessionUsername(), office_id, row),
+  updateHamolaRow: (office_id, row_id, patch) =>
+    OfficesService.updateHamolaRow(_moduleSessionUsername(), office_id, row_id, patch),
+  deleteHamolaRow: (office_id, row_id) =>
+    OfficesService.deleteHamolaRow(_moduleSessionUsername(), office_id, row_id),
   getOfficeDetails: (id) => OfficesService.getOfficeById(id, _moduleSessionUsername()),
   getOfficeSummary: (filters = null) =>
     OfficesService.getOfficeFinancialSummary(_moduleSessionUsername(), filters),
@@ -343,10 +488,11 @@ const OfficesModule = Object.freeze({
 let _searchQuery = '';
 let _editingOfficeId = null;
 let _editingOfficeDraft = null;
-let _activeDetailsTab = 'cards';
+let _activeDetailsTab = 'hamola';
 let _detailsOfficeId = null;
 let _officeCardsSearchQuery = '';
 let _officeCardsCache = [];
+let _hamolaEditId = null;
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 
 function _requireSession() {
@@ -508,10 +654,101 @@ function _renderDetailsShell(office) {
 
       <!-- التبويبات -->
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
+        <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
         <button type="button" data-tab="cards" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'cards' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'cards' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'cards' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'cards' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">📋 الكارتات</button>
       </div>
 
       <div id="officeDetailsContent"></div>
+    </div>
+  `;
+
+  if (!document.getElementById('hamolaModal')) {
+    const modal = document.createElement('div');
+    modal.innerHTML = _renderHamolaModal();
+    document.body.appendChild(modal.firstElementChild);
+  }
+}
+
+function _renderHamolaModal() {
+  return `
+    <div id="hamolaModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold" id="hamolaModalTitle">إضافة حمولة</h3>
+          <button type="button" data-action="hamola-modal-close" class="btn btn-secondary btn-sm">إغلاق</button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label class="label mb-1" for="hamolaLoading">مكان التحميل</label>
+            <input id="hamolaLoading" type="text" class="input input-sm" />
+          </div>
+          <div>
+            <label class="label mb-1" for="hamolaDestination">الجهة</label>
+            <input id="hamolaDestination" type="text" class="input input-sm" />
+          </div>
+          <div>
+            <label class="label mb-1" for="hamolaNolon">النولون</label>
+            <input id="hamolaNolon" type="number" step="0.01" class="input input-sm" />
+          </div>
+          <div>
+            <label class="label mb-1" for="hamolaMaktab">المكتب</label>
+            <input id="hamolaMaktab" type="number" step="0.01" class="input input-sm" />
+          </div>
+          <div>
+            <label class="label mb-1" for="hamolaType">النوع</label>
+            <input id="hamolaType" type="text" class="input input-sm" />
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <button type="button" data-action="hamola-modal-save" class="btn btn-primary btn-sm">حفظ</button>
+        </div>
+        <div id="hamolaModalMsg" class="field-msg-inline field-msg-inline--error" role="alert" aria-live="polite"></div>
+      </div>
+    </div>
+  `;
+}
+
+function _renderHamolaTable(rows) {
+  const body = rows.length
+    ? rows.map((r) => {
+        return `
+      <tr>
+        <td>${_text(r.loading_place)}</td>
+        <td>${_text(r.destination_place)}</td>
+        <td>${_text(r.item_type)}</td>
+        <td>${_fmt(r.nolon)}</td>
+        <td>${_fmt(r.office_amount)}</td>
+        <td>
+          <button type="button" data-action="hamola-edit" data-id="${r.id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
+          <button type="button" data-action="hamola-delete" data-id="${r.id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
+        </td>
+      </tr>`;
+      }).join('')
+    : `<tr><td colspan="6" class="text-center text-muted p-6" style="color:#94a3b8;">لا توجد بيانات — اضغط إضافة حمولة</td></tr>`;
+
+  return `
+    <div class="flex justify-between items-center flex-wrap gap-3 mb-4">
+      <h3 class="text-xl font-bold text-gray-800">قائمة أماكن التحميل والتعتيق</h3>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button type="button" data-action="hamola-add" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">➕ إضافة حمولة</button>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="table">
+        <thead style="background:linear-gradient(135deg,#16a34a,#15803d);">
+          <tr>
+            <th style="color:#fff;">التحميل</th>
+            <th style="color:#fff;">الجهة</th>
+            <th style="color:#fff;">النوع</th>
+            <th style="color:#fff;">النولون</th>
+            <th style="color:#fff;">مبلغ المكتب</th>
+            <th style="color:#fff;">إجراءات</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
     </div>
   `;
 }
@@ -763,6 +1000,10 @@ async function _renderDetailsContent(office) {
   const content = document.getElementById('officeDetailsContent');
   if (!content) return;
 
+  if (_activeDetailsTab === 'hamola') {
+    content.innerHTML = _renderHamolaTable(office.hamolaRows || []);
+  }
+
   if (_activeDetailsTab === 'cards') {
     content.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;">جاري التحميل...</div>';
     const cardsData = await _getOfficeCards(office);
@@ -782,6 +1023,75 @@ function _openOfficeModal() {
 
 function _closeOfficeModal() {
   document.getElementById('officeModal')?.classList.add('hidden');
+}
+
+function _openHamolaModal(title, row = null) {
+  const modal = document.getElementById('hamolaModal');
+  const msg = document.getElementById('hamolaModalMsg');
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+
+  const t = document.getElementById('hamolaModalTitle');
+  if (t) t.textContent = title;
+
+  const loading = document.getElementById('hamolaLoading');
+  const destination = document.getElementById('hamolaDestination');
+  const nolon = document.getElementById('hamolaNolon');
+
+  if (loading) loading.value = row?.loading_place || '';
+  if (destination) destination.value = row?.destination_place || '';
+  if (nolon) nolon.value = row?.nolon ?? '';
+
+  const maktab = document.getElementById('hamolaMaktab');
+  const typeInp = document.getElementById('hamolaType');
+  if (maktab) maktab.value = row?.office_amount ?? '';
+  if (typeInp) typeInp.value = row?.item_type ?? '';
+
+  modal?.classList.remove('hidden');
+}
+
+function _closeHamolaModal() {
+  document.getElementById('hamolaModal')?.classList.add('hidden');
+}
+
+async function _saveHamolaRow() {
+  const msg = document.getElementById('hamolaModalMsg');
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+
+  const loading = document.getElementById('hamolaLoading')?.value;
+  const destination = document.getElementById('hamolaDestination')?.value;
+  const nolon = document.getElementById('hamolaNolon')?.value;
+  const maktab = document.getElementById('hamolaMaktab')?.value;
+  const itemType = document.getElementById('hamolaType')?.value;
+
+  try {
+    if (_hamolaEditId) {
+      await OfficesModule.updateHamolaRow(_detailsOfficeId, _hamolaEditId, {
+        loading_place: loading,
+        destination_place: destination,
+        nolon,
+        office_amount: maktab,
+        item_type: itemType,
+      });
+    } else {
+      await OfficesModule.addHamolaRow(_detailsOfficeId, {
+        loading_place: loading,
+        destination_place: destination,
+        nolon,
+        office_amount: maktab,
+        item_type: itemType,
+      });
+    }
+
+    _hamolaEditId = null;
+    _closeHamolaModal();
+    const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
+    await _renderDetailsContent(office);
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || 'حدث خطأ أثناء الحفظ';
+      msg.classList.add('is-visible');
+    }
+  }
 }
 
 
@@ -874,7 +1184,7 @@ function attachOfficesPageListeners() {
     }
 
     if (target.closest('[data-action="office-back"]')) {
-      _activeDetailsTab = 'cards';
+      _activeDetailsTab = 'hamola';
       _detailsOfficeId = null;
       _officeCardsSearchQuery = '';
       _officeCardsCache = [];
@@ -909,6 +1219,43 @@ function attachOfficesPageListeners() {
         _renderDetailsShell(office);
         await _renderDetailsContent(office);
       }
+      return;
+    }
+
+    if (target.closest('[data-action="hamola-add"]')) {
+      _hamolaEditId = null;
+      _openHamolaModal('إضافة حمولة');
+      return;
+    }
+
+    if (target.closest('[data-action="hamola-edit"]')) {
+      const id = target.closest('[data-id]')?.dataset.id;
+      const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
+      const row = office?.hamolaRows?.find((r) => String(r.id) === String(id));
+      if (!row) return;
+      _hamolaEditId = id;
+      _openHamolaModal('تعديل حمولة', row);
+      return;
+    }
+
+    if (target.closest('[data-action="hamola-delete"]')) {
+      const id = target.closest('[data-id]')?.dataset.id;
+      if (!id) return;
+      if (!confirm('هل أنت متأكد من حذف الحمولة؟')) return;
+      await OfficesModule.deleteHamolaRow(_detailsOfficeId, id);
+      const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
+      await _renderDetailsContent(office);
+      return;
+    }
+
+    if (target.closest('[data-action="hamola-modal-close"]')) {
+      _hamolaEditId = null;
+      _closeHamolaModal();
+      return;
+    }
+
+    if (target.closest('[data-action="hamola-modal-save"]')) {
+      await _saveHamolaRow();
       return;
     }
 

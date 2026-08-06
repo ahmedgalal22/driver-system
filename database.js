@@ -209,8 +209,8 @@ const DB = (() => {
 
         // Schema policy: no migration, no legacy compatibility (clean reset).
         // Drop every existing object store, then create the current STORES set.
-        // Dormant persisted fields (e.g. office.hamolaRows, removed header
-        // fields) are purged by the reset itself on version bump.
+        // Any previously persisted data (e.g. removed header fields) is purged
+        // by the reset itself on version bump.
         const existingNames = Array.from(db.objectStoreNames);
         for (const name of existingNames) {
           db.deleteObjectStore(name);
