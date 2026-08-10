@@ -1346,6 +1346,164 @@ async function _getClient(type, id) {
   return OwnersModule.getClientByType(type, id);
 }
 
+/** Vehicle Details-only styles — intentionally scoped to #ownerDetailsPage. */
+function _injectVehicleDetailsStyles() {
+  if (document.getElementById('vehicle-details-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'vehicle-details-styles';
+  style.textContent = `
+    #ownerDetailsPage .vehicle-details-page {
+      --vd-surface: #ffffff;
+      --vd-muted: #64748b;
+      --vd-border: #e2e8f0;
+      --vd-soft: #f8fafc;
+      --vd-primary: #1e3a8a;
+      --vd-positive: #15803d;
+      --vd-positive-soft: #ecfdf5;
+      --vd-negative: #b91c1c;
+      --vd-negative-soft: #fef2f2;
+      --vd-neutral: #475569;
+      direction: rtl;
+      background: var(--vd-soft);
+      border: 1px solid var(--vd-border);
+      border-radius: 20px;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+      overflow: hidden;
+    }
+    #ownerDetailsPage .vehicle-details-hero {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+      color: #fff;
+      padding: 28px;
+    }
+    #ownerDetailsPage .vehicle-details-hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    #ownerDetailsPage .vehicle-details-back {
+      background: rgba(255,255,255,0.14);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 10px;
+      padding: 8px 13px;
+      font: inherit;
+      font-size: 0.8125rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #ownerDetailsPage .vehicle-details-back:hover { background: rgba(255,255,255,0.24); }
+    #ownerDetailsPage .vehicle-details-kicker { color: #cbd5e1; font-size: 0.75rem; font-weight: 700; margin: 0 0 6px; }
+    #ownerDetailsPage .vehicle-details-title { color: #fff; font-size: clamp(1.6rem, 3vw, 2.3rem); font-weight: 800; margin: 0; letter-spacing: .01em; }
+    #ownerDetailsPage .vehicle-details-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(236, 253, 245, 0.14);
+      color: #dcfce7;
+      border: 1px solid rgba(220, 252, 231, 0.25);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: .75rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    #ownerDetailsPage .vehicle-details-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 24px;
+    }
+    #ownerDetailsPage .vehicle-details-meta {
+      min-width: 0;
+      background: rgba(255,255,255,0.09);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    #ownerDetailsPage .vehicle-details-meta span { display: block; color: #cbd5e1; font-size: .7rem; margin-bottom: 4px; }
+    #ownerDetailsPage .vehicle-details-meta strong { color: #fff; font-size: .9rem; overflow-wrap: anywhere; }
+    #ownerDetailsPage .vehicle-details-body { padding: 24px; display: grid; gap: 20px; }
+    #ownerDetailsPage .vehicle-balance-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 20px;
+      background: var(--vd-surface);
+      border: 1px solid var(--vd-border);
+      border-radius: 16px;
+      padding: 22px;
+      position: relative;
+      overflow: hidden;
+    }
+    #ownerDetailsPage .vehicle-balance-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--vd-neutral); }
+    #ownerDetailsPage .vehicle-balance-card.is-positive::before { background: var(--vd-positive); }
+    #ownerDetailsPage .vehicle-balance-card.is-negative::before { background: var(--vd-negative); }
+    #ownerDetailsPage .vehicle-balance-label { color: var(--vd-muted); font-size: .78rem; font-weight: 700; margin: 0 0 6px; }
+    #ownerDetailsPage .vehicle-balance-value { font-size: clamp(1.8rem, 4vw, 2.7rem); font-weight: 800; letter-spacing: -.03em; margin: 0; direction: ltr; text-align: right; }
+    #ownerDetailsPage .vehicle-balance-value.is-positive { color: var(--vd-positive); }
+    #ownerDetailsPage .vehicle-balance-value.is-negative { color: var(--vd-negative); }
+    #ownerDetailsPage .vehicle-balance-value.is-neutral { color: var(--vd-neutral); }
+    #ownerDetailsPage .vehicle-balance-caption { color: var(--vd-muted); font-size: .75rem; margin: 8px 0 0; }
+    #ownerDetailsPage .vehicle-balance-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    #ownerDetailsPage .vehicle-financial-action {
+      border: none;
+      border-radius: 11px;
+      padding: 10px 14px;
+      font: inherit;
+      font-size: .82rem;
+      font-weight: 800;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    #ownerDetailsPage .vehicle-financial-action--deposit { background: var(--vd-positive-soft); color: var(--vd-positive); border: 1px solid #bbf7d0; }
+    #ownerDetailsPage .vehicle-financial-action--withdraw { background: var(--vd-negative-soft); color: var(--vd-negative); border: 1px solid #fecaca; }
+    #ownerDetailsPage .vehicle-financial-action:hover { filter: brightness(.97); transform: translateY(-1px); }
+    #ownerDetailsPage .vehicle-details-section { background: var(--vd-surface); border: 1px solid var(--vd-border); border-radius: 16px; padding: 20px; }
+    #ownerDetailsPage .vehicle-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    #ownerDetailsPage .vehicle-section-heading h3 { color: #0f172a; font-size: 1rem; font-weight: 800; margin: 0; }
+    #ownerDetailsPage .vehicle-section-heading p { color: var(--vd-muted); font-size: .75rem; margin: 4px 0 0; }
+    #ownerDetailsPage .vehicle-ledger-toolbar { background: var(--vd-soft); border: 1px solid var(--vd-border); border-radius: 12px; padding: 12px; margin-bottom: 14px; display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    #ownerDetailsPage .vehicle-ledger-toolbar .form-group { margin: 0; }
+    #ownerDetailsPage .vehicle-ledger-toolbar .label { color: var(--vd-muted); font-size: .7rem; }
+    #ownerDetailsPage .vehicle-ledger-table { border: 1px solid var(--vd-border); border-radius: 12px; overflow-x: auto; }
+    #ownerDetailsPage .vehicle-ledger-table table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    #ownerDetailsPage .vehicle-ledger-table th { background: #f1f5f9; color: #475569; font-size: .72rem; font-weight: 800; padding: 11px 12px; text-align: right; border-bottom: 1px solid var(--vd-border); }
+    #ownerDetailsPage .vehicle-ledger-table td { color: #334155; font-size: .78rem; padding: 12px; border-bottom: 1px solid #eef2f7; vertical-align: middle; }
+    #ownerDetailsPage .vehicle-ledger-table tbody tr:last-child td { border-bottom: none; }
+    #ownerDetailsPage .vehicle-ledger-table tbody tr:hover { background: #fafcff; }
+    #ownerDetailsPage .vehicle-ledger-amount { font-weight: 800; direction: ltr; text-align: right; white-space: nowrap; }
+    #ownerDetailsPage .vehicle-ledger-direction { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 8px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
+    #ownerDetailsPage .vehicle-ledger-direction.is-deposit { background: var(--vd-positive-soft); color: var(--vd-positive); }
+    #ownerDetailsPage .vehicle-ledger-direction.is-withdraw { background: var(--vd-negative-soft); color: var(--vd-negative); }
+    #ownerDetailsPage .vehicle-ledger-source { color: var(--vd-muted); font-size: .72rem; }
+    #ownerDetailsPage .vehicle-ledger-note { color: #334155; max-width: 260px; white-space: normal; }
+    #ownerDetailsPage .vehicle-ledger-empty { padding: 42px 20px; text-align: center; background: var(--vd-soft); border: 1px dashed #cbd5e1; border-radius: 12px; color: var(--vd-muted); }
+    #ownerDetailsPage .vehicle-ledger-empty strong { display: block; color: #334155; margin-bottom: 5px; }
+    #ownerDetailsPage .vehicle-list-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    #ownerDetailsPage .vehicle-list-card { border: 1px solid var(--vd-border); border-radius: 12px; padding: 14px; background: #fff; }
+    #ownerDetailsPage .vehicle-list-plate { color: #0f172a; font-weight: 800; margin: 0; }
+    #ownerDetailsPage .vehicle-list-actions { display: flex; gap: 8px; margin-top: 12px; }
+    #ownerDetailsPage .vehicle-list-action { border: none; border-radius: 8px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: .75rem; font-weight: 700; }
+    #ownerDetailsPage .vehicle-list-action--edit { background: #eff6ff; color: #1d4ed8; }
+    #ownerDetailsPage .vehicle-list-action--delete { background: #fef2f2; color: #b91c1c; }
+    #ownerDetailsPage .vehicle-add-action { border: 1px solid #bfdbfe; border-radius: 9px; background: #eff6ff; color: #1d4ed8; padding: 8px 11px; cursor: pointer; font: inherit; font-size: .78rem; font-weight: 800; }
+    @media (max-width: 720px) {
+      #ownerDetailsPage .vehicle-details-hero { padding: 20px; }
+      #ownerDetailsPage .vehicle-details-meta-grid { grid-template-columns: 1fr; }
+      #ownerDetailsPage .vehicle-details-body { padding: 14px; }
+      #ownerDetailsPage .vehicle-balance-card { grid-template-columns: 1fr; }
+      #ownerDetailsPage .vehicle-balance-actions { justify-content: stretch; }
+      #ownerDetailsPage .vehicle-financial-action { flex: 1; justify-content: center; }
+      #ownerDetailsPage .vehicle-details-section { padding: 15px; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 /**
  * Owner Details is the current vehicle/customer details surface. A vehicle
  * owner may have more than one linked vehicle, so aggregate the authoritative
@@ -1377,7 +1535,16 @@ async function _getOwnerVehicleFinancials(ownerId) {
   return {
     balance: Money.toDecimal(balanceCents),
     ledger,
+    vehicles,
   };
+}
+
+function _vehicleLedgerSource(entry) {
+  if (entry.reference_type === 'receipt_row_payment') return 'صرف كارتة';
+  if (entry.effect === 'karta_settlement_charge') return 'تسوية كارتة';
+  if (entry.reference_type === 'manual_vehicle_balance') return 'حركة رصيد يدوية';
+  if (entry.reference_type === 'driver_deposit') return 'إيداع للسائق';
+  return entry.reference_type || 'حركة مالية';
 }
 
 // ── رصيد العميل — existing vehicle_ledger read projection ─────────────────
@@ -1385,53 +1552,65 @@ async function _getOwnerVehicleFinancials(ownerId) {
 // same vehicle_ledger records used by rebuildVehicleBalance; the date controls
 // remain visual-only because no client-ledger filtering workflow exists.
 function _renderLedger(client, ledger = []) {
+  const rows = ledger.map((entry) => {
+    const isDeposit = entry.type === 'deposit';
+    const directionClass = isDeposit ? 'is-deposit' : 'is-withdraw';
+    const directionLabel = isDeposit ? 'إيداع' : 'سحب';
+    const amountPrefix = isDeposit ? '+' : '−';
+    const note = _ledgerNote(entry);
+    const source = _vehicleLedgerSource(entry);
+    const reference = entry.reference_id || '—';
+    return `
+      <tr>
+        <td>${_dateLabel(entry.date || entry.applied_at || entry.created_at)}</td>
+        <td><span class="vehicle-ledger-direction ${directionClass}">${directionLabel}</span></td>
+        <td class="vehicle-ledger-amount ${directionClass}">${amountPrefix}${_fmt(Math.abs(Number(entry.amount) || 0))}</td>
+        <td>${entry.vehicle_plate || '—'}</td>
+        <td><div class="vehicle-ledger-source">${source}</div><div class="vehicle-ledger-source">${reference}</div></td>
+        <td class="vehicle-ledger-note">${note || '—'}</td>
+      </tr>`;
+  }).join('');
+
   return `
-    <section class="mb-8">
-      <h3 class="text-lg font-bold mb-4">الحركات</h3>
-      <div class="filter-row mb-6 flex-wrap">
-        <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientFromDate">من</label>
+    <section class="vehicle-details-section" aria-labelledby="vehicleMovementsTitle">
+      <div class="vehicle-section-heading">
+        <div>
+          <h3 id="vehicleMovementsTitle">الحركات المالية</h3>
+          <p>سجل الحركات المرتبطة بالمركبات المسجلة</p>
+        </div>
+      </div>
+      <div class="vehicle-ledger-toolbar">
+        <div class="form-group">
+          <label class="label" for="clientFromDate">من</label>
           <input id="clientFromDate" type="date" class="input input-sm">
         </div>
-        <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientToDate">إلى</label>
+        <div class="form-group">
+          <label class="label" for="clientToDate">إلى</label>
           <input id="clientToDate" type="date" class="input input-sm">
         </div>
-        <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-primary btn-sm mb-4">
-          تطبيق
-        </button>
-        <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-secondary btn-sm mb-4">
-          مسح التحديد
-        </button>
+        <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}" class="btn btn-primary btn-sm">تطبيق</button>
+        <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}" class="btn btn-secondary btn-sm">مسح التحديد</button>
       </div>
-      <div class="table-wrapper">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>التاريخ</th>
-              <th>المبلغ</th>
-              <th>المركبة</th>
-              <th>ملاحظة</th>
-            </tr>
-          </thead>
-          <tbody id="clientLedgerBody">
-            ${ledger.length ? ledger.map(e => `
+      ${ledger.length ? `
+        <div class="vehicle-ledger-table">
+          <table>
+            <thead>
               <tr>
-                <td>${_dateLabel(e.date || e.applied_at)}</td>
-                <td class="font-semibold">${_fmt(e.amount)}</td>
-                <td>${e.vehicle_plate || '-'}</td>
-                <td>${_ledgerNote(e)}</td>
+                <th>التاريخ</th>
+                <th>الاتجاه</th>
+                <th>المبلغ</th>
+                <th>المركبة</th>
+                <th>المصدر / المرجع</th>
+                <th>الوصف</th>
               </tr>
-            `).join('') : `
-              <tr>
-                <td colspan="4" class="text-muted text-center">لا توجد حركات</td>
-              </tr>
-            `}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody id="clientLedgerBody">${rows}</tbody>
+          </table>
+        </div>` : `
+        <div class="vehicle-ledger-empty">
+          <strong>لا توجد حركات مالية حتى الآن</strong>
+          <span>ستظهر هنا الإيداعات والسحوبات وحركات الكارتات المرتبطة بالمركبة.</span>
+        </div>`}
     </section>
   `;
 }
@@ -1591,42 +1770,31 @@ function _openVehicleModal(title, plate, ownerId, editId) {
   modal?.classList.remove('hidden');
 }
 
-async function _renderOwnerVehicles(client) {
-  const owned = await OwnersModule.getOwnerVehicles(client.id);
-
+function _renderOwnerVehicles(client, owned = []) {
   return `
-    <section>
-      <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold mb-0">المركبات</h3>
-        <div class="flex gap-2">
-          <button type="button" data-action="add-vehicle-manual" data-owner-id="${client.id}" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">➕ إضافة مركبة</button>
+    <section class="vehicle-details-section">
+      <div class="vehicle-section-heading">
+        <div>
+          <h3>بيانات المركبات</h3>
+          <p>إدارة أرقام المركبات المرتبطة بالمالك</p>
         </div>
+        <button type="button" data-action="add-vehicle-manual" data-owner-id="${client.id}" class="vehicle-add-action">＋ إضافة مركبة</button>
       </div>
-      <div class="table-wrapper mb-10">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>رقم المركبة</th>
-              <th>إجراءات</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${owned.length ? owned.map(v => `
-              <tr>
-                <td>${v.plate || '-'}</td>
-                <td>
-                  <button type="button" data-action="edit-vehicle" data-vehicle-id="${v.id}" data-plate="${v.plate || ''}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
-                  <button type="button" data-action="delete-vehicle" data-vehicle-id="${v.id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
-                </td>
-              </tr>
-            `).join('') : `
-              <tr>
-                <td colspan="2" class="text-muted text-center">لا توجد مركبات</td>
-              </tr>
-            `}
-          </tbody>
-        </table>
-      </div>
+      ${owned.length ? `
+        <div class="vehicle-list-grid">
+          ${owned.map(v => `
+            <article class="vehicle-list-card">
+              <p class="vehicle-list-plate">${v.plate || '—'}</p>
+              <div class="vehicle-list-actions">
+                <button type="button" data-action="edit-vehicle" data-id="${v.id}" data-owner-id="${client.id}" data-vehicle-id="${v.id}" data-plate="${v.plate || ''}" class="vehicle-list-action vehicle-list-action--edit" title="تعديل المركبة">✏️ تعديل</button>
+                <button type="button" data-action="delete-vehicle" data-id="${v.id}" data-vehicle-id="${v.id}" class="vehicle-list-action vehicle-list-action--delete" title="حذف المركبة">🗑️ حذف</button>
+              </div>
+            </article>`).join('')}
+        </div>` : `
+        <div class="vehicle-ledger-empty">
+          <strong>لا توجد مركبات إضافية</strong>
+          <span>يمكنك إضافة مركبة مرتبطة بهذا المالك من الزر أعلاه.</span>
+        </div>`}
     </section>
   `;
 }
@@ -1642,40 +1810,52 @@ async function showOwnerDetails(id, type = 'owner') {
     ownerType: type,
   }));
 
+  _injectVehicleDetailsStyles();
   const financials = await _getOwnerVehicleFinancials(client.id);
   const ledgerHtml = _renderLedger(client, financials.ledger);
-  const relatedHtml = await _renderOwnerVehicles(client);
+  const relatedHtml = _renderOwnerVehicles(client, financials.vehicles);
+  const primaryPlate = client.vehicle_number || client.name || '—';
+  const balanceState = financials.balance > 0 ? 'is-positive'
+    : financials.balance < 0 ? 'is-negative'
+    : 'is-neutral';
 
   const page = document.getElementById('ownerDetailsPage');
   if (!page) return;
 
   page.innerHTML = `
-    <div class="ent-details-page">
-      <div class="ent-details-header">
-        <button type="button" data-action="back-to-customers" class="ent-btn-back">← رجوع</button>
-        <h2 class="ent-details-name">${client.name}</h2>
-        <span class="ent-details-type">مركبة</span>
-      </div>
-
-      <div class="stat-grid mb-8">
-        <div class="card">
-          <p class="text-muted text-xs mb-2">الرصيد الحالي</p>
-          <div class="text-3xl font-bold ${_balanceClass(financials.balance)} mb-6">${_fmt(financials.balance)}</div>
-          <div class="flex gap-2 flex-wrap justify-end">
-            <button type="button" data-action="open-balance-entry" data-entry-type="deposit"
-              class="btn btn-success btn-sm">
-              إيداع رصيد
-            </button>
-            <button type="button" data-action="open-balance-entry" data-entry-type="withdraw"
-              class="btn btn-danger btn-sm">
-              سحب رصيد
-            </button>
-          </div>
+    <div class="vehicle-details-page">
+      <header class="vehicle-details-hero">
+        <div class="vehicle-details-hero-top">
+          <button type="button" data-action="back-to-customers" class="vehicle-details-back">→ العودة إلى المركبات</button>
+          <span class="vehicle-details-status">● مركبة مسجلة</span>
         </div>
-      </div>
+        <div style="margin-top:22px;">
+          <p class="vehicle-details-kicker">تفاصيل المركبة والحركة المالية</p>
+          <h2 class="vehicle-details-title">${primaryPlate}</h2>
+        </div>
+        <div class="vehicle-details-meta-grid">
+          <div class="vehicle-details-meta"><span>رقم المركبة</span><strong>${primaryPlate}</strong></div>
+          <div class="vehicle-details-meta"><span>المالك المسجل</span><strong>${client.name || '—'}</strong></div>
+          <div class="vehicle-details-meta"><span>المركبات المرتبطة</span><strong>${financials.vehicles.length}</strong></div>
+        </div>
+      </header>
 
-      ${ledgerHtml}
-      ${relatedHtml}
+      <div class="vehicle-details-body">
+        <section class="vehicle-balance-card ${balanceState}">
+          <div>
+            <p class="vehicle-balance-label">الرصيد المالي الحالي</p>
+            <p class="vehicle-balance-value ${balanceState}">${_fmt(financials.balance)}</p>
+            <p class="vehicle-balance-caption">يتم احتساب الرصيد من الحركات المالية المسجلة للمركبات المرتبطة.</p>
+          </div>
+          <div class="vehicle-balance-actions">
+            <button type="button" data-action="open-balance-entry" data-entry-type="deposit" class="vehicle-financial-action vehicle-financial-action--deposit">↓ إيداع رصيد</button>
+            <button type="button" data-action="open-balance-entry" data-entry-type="withdraw" class="vehicle-financial-action vehicle-financial-action--withdraw">↑ سحب رصيد</button>
+          </div>
+        </section>
+
+        ${ledgerHtml}
+        ${relatedHtml}
+      </div>
     </div>
   `;
 
