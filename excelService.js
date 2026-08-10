@@ -13,7 +13,7 @@
  *   ExcelService.exportEntitiesExcel({ owners }, filename?)
  *                                                        → void (triggers download)
  *   ExcelService.importEntitiesExcel(file)
- *                                                        → Promise<{ owners: {vehicle_name,vehicle_number}[] }>
+ *                                                        → Promise<{ owners: {vehicle_number}[] }>
  *
  *   ExcelService.openFilePicker(callback)                → void
  *
@@ -501,23 +501,21 @@ async function importVehicleOwners(file) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _ENTITIES_HEADERS = Object.freeze([
-  'اسم المركبة',
   'رقم المركبة',
 ]);
 
 /**
  * exportEntitiesExcel({ owners }, filename?)
- * Exports vehicles into one Excel file (name + number).
+ * Exports vehicles into one Excel file (رقم المركبة column only).
  */
 function exportEntitiesExcel(payload, filename) {
   const XL = _xlsx();
   const ownersIn = Array.isArray(payload?.owners) ? payload.owners : [];
   const owners = ownersIn
     .map(o => ({
-      vehicle_name: String(o?.vehicle_name || o?.name || '').trim(),
-      vehicle_number: String(o?.vehicle_number || '').trim(),
+      vehicle_number: String(o?.vehicle_number || o?.name || '').trim(),
     }))
-    .filter(o => o.vehicle_name);
+    .filter(o => o.vehicle_number);
 
   if (owners.length === 0) {
     throw new Error('لا توجد بيانات للتصدير.');
@@ -525,7 +523,7 @@ function exportEntitiesExcel(payload, filename) {
 
   const aoa = [ _ENTITIES_HEADERS.slice() ];
   for (const o of owners) {
-    aoa.push([o.vehicle_name, o.vehicle_number || '']);
+    aoa.push([o.vehicle_number || '']);
   }
 
   const ws = XL.utils.aoa_to_sheet(aoa);
@@ -536,8 +534,8 @@ function exportEntitiesExcel(payload, filename) {
 
 /**
  * importEntitiesExcel(file)
- * Parses vehicle name/number columns from Excel.
- * @returns {Promise<{ owners: {vehicle_name:string, vehicle_number:string}[] }>}
+ * Parses the رقم المركبة column from Excel.
+ * @returns {Promise<{ owners: {vehicle_number:string}[] }>}
  */
 async function importEntitiesExcel(file) {
   _assertExcelFile(file);
@@ -553,29 +551,25 @@ async function importEntitiesExcel(file) {
   }
 
   const headerRow = (aoa[0] || []).map(_str);
-  let nameCol = headerRow.indexOf('اسم المركبة');
-  if (nameCol === -1) nameCol = headerRow.indexOf('الاسم');
-  if (nameCol === -1) {
-    throw new Error('الملف لا يحتوي على عمود اسم المركبة.');
+  const numberCol = headerRow.indexOf('رقم المركبة');
+  if (numberCol === -1) {
+    throw new Error('الملف لا يحتوي على عمود رقم المركبة.');
   }
-  let numberCol = headerRow.indexOf('رقم المركبة');
-  if (numberCol === -1) numberCol = nameCol + 1;
 
   const owners = [];
   const seen = new Set();
   for (let r = 1; r < aoa.length; r++) {
     const row = aoa[r] || [];
     if (!row.some(cell => _str(cell) !== '')) continue;
-    const vehicle_name = _str(row[nameCol]);
-    const vehicle_number = numberCol >= 0 ? _str(row[numberCol]) : '';
-    if (!vehicle_name) continue;
-    const key = vehicle_name.toLowerCase();
+    const vehicle_number = _str(row[numberCol]);
+    if (!vehicle_number) continue;
+    const key = vehicle_number.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    owners.push({ vehicle_name, vehicle_number, name: vehicle_name });
+    owners.push({ vehicle_number });
   }
   if (owners.length === 0) {
-    throw new Error('الملف لا يحتوي على أسماء صالحة بعد التصفية.');
+    throw new Error('الملف لا يحتوي على أرقام مركبات صالحة بعد التصفية.');
   }
   return { owners };
 }

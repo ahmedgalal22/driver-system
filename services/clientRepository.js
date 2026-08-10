@@ -10,12 +10,12 @@ export const ClientRepository = {
   async getAllOwners() {
     return DBProvider.getAll('vehicleOwners');
   },
-  async findOwnersByName(name) {
-    const n = String(name ?? '').trim().toLowerCase();
+  async findOwnersByNumber(vehicleNumber) {
+    const n = String(vehicleNumber ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
     if (!n) return [];
     const all = await DBProvider.getAll('vehicleOwners');
     return all.filter((o) => {
-      const vn = String(o.vehicle_name || o.name || '').trim().toLowerCase();
+      const vn = String(o.vehicle_number || o.name || '').trim().replace(/\s+/g, ' ').toLowerCase();
       return vn === n;
     });
   },

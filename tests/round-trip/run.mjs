@@ -169,6 +169,16 @@ for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', AL
 ok(FINANCIAL_SRC.includes("LEDGER   : 'vehicle_ledger'"),
   'KEEP-CONTRACT: financial.js driver/salfa financials still write exclusively to vehicle_ledger');
 
+// ══ Vehicle Identity phase — اسم المركبة permanently removed; number-keyed ══
+const ENTITIES_SRC = readFileSync('./_src/entities.js', 'utf8');
+ok(!/اسم المركبة|vehicle_name|add-m-name|findOwnersByName/.test(ENTITIES_SRC),
+  'REMOVED-CONTRACT (Vehicle Identity phase): entities.js carries ZERO vehicle-name references (CRUD/list/modals/search/print/import)');
+ok(ENTITIES_SRC.includes('await ClientRepository.findOwnersByNumber(vehicle_number);'),
+  'KEEP-CONTRACT: owner uniqueness is enforced on رقم المركبة');
+ok(RECEIPTS_SRC.includes('const plates = vehicles.map(v => v.plate).filter(Boolean);')
+   && RECEIPTS_SRC.includes('await VehiclesModule.resolveVehicle(_currentUsername(), plate, clientOwner);'),
+  'KEEP-CONTRACT (Vehicle Identity phase): receipt form suggests plates only and resolves رقم المركبة → vehicle → owner');
+
 // UX upgrade (driver quick-create): non-listed driver names are no longer
 // rejected at save — the user is asked to add the driver instead.
 ok(!RECEIPTS_SRC.includes('اسم السائق "${rowDriverText}" غير موجود في القائمة'),

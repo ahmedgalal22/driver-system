@@ -15,5 +15,6 @@ cp "$(dirname "${BASH_SOURCE[0]}")"/../write-path/idb-shim.mjs "$W/"
 # Production sources read as TEXT for real function extraction + fingerprints
 cp "$ROOT"/receipts.js "$W/_src/receipts.js"
 cp "$ROOT"/allReceipts.js "$W/_src/allReceipts.js"
+cp "$ROOT"/entities.js "$W/_src/entities.js"
 cp "$(dirname "${BASH_SOURCE[0]}")/run.mjs" "$W/"
 cd "$W" && node run.mjs

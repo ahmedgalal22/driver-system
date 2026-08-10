@@ -90,28 +90,23 @@ function _emitOwnersChanged() {
 
 async function createOwner(username, payload) {
   if (!username) throw new Error('[OwnersModule:createOwner] username is required.');
-  const vehicle_name = _toText(payload?.vehicle_name ?? payload?.name).trim();
   const vehicle_number = _toText(payload?.vehicle_number).trim();
   const notes = _toText(payload?.notes).trim();
 
-  if (!vehicle_name) {
-    throw new Error('اسم المركبة مطلوب');
-  }
   if (!vehicle_number) {
     throw new Error('رقم المركبة مطلوب');
   }
 
-  const exists = await ClientRepository.findOwnersByName(vehicle_name);
+  const exists = await ClientRepository.findOwnersByNumber(vehicle_number);
   if (exists.length > 0) {
-    throw new Error('اسم المركبة مستخدم بالفعل');
+    throw new Error('رقم المركبة مستخدم بالفعل');
   }
 
   const record = await ClientRepository.saveOwner({
     id: _uuid(),
     username,
-    vehicle_name,
     vehicle_number,
-    name: vehicle_name,
+    name: vehicle_number,
     notes: notes || null,
   }, { username });
 
@@ -126,29 +121,22 @@ async function getAllOwners() {
 async function updateOwner(username, id, patch) {
   if (!username) throw new Error('[OwnersModule:updateOwner] username is required.');
   if (!id) throw new Error('معرّف المركبة مطلوب');
-  const vehicle_name = patch?.vehicle_name !== undefined
-    ? _toText(patch.vehicle_name).trim()
-    : (patch?.name === undefined ? undefined : _toText(patch.name).trim());
   const vehicle_number = patch?.vehicle_number === undefined
     ? undefined
     : _toText(patch.vehicle_number).trim();
   const notes = patch?.notes === undefined ? undefined : _toText(patch.notes).trim();
 
-  if (vehicle_name !== undefined) {
-    if (!vehicle_name) throw new Error('اسم المركبة مطلوب');
-    const exists = (await ClientRepository.findOwnersByName(vehicle_name))
-      .filter(o => o.id !== id);
+  if (vehicle_number !== undefined) {
+    if (!vehicle_number) throw new Error('رقم المركبة مطلوب');
+    const exists = (await ClientRepository.findOwnersByNumber(vehicle_number))
+      .filter(o => String(o.id) !== String(id));
     if (exists.length > 0) {
-      throw new Error('اسم المركبة مستخدم بالفعل');
+      throw new Error('رقم المركبة مستخدم بالفعل');
     }
-  }
-  if (vehicle_number !== undefined && !vehicle_number) {
-    throw new Error('رقم المركبة مطلوب');
   }
 
   const updated = await ClientRepository.updateOwner(id, {
-    ...(vehicle_name !== undefined ? { vehicle_name, name: vehicle_name } : {}),
-    ...(vehicle_number !== undefined ? { vehicle_number } : {}),
+    ...(vehicle_number !== undefined ? { vehicle_number, name: vehicle_number } : {}),
     ...(notes !== undefined ? { notes: notes || null } : {}),
   }, { username });
 
@@ -180,8 +168,7 @@ async function getClientByType(type, id) {
   return owner ? {
     id: String(owner.id),
     type: 'owner',
-    name: owner.vehicle_name || owner.name || '',
-    vehicle_name: owner.vehicle_name || owner.name || '',
+    name: owner.vehicle_number || owner.name || '',
     vehicle_number: owner.vehicle_number || '',
   } : null;
 }
@@ -197,12 +184,10 @@ async function addAccount(username, kind, payload) {
   if (kind && kind !== 'owner') {
     throw new Error('[OwnersModule:addAccount] only vehicle owners are supported.');
   }
-  const vehicle_name = _toText(payload?.vehicle_name ?? payload?.name).trim();
   const vehicle_number = _toText(payload?.vehicle_number).trim();
   const notes = _toText(payload?.notes).trim();
-  if (!vehicle_name) throw new Error('❌ اسم المركبة مطلوب');
   if (!vehicle_number) throw new Error('❌ رقم المركبة مطلوب');
-  await createOwner(username, { vehicle_name, vehicle_number, notes });
+  await createOwner(username, { vehicle_number, notes });
 }
 
 
@@ -318,7 +303,7 @@ function _renderShell() {
         </div>
 
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;" class="ent-search-wrap">
-          <input id="ownerSearchInput" type="text" class="ent-search-input" placeholder="${_ownersActiveSubTab === 'vehicles' ? '🔍 ابحث عن اسم أو رقم المركبة...' : '🔍 ابحث عن اسم أو رقم هاتف السائق...'}" style="flex:1;min-width:200px;">
+          <input id="ownerSearchInput" type="text" class="ent-search-input" placeholder="${_ownersActiveSubTab === 'vehicles' ? '🔍 ابحث عن رقم المركبة...' : '🔍 ابحث عن اسم أو رقم هاتف السائق...'}" style="flex:1;min-width:200px;">
         </div>
       </div>
 
@@ -331,7 +316,6 @@ function _renderShell() {
             <table class="table">
               <thead style="background:linear-gradient(135deg,#2563eb,#1d4ed8);">
                 <tr>
-                  <th style="color:#fff;">اسم المركبة</th>
                   <th style="color:#fff;">رقم المركبة</th>
                   <th style="color:#fff;">كارتات</th>
                   <th style="color:#fff;">إجراءات</th>
@@ -370,7 +354,7 @@ let _editingAccountId = null;
 let _editingAccountKind = null;
 
 
-function _openEditModal(id, kind, currentName, currentNumber) {
+function _openEditModal(id, kind, currentNumber) {
   let modal = document.getElementById('ownerAddModal');
   if (!modal) {
     _openAddModal('temp', kind);
@@ -390,7 +374,7 @@ function _openEditModal(id, kind, currentName, currentNumber) {
   if (titleEl) titleEl.textContent = '✏️ تعديل مركبة';
 
   const tbody = document.getElementById('addModalRows');
-  if (tbody) tbody.innerHTML = `<tr><td><input type="text" class="input input-sm add-m-name" placeholder="اسم المركبة" value="${currentName || ''}"></td><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة" value="${currentNumber || ''}"></td><td></td></tr>`;
+  if (tbody) tbody.innerHTML = `<tr><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة" value="${currentNumber || ''}"></td><td></td></tr>`;
 
   const msg = document.getElementById('addModalMsg');
   if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
@@ -416,9 +400,9 @@ function _openAddModal(title, kind) {
           </div>
           <div style="padding:20px 24px;">
             <div class="table-wrapper mb-4">
-              <table class="table"><thead><tr><th>اسم المركبة</th><th>رقم المركبة</th><th>حذف</th></tr></thead>
+              <table class="table"><thead><tr><th>رقم المركبة</th><th>حذف</th></tr></thead>
               <tbody id="addModalRows">
-                <tr><td><input type="text" class="input input-sm add-m-name" placeholder="اسم المركبة"></td><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة"></td><td><button type="button" data-action="add-modal-remove-row" class="btn-icon" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button></td></tr>
+                <tr><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة"></td><td><button type="button" data-action="add-modal-remove-row" class="btn-icon" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button></td></tr>
               </tbody></table>
             </div>
             <div class="flex gap-2">
@@ -439,7 +423,7 @@ function _openAddModal(title, kind) {
   if (titleEl) titleEl.textContent = '➕ إضافة مركبة';
 
   const tbody = document.getElementById('addModalRows');
-  if (tbody) tbody.innerHTML = '<tr><td><input type="text" class="input input-sm add-m-name" placeholder="اسم المركبة"></td><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة"></td><td><button type="button" data-action="add-modal-remove-row" class="btn-icon" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button></td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة"></td><td><button type="button" data-action="add-modal-remove-row" class="btn-icon" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button></td></tr>';
 
   const msg = document.getElementById('addModalMsg');
   if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
@@ -451,13 +435,10 @@ async function _saveFromAddModal() {
   if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
 
   if (_editingAccountId) {
-    const nameVal = (document.querySelector('#addModalRows .add-m-name')?.value || '').trim();
     const numberVal = (document.querySelector('#addModalRows .add-m-vehicle-number')?.value || '').trim();
-    if (!nameVal) { if (msg) { msg.textContent = '❌ اسم المركبة مطلوب'; msg.classList.add('is-visible'); } return; }
     if (!numberVal) { if (msg) { msg.textContent = '❌ رقم المركبة مطلوب'; msg.classList.add('is-visible'); } return; }
     try {
       await OwnersModule.updateOwner(_currentUsername(), _editingAccountId, {
-        vehicle_name: nameVal,
         vehicle_number: numberVal,
       });
       window.dispatchEvent(new CustomEvent('owners:changed'));
@@ -470,10 +451,9 @@ async function _saveFromAddModal() {
   }
 
   const rows = [...document.querySelectorAll('#addModalRows tr')];
-  const entries = rows.map(tr => ({
-    vehicle_name: (tr.querySelector('.add-m-name')?.value || '').trim(),
-    vehicle_number: (tr.querySelector('.add-m-vehicle-number')?.value || '').trim(),
-  })).filter(e => e.vehicle_name || e.vehicle_number);
+  const entries = rows
+    .map(tr => (tr.querySelector('.add-m-vehicle-number')?.value || '').trim())
+    .filter(Boolean);
 
   if (entries.length === 0) {
     if (msg) { msg.textContent = '❌ أدخل مركبة واحدة على الأقل'; msg.classList.add('is-visible'); }
@@ -484,8 +464,7 @@ async function _saveFromAddModal() {
   for (const entry of entries) {
     try {
       await OwnersModule.addAccount(username, 'owner', {
-        vehicle_name: entry.vehicle_name,
-        vehicle_number: entry.vehicle_number,
+        vehicle_number: entry,
       });
     } catch (err) {
       if (msg) { msg.textContent = err.message || '❌ حدث خطأ'; msg.classList.add('is-visible'); }
@@ -506,10 +485,9 @@ function _printEntities(mode) {
   ownerRows.forEach(tr => {
     if (tr.style.display === 'none') return;
     const cells = tr.querySelectorAll('td');
-    if (cells.length < 2) return;
-    const name = (cells[0]?.textContent || '').trim();
-    const number = (cells[1]?.textContent || '').trim();
-    rows.push({ name, number });
+    if (cells.length < 1) return;
+    const number = (cells[0]?.textContent || '').trim();
+    rows.push({ number });
   });
 
   if (rows.length === 0) {
@@ -519,7 +497,6 @@ function _printEntities(mode) {
 
   const tableRows = rows.map(r => `
     <tr>
-      <td style="border:1px solid #d1d5db;padding:8px 12px;text-align:right;">${r.name}</td>
       <td style="border:1px solid #d1d5db;padding:8px 12px;text-align:center;">${r.number}</td>
     </tr>
   `).join('');
@@ -544,7 +521,6 @@ function _printEntities(mode) {
   <table>
     <thead>
       <tr>
-        <th>اسم المركبة</th>
         <th>رقم المركبة</th>
       </tr>
     </thead>
@@ -576,14 +552,12 @@ async function _getKartaCount(clientId) {
 }
 
 function _buildClientRow(client, kartaCount, kind) {
-  const vName = client.vehicle_name || client.name || '';
   const vNumber = client.vehicle_number || '';
   return `
-    <tr data-client-name="${(vName || '').toLowerCase()}" data-client-number="${(vNumber || '').toLowerCase()}">
+    <tr data-client-number="${(vNumber || '').toLowerCase()}">
       <td data-action="view-client" data-id="${client.id}" data-type="owner" class="ent-name-cell ent-name-cell--blue">
-        ${vName}
+        ${vNumber || '—'}
       </td>
-      <td>${vNumber || '—'}</td>
       <td class="text-center">${kartaCount > 0 ? '<span class="ent-karta-badge">' + kartaCount + '</span>' : '—'}</td>
       <td>
         <button type="button" data-action="edit-account" data-id="${client.id}" data-kind="owner" class="ent-action-btn ent-action-btn--edit" title="تعديل">✏️</button>
@@ -620,7 +594,7 @@ async function loadOwners() {
     tabBtnDrivers.style.color = !isVehicles ? '#fff' : '#4b5563';
   }
   if (searchInput) {
-    searchInput.placeholder = isVehicles ? '🔍 ابحث عن اسم أو رقم المركبة...' : '🔍 ابحث عن اسم أو رقم هاتف السائق...';
+    searchInput.placeholder = isVehicles ? '🔍 ابحث عن رقم المركبة...' : '🔍 ابحث عن اسم أو رقم هاتف السائق...';
   }
 
   const tbodyId = isVehicles ? 'ownersTableBody' : 'driversTableBody';
@@ -629,11 +603,10 @@ async function loadOwners() {
 
   if (isVehicles) {
     const owners = await ClientRepository.getAllOwners();
-    const ownerList = owners.filter(o => o.deleted_at === null && (o.vehicle_name || o.name)).map(o => ({
+    const ownerList = owners.filter(o => o.deleted_at === null && (o.vehicle_number || o.name)).map(o => ({
       id: String(o.id),
       type: 'owner',
-      name: o.vehicle_name || o.name || '',
-      vehicle_name: o.vehicle_name || o.name || '',
+      name: o.vehicle_number || o.name || '',
       vehicle_number: o.vehicle_number || '',
       updated_at: o.updated_at ?? o.created_at ?? 0,
     }));
@@ -641,7 +614,7 @@ async function loadOwners() {
     const sortedOwners = [...ownerList].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 
     if (sortedOwners.length === 0) {
-      ownersTbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
+      ownersTbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
     } else {
       ownersTbody.innerHTML = sortedOwners.map((client) => {
         const idx = ownerList.indexOf(client);
@@ -685,9 +658,8 @@ async function loadOwners() {
       const q = (searchInput.value || '').trim().toLowerCase();
       if (_ownersActiveSubTab === 'vehicles') {
         document.querySelectorAll('#ownersTableBody tr').forEach(tr => {
-          const name = tr.getAttribute('data-client-name') || '';
           const number = tr.getAttribute('data-client-number') || '';
-          tr.style.display = (!q || name.includes(q) || number.includes(q)) ? '' : 'none';
+          tr.style.display = (!q || number.includes(q)) ? '' : 'none';
         });
       } else {
         document.querySelectorAll('#driversTableBody tr').forEach(tr => {
@@ -1524,18 +1496,15 @@ async function showOwnerDetails(id, type = 'owner') {
 
 /**
  * Reads all active vehicle owners and exports them to Excel
- * file with vehicle_name and vehicle_number columns.
- * Export mirrors what the user sees on the page.
+ * with the رقم المركبة column only. Export mirrors what the user sees on the page.
  */
 async function _handleExportOwnersExcel() {
   try {
     const ownersRaw = await ClientRepository.getAllOwners();
     const owners = ownersRaw
-      .filter(o => o.deleted_at === null && (o.vehicle_name || o.name))
+      .filter(o => o.deleted_at === null && (o.vehicle_number || o.name))
       .map(o => ({
-        vehicle_name: o.vehicle_name || o.name || '',
-        vehicle_number: o.vehicle_number || '',
-        name: o.vehicle_name || o.name || '',
+        vehicle_number: o.vehicle_number || o.name || '',
       }));
     if (owners.length === 0) {
       alert('لا توجد بيانات للتصدير');
@@ -1563,13 +1532,12 @@ function _handleImportOwnersExcel() {
 
       for (const row of (owners || [])) {
         try {
-          const vehicle_name = String(row.vehicle_name || row.name || '').trim();
           const vehicle_number = String(row.vehicle_number || '').trim();
-          if (!vehicle_name || !vehicle_number) { ownersSkipped++; continue; }
-          const existing = await ClientRepository.findOwnersByName(vehicle_name);
+          if (!vehicle_number) { ownersSkipped++; continue; }
+          const existing = await ClientRepository.findOwnersByNumber(vehicle_number);
           const dup = (existing || []).some(o => o.deleted_at === null);
           if (dup) { ownersSkipped++; continue; }
-          await createOwner(username, { vehicle_name, vehicle_number, notes: null });
+          await createOwner(username, { vehicle_number, notes: null });
           ownersAdded++;
         } catch (err) {
           console.warn('[entities] import vehicle skipped:', row, err);
@@ -1781,14 +1749,12 @@ function attachOwnersPageListeners() {
       const id = editBtn.dataset.id;
       const kind = editBtn.dataset.kind || 'owner';
       if (kind !== 'owner') return;
-      let currentName = '';
       let currentNumber = '';
       try {
         const owner = await ClientRepository.getOwnerById(String(id));
-        currentName = owner?.vehicle_name || owner?.name || '';
         currentNumber = owner?.vehicle_number || '';
       } catch (_) {}
-      _openEditModal(id, 'owner', currentName, currentNumber);
+      _openEditModal(id, 'owner', currentNumber);
       return;
     }
 
@@ -1871,7 +1837,6 @@ function attachOwnersPageListeners() {
       if (!tbody) return;
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><input type="text" class="input input-sm add-m-name" placeholder="اسم المركبة"></td>
         <td><input type="text" class="input input-sm add-m-vehicle-number" placeholder="رقم المركبة"></td>
         <td><button type="button" data-action="add-modal-remove-row" class="btn btn-secondary btn-sm">حذف</button></td>`;
       tbody.appendChild(tr);
