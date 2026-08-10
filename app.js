@@ -7,7 +7,7 @@ import { AuthModule }  from './auth.js';
 import { initReceiptPage } from './receipts.js';
 import { initAllReceiptsPage } from './allReceipts.js';
 import { attachOwnersPageListeners, loadOwners } from './entities.js';
-import { attachOfficesPageListeners, initOfficesPage, loadOffices } from './offices.js';
+import { OfficesModule, attachOfficesPageListeners, initOfficesPage, loadOffices } from './offices.js';
 import { initHomePage } from './home.js';
 import { initSidebarLayout } from './sidebarLayout.js';
 import { initDashboardPage } from './dashboard.js';
@@ -180,8 +180,17 @@ async function boot() {
     let restored = false;
 
     if (lastPage === 'officeDetailsPage' && ctx?.officeId && typeof window.showOfficeDetails === 'function') {
-      await window.showOfficeDetails(ctx.officeId);
-      restored = true;
+      // Session state can outlive an office deleted in another session, a clean
+      // database reset, or a backup import. Validate the saved id before
+      // invoking the strict Office Details entry point, which must still throw
+      // for an explicit invalid navigation.
+      const office = await OfficesModule.getOfficeDetails(ctx.officeId);
+      if (office) {
+        await window.showOfficeDetails(ctx.officeId);
+        restored = true;
+      } else {
+        sessionStorage.removeItem(LAST_PAGE_CTX_KEY);
+      }
     } else if (lastPage === 'ownerDetailsPage' && ctx?.ownerId && typeof window.showOwnerDetails === 'function') {
       await window.showOwnerDetails(ctx.ownerId, ctx.ownerType || 'owner');
       restored = true;
