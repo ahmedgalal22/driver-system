@@ -48,6 +48,8 @@ const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
 const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
 const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';
 const MANUAL_OFFICE_EFFECT = 'manual_office_balance';
+const SALFA_RECOVERY_REF_TYPE = 'salfa_recovery';
+const SALFA_RECOVERY_EFFECT = 'salfa_recovery';
 
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
@@ -952,6 +954,63 @@ async function createDriverSalfa(username, data) {
   }, { username, stores: [STORE.LEDGER, 'drivers'] });
 }
 
+/**
+ * Record repayment of a driver's existing salfa. This is the exact ledger
+ * opposite of createDriverSalfa: the driver receives a deposit, so their
+ * derived balance moves back toward zero without rewriting the original salfa.
+ */
+async function createDriverSalfaRecovery(username, data) {
+  if (!username) throw new Error('[FinancialService:createDriverSalfaRecovery] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createDriverSalfaRecovery] data must be a plain object.');
+  }
+
+  const driver_id = String(data.driver_id || '').trim();
+  const amount = Money.toCents(data.amount);
+  const date = data.date || DateUtils.todayLocal();
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
+
+  if (!driver_id) throw new Error('[FinancialService:createDriverSalfaRecovery] driver_id is required.');
+  if (amount <= 0) throw new Error('[FinancialService:createDriverSalfaRecovery] amount must be greater than zero.');
+  if (!note) throw new Error('[FinancialService:createDriverSalfaRecovery] note is required.');
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createDriverSalfaRecovery] date must be a valid ISO date string.');
+  }
+
+  const driver = await ClientRepository.getDriverById(driver_id);
+  if (!driver || driver.deleted_at !== null) {
+    throw new Error('[FinancialService:createDriverSalfaRecovery] driver not found.');
+  }
+
+  const referenceId = _uuid();
+  const now = DateUtils.nowLocal();
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload: {
+      username,
+      owner_id: driver_id,
+      owner_name: driver.name || null,
+      client_id: driver_id,
+      client_type: 'driver',
+      client_name: driver.name || null,
+      vehicle_id: null,
+      vehicle_plate: null,
+      type: 'deposit',
+      effect: SALFA_RECOVERY_EFFECT,
+      amount,
+      reference_type: SALFA_RECOVERY_REF_TYPE,
+      reference_id: referenceId,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
 async function updateDriverDeposit(username, reference_id, data) {
   if (!username) throw new Error('[FinancialService:updateDriverDeposit] username is required.');
   if (!reference_id) throw new Error('[FinancialService:updateDriverDeposit] reference_id is required.');
@@ -1063,6 +1122,33 @@ async function deleteDriverSalfa(username, reference_id) {
 
     return tx.runOps(reverseOps);
   }, { username, stores: [STORE.LEDGER] });
+}
+
+/**
+ * Reverse one manual salfa recovery without removing its financial audit row.
+ */
+async function deleteDriverSalfaRecovery(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteDriverSalfaRecovery] username is required.');
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteDriverSalfaRecovery] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  const active = entries.filter(entry =>
+    entry.reference_type === SALFA_RECOVERY_REF_TYPE
+    && entry.effect === SALFA_RECOVERY_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteDriverSalfaRecovery] salfa recovery not found or already reversed.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
 }
 
 async function getDriverLedger(driver_id) {
@@ -1561,6 +1647,8 @@ export const FinancialService = Object.freeze({
   createDriverSalfa,
   updateDriverSalfa,
   deleteDriverSalfa,
+  createDriverSalfaRecovery,
+  deleteDriverSalfaRecovery,
   getDriverKartas,
   getDriverKartasSummary,
   getKartaSettlementHistory,

@@ -251,6 +251,9 @@ function _ledgerNote(entry) {
   if (refType === 'salfa') {
     return note || 'سلفة';
   }
+  if (refType === 'salfa_recovery') {
+    return note || 'استرداد سلفة';
+  }
   // Generic
   if (note) return note;
   return _ledgerType(type);
@@ -813,6 +816,55 @@ async function _saveDriverSalfa() {
   }
 }
 
+function _openDriverSalfaRecoveryModal() {
+  const modal = document.getElementById('driverSalfaRecoveryModal');
+  const amountEl = document.getElementById('driverSalfaRecoveryAmount');
+  const dateEl = document.getElementById('driverSalfaRecoveryDate');
+  const noteEl = document.getElementById('driverSalfaRecoveryNote');
+  const msgEl = document.getElementById('driverSalfaRecoveryMsg');
+
+  if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
+  if (amountEl) amountEl.value = '';
+  if (dateEl) dateEl.value = DateUtils.todayLocal();
+  if (noteEl) noteEl.value = '';
+  modal?.classList.remove('hidden');
+}
+
+function _closeDriverSalfaRecoveryModal() {
+  document.getElementById('driverSalfaRecoveryModal')?.classList.add('hidden');
+}
+
+async function _saveDriverSalfaRecovery() {
+  const msgEl = document.getElementById('driverSalfaRecoveryMsg');
+  const amount = parseFloat(document.getElementById('driverSalfaRecoveryAmount')?.value) || 0;
+  const date = document.getElementById('driverSalfaRecoveryDate')?.value || '';
+  const note = document.getElementById('driverSalfaRecoveryNote')?.value?.trim() || '';
+
+  if (amount <= 0 || !date || !note) {
+    if (msgEl) {
+      msgEl.textContent = amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
+        : !date ? '❌ التاريخ مطلوب'
+        : '❌ السبب / الملاحظة مطلوبة';
+      msgEl.classList.add('is-visible');
+    }
+    return;
+  }
+
+  try {
+    await FinancialService.createDriverSalfaRecovery(_currentUsername(), {
+      driver_id: _getCurrentDriverId(),
+      amount,
+      date,
+      note,
+    });
+    _closeDriverSalfaRecoveryModal();
+    const did = _getCurrentDriverId();
+    if (did) await showDriverDetails(did);
+  } catch (err) {
+    if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ استرداد السلفة'; msgEl.classList.add('is-visible'); }
+  }
+}
+
 let _driverLedgerCache = [];
 
 // ── Phase 6: Driver Details tab separation (UI only) ─────────────────────────
@@ -853,9 +905,10 @@ function _renderDriverLedgerTable(entries) {
     const descStr = _ledgerNote(entry);
 
     const canEdit = entry.reference_id && (entry.reference_type === 'driver_deposit' || entry.reference_type === 'salfa');
-    const actionsStr = canEdit ? `
+    const canDelete = canEdit || (entry.reference_id && entry.reference_type === 'salfa_recovery');
+    const actionsStr = canDelete ? `
       <div class="flex gap-1 justify-center">
-        <button type="button" data-action="edit-driver-tx" data-ref-id="${entry.reference_id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:24px;height:24px;border:none;border-radius:4px;cursor:pointer;">✏️</button>
+        ${canEdit ? `<button type="button" data-action="edit-driver-tx" data-ref-id="${entry.reference_id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:24px;height:24px;border:none;border-radius:4px;cursor:pointer;">✏️</button>` : ''}
         <button type="button" data-action="delete-driver-tx" data-ref-id="${entry.reference_id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:24px;height:24px;border:none;border-radius:4px;cursor:pointer;">🗑️</button>
       </div>
     ` : '—';
@@ -891,7 +944,10 @@ async function showDriverDetails(id) {
   let totalSalfaCents = 0;
   for (const e of _driverLedgerCache) {
     if (e.reference_type === 'salfa' || e.type === 'salfa' || e.effect === 'salfa') {
-      totalSalfaCents += Money.toCents(e.amount);
+      totalSalfaCents += Math.abs(Money.toCents(e.amount));
+    }
+    if (e.reference_type === 'salfa_recovery' || e.effect === 'salfa_recovery') {
+      totalSalfaCents -= Math.abs(Money.toCents(e.amount));
     }
   }
 
@@ -1751,11 +1807,8 @@ function attachOwnersPageListeners() {
       return;
     }
 
-    // Open driver deposit modal
-    if (e.target.closest('[data-action="open-driver-deposit"]')) {
-      await _openDriverDepositModal(null);
-      return;
-    }
+    // Driver deposit modal remains reachable only when editing an existing
+    // driver-deposit transaction; the Driver Details create action is removed.
     if (e.target.closest('[data-action="close-driver-deposit"]')) {
       _closeDriverDepositModal();
       return;
@@ -1779,6 +1832,20 @@ function attachOwnersPageListeners() {
       return;
     }
 
+    // Recover driver salfa (repayment) — separate ledger namespace.
+    if (e.target.closest('[data-action="open-driver-salfa-recovery"]')) {
+      _openDriverSalfaRecoveryModal();
+      return;
+    }
+    if (e.target.closest('[data-action="close-driver-salfa-recovery"]')) {
+      _closeDriverSalfaRecoveryModal();
+      return;
+    }
+    if (e.target.closest('[data-action="save-driver-salfa-recovery"]')) {
+      await _saveDriverSalfaRecovery();
+      return;
+    }
+
     // Edit driver transaction
     const editTxBtn = e.target.closest('[data-action="edit-driver-tx"]');
     if (editTxBtn) {
@@ -1794,15 +1861,18 @@ function attachOwnersPageListeners() {
       return;
     }
 
-    // Delete driver transaction
+    // Delete driver transaction (audit-preserving reversal, never hard delete).
     const delTxBtn = e.target.closest('[data-action="delete-driver-tx"]');
     if (delTxBtn) {
       const refId = delTxBtn.dataset.refId;
-      if (!confirm('هل تريد حذف هذه الحركة؟')) return;
+      const txEntry = _driverLedgerCache.find(entry => entry.reference_id === refId);
+      if (!txEntry || !confirm('هل تريد حذف هذه الحركة؟')) return;
       try {
         const username = _currentUsername();
-        if (txEntry && txEntry.reference_type === "salfa") {
+        if (txEntry.reference_type === 'salfa') {
           await FinancialService.deleteDriverSalfa(username, refId);
+        } else if (txEntry.reference_type === 'salfa_recovery') {
+          await FinancialService.deleteDriverSalfaRecovery(username, refId);
         } else {
           await FinancialService.deleteDriverDeposit(username, refId);
         }
