@@ -624,6 +624,7 @@ const _ALL_RECEIPTS_COLS = Object.freeze([
   { header: 'خصم',         getValue: (row, _rec) => _allReceiptsNum(row.discount) },
   { header: 'الصرف',       getValue: (row, _rec) => _allReceiptsNum(row.sarf) },
   { header: 'الصافي',       getValue: (row, _rec) => _allReceiptsNum(row.net) },
+  { header: 'الحالة',       getValue: (row, _rec) => (row.payment_status === 'paid' ? 'تم صرفه' : 'لم يتم صرفه') },
 ]);
 
 /**

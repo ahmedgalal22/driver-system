@@ -8,6 +8,11 @@ export const OfficeRepository = {
   async getAll(username) {
     return DBProvider.findByFields('offices', { username });
   },
+  // Company name is the offices master-data identity (unique by_name index);
+  // the receipt-row payment engine resolves its اسم الشركة snapshot through this.
+  async findByName(name) {
+    return DBProvider.findByFields('offices', { name });
+  },
   async update(id, patch, meta) {
     return DBProvider.update('offices', String(id), patch, meta);
   },

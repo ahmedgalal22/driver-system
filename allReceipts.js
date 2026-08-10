@@ -203,6 +203,9 @@ function _persistedRowToPageRow(row) {
     ohda  : Money.toDecimal(row.advance ?? 0),      // advance     → عهدة
     sarf  : Money.toDecimal(row.sarf ?? 0),
     net   : Money.toDecimal(row.net  ?? 0),
+    // payment_status passes through untouched ('paid' | 'unpaid'; legacy
+    // rows without the field read as unpaid at the render boundary).
+    payment_status: row.payment_status === 'paid' ? 'paid' : 'unpaid',
   };
 }
 
@@ -834,6 +837,7 @@ const _RECEIPT_PRINT_COLS = Object.freeze([
   { key: 'officeAmount', label: 'مكتب',          type: 'number', printHide: false, conditional: false },
   { key: 'add',          label: 'إضافة',         type: 'number', printHide: false, conditional: true  },
   { key: 'net',          label: 'الصافي',        type: 'number', printHide: false, conditional: false },
+  { key: 'payment_status', label: 'الحالة',      type: 'text',   printHide: false, conditional: false },
 ]);
 
 /**
@@ -894,6 +898,8 @@ function _receiptPrintGetCellValue(row, colKey) {
       return row.add ?? '';
     case 'net':
       return row.net ?? '';
+    case 'payment_status':
+      return row.payment_status === 'paid' ? 'تم صرفه' : 'لم يتم صرفه';
     default:
       return '';
   }
@@ -1281,6 +1287,28 @@ async function printCurrentView(tab = 'receipts') {
   printHTML(html, { id: 'all-receipts-print-iframe' });
 }
 
+/**
+ * _handleToggleRowPayment(btn) — row payment status chip (الحالة column).
+ * Flips the persisted row state via the atomic domain transition; the
+ * financial posting/reversal is created inside FinancialService — the page
+ * never mutates balances directly. Loud failure stays visible (alert),
+ * and the page re-reads from persisted state afterwards either way.
+ */
+async function _handleToggleRowPayment(btn) {
+  const username = getSessionUsername();
+  if (!username) return;
+  const rowId = btn.dataset.rowId;
+  const target = btn.dataset.targetStatus === 'paid' ? 'paid' : 'unpaid';
+  if (!rowId) return;
+  btn.disabled = true;
+  try {
+    await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+  } catch (err) {
+    alert(err?.message || '❌ تعذر تحديث حالة الصرف');
+  }
+  await refreshAllReceiptsPage(true);
+}
+
 async function handleCardAction(action, id, tab) {
   const username = getSessionUsername();
   if (!username) return;
@@ -1391,6 +1419,10 @@ function bindPageEvents() {
       }
       if (action === 'export-excel-filtered' && tab === 'receipts') {
         _exportReceiptsToExcel();
+        return;
+      }
+      if (action === 'toggle-row-payment') {
+        await _handleToggleRowPayment(actionBtn);
         return;
       }
     }

@@ -489,12 +489,16 @@ const COL_DEFS = [
   { key: 'sarf',         label: 'الصرف',              cls: 'receipt-sarf',         type: 'number', minW: '45px',  printHide: false, printConditional: true },
   // index: 19
   { key: 'net',          label: 'الصافي',             cls: 'receipt-net',          type: 'number', minW: '90px',  printHide: false, readonly: true },
-  // index: 18 — إجراءات (no print)
+  // index: 19 — الحالة: row payment status (تم صرفه / لم يتم صرفه).
+  // Persisted per receipt row; managed from the All Receipts page only —
+  // noForm removes it from the receipt FORM's editable grid entirely.
+  { key: 'payment_status', label: 'الحالة',           cls: 'receipt-payment-status', type: 'text', minW: '90px', printHide: false, noForm: true },
+  // index: 20 — إجراءات (no print)
   { key: '_actions',     label: 'إجراءات',            cls: '',                     type: 'actions',minW: '70px',  printHide: true  },
 ];
 
 // عدد أعمدة البيانات (بدون إجراءات)
-const DATA_COL_COUNT = COL_DEFS.filter(c => c.key !== '_actions').length; // 17
+const DATA_COL_COUNT = COL_DEFS.filter(c => c.key !== '_actions').length; // 20 (الحالة is the newest)
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -627,6 +631,10 @@ function getSnapshotCellRawValue(row, col) {
     case 'sarf':
     case 'net':
       return row[col.key] ?? '';
+    case 'payment_status':
+      // Persisted whitelist: 'paid' | 'unpaid'; legacy rows without the
+      // field read as unpaid (never a fabricated state).
+      return row.payment_status === 'paid' ? 'paid' : 'unpaid';
     default:
       return '';
   }
@@ -634,6 +642,7 @@ function getSnapshotCellRawValue(row, col) {
 
 function formatSnapshotCellValue(row, col) {
   const raw = getSnapshotCellRawValue(row, col);
+  if (col.key === 'payment_status') return raw === 'paid' ? 'تم صرفه' : 'لم يتم صرفه';
   if (col.key === 'add' || col.key === 'discount' || col.key === 'sarf') {
     const val = parseFloat(raw) || 0;
     if (val === 0) {
@@ -684,7 +693,16 @@ function renderReceiptSnapshotDataRow(row) {
     } else if (col.key === 'net') {
       cellClass = ' snapshot-cell-net';
     }
-    
+
+    if (col.key === 'payment_status') {
+      const isPaid = getSnapshotCellRawValue(row, col) === 'paid';
+      const chipLabel = isPaid ? 'تم صرفه' : 'لم يتم صرفه';
+      const chipStyle = `border:none;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;background:${isPaid ? '#dcfce7' : '#f3f4f6'};color:${isPaid ? '#15803d' : '#6b7280'};`;
+      return `<td class="px-1 py-1 text-center${printClass}">${row.row_id != null
+        ? `<button type="button" data-action="toggle-row-payment" data-row-id="${_snapshotEsc(row.row_id)}" data-target-status="${isPaid ? 'unpaid' : 'paid'}" style="${chipStyle}">${chipLabel}</button>`
+        : chipLabel}</td>`;
+    }
+
     return `<td class="px-1 py-1 text-${align}${printClass}${cellClass}">${formatSnapshotCellValue(row, col)}</td>`;
   }).join('');
   return `<tr>${cells}</tr>`;
@@ -756,8 +774,8 @@ function renderMetaFields() {
  */
 function _buildArrowRowHTML() {
   const cells = COL_DEFS.map((col, i) => {
-    if (col.key === '_actions') {
-      // خلية فارغة لعمود الإجراءات
+    if (col.key === '_actions' || col.noForm) {
+      // خلية فارغة لعمود الإجراءات / عمود الحالة (لا نسخ عمودي للحالة)
       return `<td class="no-print receipt-arrow-cell receipt-arrow-cell--empty"></td>`;
     }
     return `<td class="no-print receipt-arrow-cell">
@@ -774,8 +792,8 @@ function _buildArrowRowHTML() {
 }
 
 function renderTable() {
-  // بناء رؤوس الأعمدة من COL_DEFS
-  const headers = COL_DEFS.map(col => {
+  // بناء رؤوس الأعمدة من COL_DEFS (noForm columns are page-level only)
+  const headers = COL_DEFS.filter(col => !col.noForm).map(col => {
     const printClass = col.printHide ? ' no-print' : '';
     return `<th class="px-1 py-2 text-center${printClass}" style="min-width:${col.minW};">${col.label}</th>`;
   }).join('');
@@ -1591,7 +1609,7 @@ function _confirmDriverCreate(driverName) {
 // ─── ROW TEMPLATE (from COL_DEFS) ────────────────────────────────────────────
 
 function _buildRowHTML() {
-  const cells = COL_DEFS.map(col => {
+  const cells = COL_DEFS.filter(col => !col.noForm).map(col => {
     const printClass = col.printHide ? ' no-print' : '';
 
     if (col.key === '_actions') {
@@ -2101,7 +2119,7 @@ function attachKeyboardNav(row) {
 
   // ترتيب الخانات القابلة للتنقل بـ Enter (بدون net وبدون actions)
   const ENTER_NAV_ORDER = COL_DEFS
-    .filter(c => c.key !== '_actions' && c.key !== 'net' && !c.readonly)
+    .filter(c => c.key !== '_actions' && c.key !== 'net' && !c.readonly && !c.noForm)
     .map(c => c.cls);
 
   row.addEventListener('keydown', function (e) {
@@ -2590,6 +2608,7 @@ async function collectReceiptRows() {
 
     receiptRows.push({
       _type        : 'data',
+      payment_status: row.dataset.paymentStatus === 'paid' ? 'paid' : 'unpaid',
       owner_id     : String(finalOwner.id),
       owner_name   : finalOwner.name,
       kartano      : normalizeOptionalString(_field(row, 'receipt-kartano')),
@@ -2875,6 +2894,7 @@ function printReceipt() {
   }
   const printCols = COL_DEFS.filter(c => {
     if (c.key === '_actions') return false;
+    if (c.noForm) return false;
     if (c.printHide) return false;
     if (c.printConditional && !conditionalHasData.has(c.key)) return false;
     return true;
@@ -3103,6 +3123,10 @@ async function loadReceiptForEdit(receiptData) {
     const tr = document.createElement('tr');
     tr.innerHTML = _buildRowHTML();
     tbody.appendChild(tr);
+    // Payment status round-trips invisibly through the form: re-saving an
+    // edited paid row keeps it paid (its posting is reconciled, never lost);
+    // legacy rows without the field default to unpaid.
+    tr.dataset.paymentStatus = rowData.payment_status === 'paid' ? 'paid' : 'unpaid';
 
     // Bridge persisted vocabulary (cents) → UI field values (decimals)
     const ui = _persistedRowToUiShape(rowData, driverNames.get(rowData.driver_id));

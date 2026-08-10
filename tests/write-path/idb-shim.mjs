@@ -102,9 +102,17 @@ class FakeTx {
   }
   _done() {
     this._pending--;
-    if (this._pending === 0 && !this._settled && !this._errored) queueMicrotask(() => {
-      if (!this._settled && !this._errored) { this._settled = true; this.oncomplete && this.oncomplete({ target: this }); }
-    });
+    // Real IDB: a tx completes when a TASK ends with no pending requests —
+    // request-issuing continuations chained on microtasks (get → put within
+    // one logical op) run in the same task and keep it alive. queueMicrotask
+    // here would fire oncomplete in mid-callback gaps, resolving the wrapping
+    // promise before the tx's own writes land (stale read-after-write). A
+    // macrotask + pending re-check reproduces the real end-of-task semantics.
+    if (this._pending === 0 && !this._settled && !this._errored) setTimeout(() => {
+      if (this._pending === 0 && !this._settled && !this._errored) {
+        this._settled = true; this.oncomplete && this.oncomplete({ target: this });
+      }
+    }, 0);
   }
   _fail(err) { if (!this._errored) { this._errored = true; this.error = err; } }
   abort() {
