@@ -1382,6 +1382,114 @@ function _renderLedger(client, ledger = []) {
 }
 
 
+let _vehicleBalanceEntryType = 'deposit';
+
+function _ensureVehicleBalanceEntryModal() {
+  if (document.getElementById('vehicleBalanceEntryModal')) return;
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div id="vehicleBalanceEntryModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold" id="vehicleBalanceEntryTitle">حركة رصيد للمركبة</h3>
+          <button type="button" data-action="close-vehicle-balance-entry" class="btn btn-secondary btn-sm">إغلاق</button>
+        </div>
+        <div class="grid gap-3 mb-4">
+          <div>
+            <label class="label mb-1" for="vehicleBalanceEntryVehicle">المركبة <span class="text-red-500">*</span></label>
+            <select id="vehicleBalanceEntryVehicle" class="input input-sm"></select>
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryDate" type="date" class="input input-sm">
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleBalanceEntryNote">السبب / ملاحظة <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryNote" type="text" class="input input-sm" placeholder="اكتب سبب الحركة">
+          </div>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-action="close-vehicle-balance-entry" class="btn btn-secondary btn-sm">إلغاء</button>
+          <button type="button" data-action="save-vehicle-balance-entry" class="btn btn-primary btn-sm">💾 حفظ</button>
+        </div>
+        <div id="vehicleBalanceEntryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(div.firstElementChild);
+}
+
+async function _openVehicleBalanceEntryModal(entryType) {
+  if (!_selectedClient?.id) return;
+  _ensureVehicleBalanceEntryModal();
+  _vehicleBalanceEntryType = entryType === 'withdraw' ? 'withdraw' : 'deposit';
+
+  const vehicles = await OwnersModule.getOwnerVehicles(_selectedClient.id);
+  const modal = document.getElementById('vehicleBalanceEntryModal');
+  const title = document.getElementById('vehicleBalanceEntryTitle');
+  const vehicleSelect = document.getElementById('vehicleBalanceEntryVehicle');
+  const amount = document.getElementById('vehicleBalanceEntryAmount');
+  const date = document.getElementById('vehicleBalanceEntryDate');
+  const note = document.getElementById('vehicleBalanceEntryNote');
+  const msg = document.getElementById('vehicleBalanceEntryMsg');
+
+  if (title) title.textContent = _vehicleBalanceEntryType === 'deposit' ? 'إيداع رصيد للمركبة' : 'سحب رصيد من المركبة';
+  if (vehicleSelect) {
+    vehicleSelect.innerHTML = '<option value="">— اختر المركبة —</option>'
+      + vehicles.map(vehicle => `<option value="${vehicle.id}">${vehicle.plate || vehicle.id}</option>`).join('');
+    if (vehicles.length === 1) vehicleSelect.value = String(vehicles[0].id);
+  }
+  if (amount) amount.value = '';
+  if (date) date.value = DateUtils.todayLocal();
+  if (note) note.value = '';
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+  modal?.classList.remove('hidden');
+}
+
+function _closeVehicleBalanceEntryModal() {
+  document.getElementById('vehicleBalanceEntryModal')?.classList.add('hidden');
+}
+
+async function _saveVehicleBalanceEntry() {
+  const vehicleId = document.getElementById('vehicleBalanceEntryVehicle')?.value || '';
+  const amount = parseFloat(document.getElementById('vehicleBalanceEntryAmount')?.value) || 0;
+  const date = document.getElementById('vehicleBalanceEntryDate')?.value || '';
+  const note = document.getElementById('vehicleBalanceEntryNote')?.value?.trim() || '';
+  const msg = document.getElementById('vehicleBalanceEntryMsg');
+
+  if (!vehicleId || amount <= 0 || !date || !note) {
+    if (msg) {
+      msg.textContent = !vehicleId ? '❌ يجب اختيار المركبة'
+        : amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
+        : !date ? '❌ التاريخ مطلوب'
+        : '❌ السبب / الملاحظة مطلوبة';
+      msg.classList.add('is-visible');
+    }
+    return;
+  }
+
+  try {
+    await FinancialService.createManualVehicleBalanceEntry(_currentUsername(), {
+      vehicle_id: vehicleId,
+      entry_type: _vehicleBalanceEntryType,
+      amount,
+      date,
+      note,
+    });
+    _closeVehicleBalanceEntryModal();
+    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || '❌ فشل حفظ حركة الرصيد';
+      msg.classList.add('is-visible');
+    }
+  }
+}
+
 function _ensureVehicleModal() {
   if (document.getElementById('vehicleModal')) return;
   const div = document.createElement('div');
@@ -1596,6 +1704,22 @@ function attachOwnersPageListeners() {
   document.body.dataset.ownersListenersBound = '1';
 
   document.addEventListener('click', async (e) => {
+    // Vehicle/customer manual balance entry — one explicit vehicle-ledger
+    // movement, separate from receipt payments, company balances, and kartas.
+    const openVehicleBalanceEntry = e.target.closest('[data-action="open-balance-entry"]');
+    if (openVehicleBalanceEntry) {
+      await _openVehicleBalanceEntryModal(openVehicleBalanceEntry.dataset.entryType);
+      return;
+    }
+    if (e.target.closest('[data-action="close-vehicle-balance-entry"]')) {
+      _closeVehicleBalanceEntryModal();
+      return;
+    }
+    if (e.target.closest('[data-action="save-vehicle-balance-entry"]')) {
+      await _saveVehicleBalanceEntry();
+      return;
+    }
+
     // Kartas status filter (Phase 8) — pure in-memory UI state; no queries, no writes
     const kartaFilterBtn = e.target.closest('[data-action="karta-status-filter"]');
     if (kartaFilterBtn) {

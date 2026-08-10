@@ -41,6 +41,12 @@ const STORE = Object.freeze({
   OFFICES  : 'offices',
 });
 
+// Manual vehicle movements use the same normalized vehicle_ledger and audit
+// reversal convention as every other financial operation. They are deliberately
+// distinct from receipt-row payments and Karta Settlement.
+const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
+const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
+
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
 
@@ -600,6 +606,96 @@ async function getOfficeBalance(office_id) {
     entry_count: active.length,
     entries: active.map(Money.decimalizeRecord),
   };
+}
+
+// ─── MANUAL VEHICLE BALANCE MOVEMENTS ────────────────────────────────────────
+
+/**
+ * Create one manual vehicle balance movement in the existing vehicle_ledger.
+ * This is intentionally a single vehicle leg: it has no receipt-row, company,
+ * driver, or Karta Settlement side effect.
+ */
+async function createManualVehicleBalanceEntry(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualVehicleBalanceEntry] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] data must be a plain object.');
+  }
+
+  const vehicle_id = String(data.vehicle_id || '').trim();
+  const entry_type = data.entry_type === 'withdraw' ? 'withdraw' : data.entry_type === 'deposit' ? 'deposit' : '';
+  const amount = Money.toCents(data.amount);
+  const date = data.date || DateUtils.todayLocal();
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
+
+  if (!vehicle_id) throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualVehicleBalanceEntry] entry_type must be deposit or withdraw.');
+  if (amount <= 0) throw new Error('[FinancialService:createManualVehicleBalanceEntry] amount must be greater than zero.');
+  if (!note) throw new Error('[FinancialService:createManualVehicleBalanceEntry] note is required.');
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] date must be a valid ISO date string.');
+  }
+
+  // Resolve the vehicle before scheduling the atomic ledger write. A missing
+  // vehicle must fail loudly; manual entry must never create a fallback record.
+  const vehicle = await ClientRepository.getVehicleById(vehicle_id);
+  if (!vehicle || vehicle.deleted_at !== null) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle not found.');
+  }
+
+  const reference_id = _uuid();
+  const now = DateUtils.nowLocal();
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload: {
+      username,
+      owner_id: String(vehicle.owner_id || ''),
+      owner_name: vehicle.owner_name || null,
+      client_id: String(vehicle.id),
+      client_type: 'vehicle',
+      client_name: vehicle.plate || null,
+      vehicle_id: vehicle.id,
+      vehicle_plate: vehicle.plate || null,
+      type: entry_type,
+      effect: MANUAL_VEHICLE_EFFECT,
+      amount,
+      reference_type: MANUAL_VEHICLE_REF_TYPE,
+      reference_id,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Reverse one logical manual vehicle movement without removing its audit row.
+ */
+async function deleteManualVehicleBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] username is required.');
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  const active = entries.filter(entry =>
+    entry.reference_type === MANUAL_VEHICLE_REF_TYPE
+    && entry.effect === MANUAL_VEHICLE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] manual vehicle transaction not found or already reversed.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
 }
 
 // ─── SHARED LEDGER & BALANCE HELPERS ──────────────────────────────────────────
@@ -1352,6 +1448,8 @@ export const FinancialService = Object.freeze({
   rebuildVehicleBalance,
   getVehicleLedger,
   getOfficeBalance,
+  createManualVehicleBalanceEntry,
+  deleteManualVehicleBalanceEntry,
   getDriverBalance,
   getDriverLedger,
   createDriverDeposit,
