@@ -516,18 +516,6 @@ function _renderListShell() {
         </div>
       </div>
 
-      <!-- بطاقات الملخص -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-        <div style="background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:12px;padding:16px;color:#fff;">
-          <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">عدد الشركات</p>
-          <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalCount">0</p>
-        </div>
-        <div style="background:linear-gradient(135deg,#10b981,#059669);border-radius:12px;padding:16px;color:#fff;">
-          <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي الوزن</p>
-          <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalWeight">0.00</p>
-        </div>
-      </div>
-
       <!-- شريط البحث -->
       <div class="mb-6">
         <input id="officeSearch" type="text" class="input" placeholder="🔍 ابحث عن شركة..." style="border-radius:12px;padding:10px 16px 10px 40px;" />
@@ -823,11 +811,6 @@ async function loadOffices() {
   if (searchEl) searchEl.value = _searchQuery || '';
 
   const summary = await OfficesModule.getOfficeSummary();
-  const totalCountEl = document.getElementById('officeTotalCount');
-  const totalWeightEl = document.getElementById('officeTotalWeight');
-
-  if (totalCountEl) totalCountEl.textContent = String(summary.total_offices || 0);
-  if (totalWeightEl) totalWeightEl.textContent = _fmt(summary.total_weight);
 
   const tbody = document.getElementById('officesTableBody');
   if (!tbody) return;

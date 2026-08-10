@@ -169,6 +169,12 @@ ok((await officeBalanceCents(OFFICE_B.id)) === 0,
 console.log('\n— UI and domain isolation fingerprints —');
 ok(OFFICES_SRC.includes("import { DateUtils } from './dateUtils.js';"),
   'offices.js explicitly imports the shared DateUtils module for the manual office modal');
+ok(!OFFICES_SRC.includes('id="officeTotalCount"')
+  && !OFFICES_SRC.includes('id="officeTotalWeight"')
+  && !OFFICES_SRC.includes('عدد الشركات'),
+  'Companies page source no longer renders the Number of Companies or Total Weight summary cards');
+ok(OFFICES_SRC.includes('<th style="color:#fff;">إجمالي الوزن</th>'),
+  'Companies list remains intact, including its existing per-office Total Weight column');
 ok(OFFICES_SRC.includes('data-action="open-office-balance-entry"')
   && OFFICES_SRC.includes('await FinancialService.createManualOfficeBalanceEntry(_moduleSessionUsername(), {')
   && OFFICES_SRC.includes('await showOfficeDetails(_detailsOfficeId);'),
