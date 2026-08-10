@@ -537,6 +537,71 @@ async function rebuildVehicleBalance(vehicle_id) {
   };
 }
 
+/**
+ * Read active vehicle-balance movements from the existing vehicle_ledger.
+ * This is a read projection only: its inclusion criteria intentionally match
+ * rebuildVehicleBalance (same vehicle, active, deposit/withdraw types).
+ */
+async function getVehicleLedger(vehicle_id) {
+  if (!vehicle_id) throw new Error('[FinancialService:getVehicleLedger] vehicle_id is required.');
+
+  const allEntries = await DB.getByIndex(STORE.LEDGER, 'by_vehicle', vehicle_id);
+  return allEntries
+    .filter(e => e.is_reversed === false
+      && e.deleted_at === null
+      && (e.type === 'deposit' || e.type === 'withdraw'))
+    .sort((a, b) => {
+      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
+      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
+      return db - da;
+    })
+    .map(Money.decimalizeRecord);
+}
+
+/**
+ * Read the company portion of receipt-row payments from vehicle_ledger.
+ * Company balances have no dedicated ledger/store: this projection reads only
+ * the existing active receipt_row_payment company legs, which are explicitly
+ * isolated from vehicle balances by vehicle_id:null.
+ */
+async function getOfficeBalance(office_id) {
+  const officeKey = String(office_id ?? '').trim();
+  if (!officeKey) throw new Error('[FinancialService:getOfficeBalance] office_id is required.');
+
+  const entries = await DB.findByFields(STORE.LEDGER, {
+    client_type: 'office',
+    client_id: officeKey,
+    owner_id: officeKey,
+    reference_type: PAYMENT_REF_TYPE,
+    effect: PAYMENT_EFFECT,
+    is_reversed: false,
+  });
+  const active = entries
+    .filter(e => e.deleted_at === null && e.vehicle_id === null)
+    .sort((a, b) => {
+      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
+      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
+      return da - db;
+    });
+
+  let deposit_total = 0;
+  let withdraw_total = 0;
+  for (const entry of active) {
+    if (entry.type === 'deposit') deposit_total += Number(entry.amount) || 0;
+    if (entry.type === 'withdraw') withdraw_total += Number(entry.amount) || 0;
+  }
+
+  const balance = deposit_total - withdraw_total;
+  return {
+    office_id: officeKey,
+    balance: Money.toDecimal(balance),
+    deposit_total: Money.toDecimal(deposit_total),
+    withdraw_total: Money.toDecimal(withdraw_total),
+    entry_count: active.length,
+    entries: active.map(Money.decimalizeRecord),
+  };
+}
+
 // ─── SHARED LEDGER & BALANCE HELPERS ──────────────────────────────────────────
 
 async function _fetchLedgerEntries(id, label) {
@@ -1285,6 +1350,8 @@ export const FinancialService = Object.freeze({
   updateReceipt,
   deleteReceipt,
   rebuildVehicleBalance,
+  getVehicleLedger,
+  getOfficeBalance,
   getDriverBalance,
   getDriverLedger,
   createDriverDeposit,

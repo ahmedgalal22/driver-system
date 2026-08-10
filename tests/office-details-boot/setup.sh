@@ -10,7 +10,7 @@ rm -rf "$W"
 mkdir -p "$W/services"
 
 # Production modules exercised by the boot restore and Office Details resolver.
-cp "$ROOT"/{app.js,database.js,offices.js,money.js,dateUtils.js} "$W/"
+cp "$ROOT"/{app.js,database.js,financial.js,offices.js,money.js,dateUtils.js} "$W/"
 cp "$ROOT"/services/*.js "$W/services/"
 cp "$ROOT/tests/write-path/idb-shim.mjs" "$W/"
 cp "$(dirname "${BASH_SOURCE[0]}")/run.mjs" "$W/"

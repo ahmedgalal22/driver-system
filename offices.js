@@ -4,6 +4,7 @@
  */
 
 import { AuthModule } from './auth.js';
+import { FinancialService } from './financial.js';
 import { Money } from './money.js';
 import { calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
@@ -727,12 +728,10 @@ function _renderHamolaTable(rows) {
   `;
 }
 
-// ── رصيد الشركة tab — UI-ONLY restoration ──────────────────────────────────
-// Exact pre-removal renderer kept verbatim. It is fed an EMPTY entry list on
-// purpose: the balance/ledger/deposit functionality remains removed. The tab
-// therefore shows its placeholder card (الرصيد الحالي = 0.00), the original
-// 5-column empty table («لا توجد حركات»), and the original 💰 إيداع / سحب
-// button — which has NO handler and performs NO action.
+// ── رصيد الشركة tab — existing receipt-row-payment ledger projection ─────────
+// The renderer preserves the existing layout. Its entries come from the
+// read-only FinancialService office projection; the إيداع / سحب button remains
+// UI-only and has no write handler.
 function _renderOfficeBalance(entries) {
   function entryDate(entry) {
     return entry.date || entry.applied_at || entry.created_at || '';
@@ -911,9 +910,8 @@ async function _renderDetailsContent(office) {
   if (!content) return;
 
   if (_activeDetailsTab === 'balance') {
-    // UI-only tab: placeholder card + empty ledger table — no ledger reads,
-    // no balance computation (the feature itself remains removed).
-    content.innerHTML = _renderOfficeBalance([]);
+    const balanceData = await FinancialService.getOfficeBalance(office.id);
+    content.innerHTML = _renderOfficeBalance(balanceData.entries);
     return;
   }
 

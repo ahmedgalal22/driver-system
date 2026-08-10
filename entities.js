@@ -1291,13 +1291,45 @@ async function _getClient(type, id) {
   return OwnersModule.getClientByType(type, id);
 }
 
-// ── رصيد العميل — UI-ONLY restoration ──────────────────────────────────────
-// Exact pre-removal «الحركات» section template (9a1dc57~1), fed an
-// ALWAYS-EMPTY ledger: no balance feature, no reads, no writes. The date
-// inputs and تطبيق/مسح التحديد buttons render visually but have NO handlers
-// and perform NO action.
-function _renderLedger(client) {
-  const ledger = []; // UI-only: the client-ledger feature remains removed
+/**
+ * Owner Details is the current vehicle/customer details surface. A vehicle
+ * owner may have more than one linked vehicle, so aggregate the authoritative
+ * per-vehicle rebuild result and the matching read-only movements. No balance
+ * is persisted or posted here.
+ */
+async function _getOwnerVehicleFinancials(ownerId) {
+  const vehicles = await OwnersModule.getOwnerVehicles(ownerId);
+  const projections = await Promise.all(vehicles.map(async (vehicle) => {
+    const [balance, ledger] = await Promise.all([
+      FinancialService.rebuildVehicleBalance(vehicle.id),
+      FinancialService.getVehicleLedger(vehicle.id),
+    ]);
+    return { balance, ledger };
+  }));
+
+  const balanceCents = projections.reduce(
+    (sum, projection) => sum + Money.toCents(projection.balance.balance),
+    0
+  );
+  const ledger = projections
+    .flatMap(projection => projection.ledger)
+    .sort((a, b) => {
+      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
+      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
+      return db - da;
+    });
+
+  return {
+    balance: Money.toDecimal(balanceCents),
+    ledger,
+  };
+}
+
+// ── رصيد العميل — existing vehicle_ledger read projection ─────────────────
+// The existing layout remains intact. Entries are read-only movements from the
+// same vehicle_ledger records used by rebuildVehicleBalance; the date controls
+// remain visual-only because no client-ledger filtering workflow exists.
+function _renderLedger(client, ledger = []) {
   return `
     <section class="mb-8">
       <h3 class="text-lg font-bold mb-4">الحركات</h3>
@@ -1447,11 +1479,8 @@ async function showOwnerDetails(id, type = 'owner') {
     ownerType: type,
   }));
 
-  // رصيد العميل — UI-ONLY placeholders: the balance card shows a static 0.00
-  // placeholder and the «الحركات» ledger always renders its empty state. No
-  // balance reads/computation; إيداع/سحب buttons are visual only (the modal
-  // and all handlers remain removed).
-  const ledgerHtml = _renderLedger(client);
+  const financials = await _getOwnerVehicleFinancials(client.id);
+  const ledgerHtml = _renderLedger(client, financials.ledger);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
@@ -1468,7 +1497,7 @@ async function showOwnerDetails(id, type = 'owner') {
       <div class="stat-grid mb-8">
         <div class="card">
           <p class="text-muted text-xs mb-2">الرصيد الحالي</p>
-          <div class="text-3xl font-bold ${_balanceClass(0)} mb-6">${_fmt(0)}</div>
+          <div class="text-3xl font-bold ${_balanceClass(financials.balance)} mb-6">${_fmt(financials.balance)}</div>
           <div class="flex gap-2 flex-wrap justify-end">
             <button type="button" data-action="open-balance-entry" data-entry-type="deposit"
               class="btn btn-success btn-sm">
