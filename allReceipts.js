@@ -1288,19 +1288,17 @@ async function printCurrentView(tab = 'receipts') {
 }
 
 /**
- * _handleToggleRowPayment(btn) — row payment status chip (الحالة column).
- * Flips the persisted row state via the atomic domain transition; the
- * financial posting/reversal is created inside FinancialService — the page
- * never mutates balances directly. Loud failure stays visible (alert),
- * and the page re-reads from persisted state afterwards either way.
+ * _handleRowPaymentStatusChange(select) — explicit row payment-status choice.
+ * The select only supplies the requested paid/unpaid value; FinancialService
+ * remains the sole owner of the atomic posting/reversal state transition.
  */
-async function _handleToggleRowPayment(btn) {
+async function _handleRowPaymentStatusChange(select) {
   const username = getSessionUsername();
   if (!username) return;
-  const rowId = btn.dataset.rowId;
-  const target = btn.dataset.targetStatus === 'paid' ? 'paid' : 'unpaid';
+  const rowId = select.dataset.rowId;
+  const target = select.value === 'paid' ? 'paid' : 'unpaid';
   if (!rowId) return;
-  btn.disabled = true;
+  select.disabled = true;
   try {
     await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
   } catch (err) {
@@ -1421,16 +1419,19 @@ function bindPageEvents() {
         _exportReceiptsToExcel();
         return;
       }
-      if (action === 'toggle-row-payment') {
-        await _handleToggleRowPayment(actionBtn);
-        return;
-      }
     }
 
     const recordAction = event.target.closest('[data-id][data-action]');
     if (recordAction) {
       await handleCardAction(recordAction.dataset.action, recordAction.dataset.id, recordAction.closest('[data-kind]')?.dataset.kind || 'receipts');
       return;
+    }
+  });
+
+  page.addEventListener('change', async (event) => {
+    const statusSelect = event.target.closest('select[data-action="set-row-payment-status"]');
+    if (statusSelect) {
+      await _handleRowPaymentStatusChange(statusSelect);
     }
   });
 

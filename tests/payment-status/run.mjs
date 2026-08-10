@@ -8,7 +8,7 @@
 //     company = الصافي + الصرف), paid→unpaid reverses exactly those legs;
 //   • atomicity, idempotency, row-UUID traceability, edit/delete reconciliation;
 //   • UI contract — الحالة column immediately after الصافي in All Receipts,
-//     its chip markup, the page mapper clamp, print + Excel columns
+//     its dropdown markup, the page mapper clamp, print + Excel columns
 //     (all via verbatim-extracted production source).
 
 import { installIDB } from './idb-shim.mjs';
@@ -413,7 +413,7 @@ ok(finalActive.length === 2 && finalActive.every(e => String(e.reference_id) ===
   'global invariant: exactly ONE ACTIVE posting pair exists system-wide, referencing receipt C\'s live paid row UUID — no orphans, no duplicates');
 
 // ══ GROUP 7 — UI contract via verbatim-extracted production source ══
-console.log('\n— GROUP 7: UI contract — الحالة column, chip, mapper, print, Excel (extracted real source) —');
+console.log('\n— GROUP 7: UI contract — الحالة column, dropdown, mapper, print, Excel (extracted real source) —');
 // COL_DEFS order: الحالة immediately after الصافي
 const colDefs = new Function(
   `${extractAfter(RECEIPTS_SRC, 'const COL_DEFS = [', '[')}; return COL_DEFS;`
@@ -427,7 +427,7 @@ ok(payColDef.label === 'الحالة' && payColDef.noForm === true,
   'COL_DEFS: الحالة column is labeled الحالة and carries noForm (the receipt FORM grid stays unchanged)');
 ok(colDefs.filter(c => c.key !== '_actions').length === 20, 'COL_DEFS: all-receipts data column count = 20 (الحالة included as data column #20)');
 
-// Snapshot rendering — real chip generation from the real row shape
+// Snapshot rendering — real payment-status dropdown generation from the real row shape
 const snapshot = new Function('COL_DEFS', `
   const _snapshotEsc = (v) => String(v ?? '');
   const formatSnapshotNumber = (v) => String(v ?? '');
@@ -444,19 +444,27 @@ ok(snapshot.getSnapshotCellRawValue({ payment_status: 'paid' }, payColDef) === '
 ok(snapshot.formatSnapshotCellValue({ payment_status: 'paid' }, payColDef) === 'تم صرفه'
   && snapshot.formatSnapshotCellValue({ payment_status: 'unpaid' }, payColDef) === 'لم يتم صرفه',
   'snapshot formats the ONLY two display labels: تم صرفه / لم يتم صرفه');
-const chipUnpaid = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-1', payment_status: 'unpaid' });
-ok(chipUnpaid.includes('data-action="toggle-row-payment"') && chipUnpaid.includes('data-row-id="RID-1"')
-  && chipUnpaid.includes('data-target-status="paid"') && chipUnpaid.includes('لم يتم صرفه'),
-  'chip (unpaid row): actionable toggle button targeting paid, labeled لم يتم صرفه');
-const chipPaid = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-2', payment_status: 'paid' });
-ok(chipPaid.includes('data-target-status="unpaid"') && chipPaid.includes('تم صرفه')
-  && chipPaid.includes('background:#dcfce7'), 'chip (paid row): targets unpaid, labeled تم صرفه, green paid styling');
-const chipLegacy = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-3' });
-ok(chipLegacy.includes('data-target-status="paid"') && chipLegacy.includes('لم يتم صرفه'),
-  'chip (legacy row without the field): renders unpaid — display contract matches the domain read');
-const chipNoId = snapshot.renderReceiptSnapshotDataRow({ payment_status: 'paid' });
-ok(chipNoId.includes('تم صرفه') && !chipNoId.includes('data-action'),
-  'chip (row without row_id): renders a plain label, NEVER a toggle (no row UUID, no transition)');
+const selectUnpaid = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-1', payment_status: 'unpaid' });
+ok(selectUnpaid.includes('<select') && selectUnpaid.includes('data-action="set-row-payment-status"')
+  && selectUnpaid.includes('data-row-id="RID-1"') && !selectUnpaid.includes('<button'),
+  'dropdown (unpaid row): status renders as an explicit select, never a clickable toggle chip');
+ok((selectUnpaid.match(/<option /g) || []).length === 2
+  && selectUnpaid.includes('<option value="unpaid" selected>لم يتم صرفه</option>')
+  && selectUnpaid.includes('<option value="paid">تم صرفه</option>'),
+  'dropdown (unpaid row): contains exactly the two required options with unpaid selected');
+const selectPaid = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-2', payment_status: 'paid' });
+ok((selectPaid.match(/<option /g) || []).length === 2
+  && selectPaid.includes('<option value="unpaid">لم يتم صرفه</option>')
+  && selectPaid.includes('<option value="paid" selected>تم صرفه</option>')
+  && selectPaid.includes('background:#dcfce7'),
+  'dropdown (paid row): contains exactly the required options, selects paid, and keeps green paid styling');
+const selectLegacy = snapshot.renderReceiptSnapshotDataRow({ row_id: 'RID-3' });
+ok(selectLegacy.includes('<option value="unpaid" selected>لم يتم صرفه</option>')
+  && selectLegacy.includes('<option value="paid">تم صرفه</option>'),
+  'dropdown (legacy row without the field): defaults to unpaid in the same two-option select');
+const selectNoId = snapshot.renderReceiptSnapshotDataRow({ payment_status: 'paid' });
+ok(selectNoId.includes('تم صرفه') && !selectNoId.includes('<select') && !selectNoId.includes('data-action'),
+  'dropdown (row without row_id): renders a plain label, never an editable control without a row UUID');
 
 // Page mapper — the All Receipts page row shape (verified through the real function)
 const pageMapper = new Function('Money', `
@@ -467,6 +475,27 @@ ok(pageMapper._persistedRowToPageRow({ row_id: 'x', payment_status: 'paid' }).pa
   && Money.toDecimal && pageMapper._persistedRowToPageRow({ row_id: 'x', payment_status: 'unpaid' }).payment_status === 'unpaid'
   && pageMapper._persistedRowToPageRow({ row_id: 'x' }).payment_status === 'unpaid',
   'page mapper: paid passes through, unpaid passes through, legacy (no field) clamps to unpaid');
+
+// Execute the production dropdown handler verbatim with a select-shaped event
+// target. The test verifies UI delegation only; the financial state-machine
+// behavior itself is exercised against the real FinancialService in Groups 1–6.
+const dropdownCalls = [];
+let dropdownRefreshes = 0;
+const dropdownHandler = new Function('getSessionUsername', 'FinancialService', 'refreshAllReceiptsPage', 'alert', `
+  ${extractFn(ALLRECEIPTS_SRC, '_handleRowPaymentStatusChange')}
+  return _handleRowPaymentStatusChange;
+`)(
+  () => U,
+  { setReceiptRowPaymentStatus: async (...args) => { dropdownCalls.push(args); } },
+  async () => { dropdownRefreshes++; },
+  () => {}
+);
+const dropdownControl = { dataset: { rowId: 'RID-UI' }, value: 'paid', disabled: false };
+await dropdownHandler(dropdownControl);
+ok(dropdownControl.disabled === true
+  && J(dropdownCalls) === J([[U, 'RID-UI', 'paid']])
+  && dropdownRefreshes === 1,
+  'dropdown change calls the existing setReceiptRowPaymentStatus entry point once with the selected paid value, then refreshes');
 
 // All-Receipts print columns — الحالة immediately after الصافي
 const printCols = new Function(
@@ -509,9 +538,12 @@ fingerprint(RECEIPTS_SRC, 'if (c.noForm) return false;',
   'receipt FORM print excludes the status column (form print layout unchanged)');
 fingerprint(ALLRECEIPTS_SRC, "payment_status: row.payment_status === 'paid' ? 'paid' : 'unpaid',",
   'page mapper persists the whitelist only');
-fingerprint(ALLRECEIPTS_SRC, "if (action === 'toggle-row-payment') {", 'page delegate routes the chip action');
+fingerprint(ALLRECEIPTS_SRC, 'select[data-action="set-row-payment-status"]',
+  'page listens for payment-status select changes, not a click-to-toggle chip');
+fingerprint(ALLRECEIPTS_SRC, 'await _handleRowPaymentStatusChange(statusSelect);',
+  'page change delegate routes the dropdown selection to the existing status handler');
 fingerprint(ALLRECEIPTS_SRC, 'await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);',
-  'the page delegates the transition to FinancialService — NO direct balance mutation in the UI');
+  'the dropdown handler delegates the transition to FinancialService — NO direct balance mutation in the UI');
 fingerprint(FINANCIAL_SRC, "const PAYMENT_STATUS = Object.freeze({ UNPAID: 'unpaid', PAID: 'paid' });",
   'domain-level status whitelist constant');
 fingerprint(FINANCIAL_SRC, "const PAYMENT_REF_TYPE = 'receipt_row_payment';", 'dedicated posting reference namespace');

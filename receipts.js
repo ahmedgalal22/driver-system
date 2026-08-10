@@ -696,11 +696,15 @@ function renderReceiptSnapshotDataRow(row) {
 
     if (col.key === 'payment_status') {
       const isPaid = getSnapshotCellRawValue(row, col) === 'paid';
-      const chipLabel = isPaid ? 'تم صرفه' : 'لم يتم صرفه';
-      const chipStyle = `border:none;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;background:${isPaid ? '#dcfce7' : '#f3f4f6'};color:${isPaid ? '#15803d' : '#6b7280'};`;
+      const statusLabel = isPaid ? 'تم صرفه' : 'لم يتم صرفه';
+      // Status is deliberately changed only through an explicit option choice,
+      // never by clicking a toggle chip. The color retains the prior paid /
+      // unpaid distinction while the existing domain state machine owns all
+      // posting and reversal behavior.
+      const selectStyle = `border:none;border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;background:${isPaid ? '#dcfce7' : '#f3f4f6'};color:${isPaid ? '#15803d' : '#6b7280'};`;
       return `<td class="px-1 py-1 text-center${printClass}">${row.row_id != null
-        ? `<button type="button" data-action="toggle-row-payment" data-row-id="${_snapshotEsc(row.row_id)}" data-target-status="${isPaid ? 'unpaid' : 'paid'}" style="${chipStyle}">${chipLabel}</button>`
-        : chipLabel}</td>`;
+        ? `<select data-action="set-row-payment-status" data-row-id="${_snapshotEsc(row.row_id)}" aria-label="حالة الصرف" style="${selectStyle}"><option value="unpaid"${isPaid ? '' : ' selected'}>لم يتم صرفه</option><option value="paid"${isPaid ? ' selected' : ''}>تم صرفه</option></select>`
+        : statusLabel}</td>`;
     }
 
     return `<td class="px-1 py-1 text-${align}${printClass}${cellClass}">${formatSnapshotCellValue(row, col)}</td>`;
