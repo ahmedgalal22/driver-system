@@ -46,6 +46,8 @@ const STORE = Object.freeze({
 // distinct from receipt-row payments and Karta Settlement.
 const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
 const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
+const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';
+const MANUAL_OFFICE_EFFECT = 'manual_office_balance';
 
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
@@ -565,10 +567,11 @@ async function getVehicleLedger(vehicle_id) {
 }
 
 /**
- * Read the company portion of receipt-row payments from vehicle_ledger.
- * Company balances have no dedicated ledger/store: this projection reads only
- * the existing active receipt_row_payment company legs, which are explicitly
- * isolated from vehicle balances by vehicle_id:null.
+ * Read active company movements from the existing vehicle_ledger. Company
+ * balances have no dedicated ledger/store: this projection combines only the
+ * two company-only namespaces, both isolated from vehicle balances by
+ * vehicle_id:null — automatic receipt-row payments and explicit manual office
+ * deposits/withdrawals.
  */
 async function getOfficeBalance(office_id) {
   const officeKey = String(office_id ?? '').trim();
@@ -578,12 +581,13 @@ async function getOfficeBalance(office_id) {
     client_type: 'office',
     client_id: officeKey,
     owner_id: officeKey,
-    reference_type: PAYMENT_REF_TYPE,
-    effect: PAYMENT_EFFECT,
     is_reversed: false,
   });
   const active = entries
-    .filter(e => e.deleted_at === null && e.vehicle_id === null)
+    .filter(e => e.deleted_at === null
+      && e.vehicle_id === null
+      && ((e.reference_type === PAYMENT_REF_TYPE && e.effect === PAYMENT_EFFECT)
+        || (e.reference_type === MANUAL_OFFICE_REF_TYPE && e.effect === MANUAL_OFFICE_EFFECT)))
     .sort((a, b) => {
       const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
       const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
@@ -688,6 +692,93 @@ async function deleteManualVehicleBalanceEntry(username, reference_id) {
   );
   if (active.length === 0) {
     throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] manual vehicle transaction not found or already reversed.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
+}
+
+// ─── MANUAL OFFICE BALANCE MOVEMENTS ─────────────────────────────────────────
+
+/**
+ * Create one manual company movement in the existing vehicle_ledger. This is
+ * company-only and cannot affect a vehicle, receipt row, driver, or settlement.
+ */
+async function createManualOfficeBalanceEntry(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualOfficeBalanceEntry] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] data must be a plain object.');
+  }
+
+  const office_id = String(data.office_id || '').trim();
+  const entry_type = data.entry_type === 'withdraw' ? 'withdraw' : data.entry_type === 'deposit' ? 'deposit' : '';
+  const amount = Money.toCents(data.amount);
+  const date = data.date || DateUtils.todayLocal();
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
+
+  if (!office_id) throw new Error('[FinancialService:createManualOfficeBalanceEntry] office_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualOfficeBalanceEntry] entry_type must be deposit or withdraw.');
+  if (amount <= 0) throw new Error('[FinancialService:createManualOfficeBalanceEntry] amount must be greater than zero.');
+  if (!note) throw new Error('[FinancialService:createManualOfficeBalanceEntry] note is required.');
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] date must be a valid ISO date string.');
+  }
+
+  const office = await OfficeRepository.getById(office_id);
+  if (!office || office.deleted_at !== null) {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] office not found.');
+  }
+
+  const reference_id = _uuid();
+  const now = DateUtils.nowLocal();
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload: {
+      username,
+      owner_id: String(office.id),
+      owner_name: office.name || null,
+      client_id: String(office.id),
+      client_type: 'office',
+      client_name: office.name || null,
+      vehicle_id: null,
+      vehicle_plate: null,
+      type: entry_type,
+      effect: MANUAL_OFFICE_EFFECT,
+      amount,
+      reference_type: MANUAL_OFFICE_REF_TYPE,
+      reference_id,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Reverse one logical manual company movement while retaining its audit row.
+ */
+async function deleteManualOfficeBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] username is required.');
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  const active = entries.filter(entry =>
+    entry.reference_type === MANUAL_OFFICE_REF_TYPE
+    && entry.effect === MANUAL_OFFICE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] manual office transaction not found or already reversed.');
   }
 
   const now = DateUtils.nowLocal();
@@ -1450,6 +1541,8 @@ export const FinancialService = Object.freeze({
   getOfficeBalance,
   createManualVehicleBalanceEntry,
   deleteManualVehicleBalanceEntry,
+  createManualOfficeBalanceEntry,
+  deleteManualOfficeBalanceEntry,
   getDriverBalance,
   getDriverLedger,
   createDriverDeposit,

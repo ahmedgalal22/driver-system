@@ -475,6 +475,7 @@ let _editingOfficeDraft = null;
 let _activeDetailsTab = 'hamola';
 let _detailsOfficeId = null;
 let _hamolaEditId = null;
+let _officeBalanceEntryType = 'deposit';
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 
 function _requireSession() {
@@ -728,10 +729,10 @@ function _renderHamolaTable(rows) {
   `;
 }
 
-// ── رصيد الشركة tab — existing receipt-row-payment ledger projection ─────────
+// ── رصيد الشركة tab — existing company ledger projection ───────────────────
 // The renderer preserves the existing layout. Its entries come from the
-// read-only FinancialService office projection; the إيداع / سحب button remains
-// UI-only and has no write handler.
+// read-only FinancialService office projection, including receipt-row-payment
+// company legs and explicit manual office movements.
 function _renderOfficeBalance(entries) {
   function entryDate(entry) {
     return entry.date || entry.applied_at || entry.created_at || '';
@@ -789,7 +790,8 @@ function _renderOfficeBalance(entries) {
         <p class="text-2xl font-bold ${currentClass}">${_fmt(currentBalance)}</p>
       </div>
       <div class="flex gap-2">
-        <button type="button" data-action="office-deposit-open" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع / سحب</button>
+        <button type="button" data-action="open-office-balance-entry" data-entry-type="deposit" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع رصيد</button>
+        <button type="button" data-action="open-office-balance-entry" data-entry-type="withdraw" style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💸 سحب رصيد</button>
       </div>
     </div>
     <div class="table-wrapper">
@@ -933,6 +935,99 @@ function _closeOfficeModal() {
   document.getElementById('officeModal')?.classList.add('hidden');
 }
 
+function _ensureOfficeBalanceEntryModal() {
+  if (document.getElementById('officeBalanceEntryModal')) return;
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div id="officeBalanceEntryModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold" id="officeBalanceEntryTitle">حركة رصيد للشركة</h3>
+          <button type="button" data-action="close-office-balance-entry" class="btn btn-secondary btn-sm">إغلاق</button>
+        </div>
+        <div class="grid gap-3 mb-4">
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
+          </div>
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryDate" type="date" class="input input-sm">
+          </div>
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryNote">السبب / ملاحظة <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryNote" type="text" class="input input-sm" placeholder="اكتب سبب الحركة">
+          </div>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-action="close-office-balance-entry" class="btn btn-secondary btn-sm">إلغاء</button>
+          <button type="button" data-action="save-office-balance-entry" class="btn btn-primary btn-sm">💾 حفظ</button>
+        </div>
+        <div id="officeBalanceEntryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(div.firstElementChild);
+}
+
+function _openOfficeBalanceEntryModal(entryType) {
+  if (!_detailsOfficeId) return;
+  _ensureOfficeBalanceEntryModal();
+  _officeBalanceEntryType = entryType === 'withdraw' ? 'withdraw' : 'deposit';
+
+  const modal = document.getElementById('officeBalanceEntryModal');
+  const title = document.getElementById('officeBalanceEntryTitle');
+  const amount = document.getElementById('officeBalanceEntryAmount');
+  const date = document.getElementById('officeBalanceEntryDate');
+  const note = document.getElementById('officeBalanceEntryNote');
+  const msg = document.getElementById('officeBalanceEntryMsg');
+
+  if (title) title.textContent = _officeBalanceEntryType === 'deposit' ? 'إيداع رصيد للشركة' : 'سحب رصيد من الشركة';
+  if (amount) amount.value = '';
+  if (date) date.value = DateUtils.todayLocal();
+  if (note) note.value = '';
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+  modal?.classList.remove('hidden');
+}
+
+function _closeOfficeBalanceEntryModal() {
+  document.getElementById('officeBalanceEntryModal')?.classList.add('hidden');
+}
+
+async function _saveOfficeBalanceEntry() {
+  const amount = parseFloat(document.getElementById('officeBalanceEntryAmount')?.value) || 0;
+  const date = document.getElementById('officeBalanceEntryDate')?.value || '';
+  const note = document.getElementById('officeBalanceEntryNote')?.value?.trim() || '';
+  const msg = document.getElementById('officeBalanceEntryMsg');
+
+  if (amount <= 0 || !date || !note) {
+    if (msg) {
+      msg.textContent = amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
+        : !date ? '❌ التاريخ مطلوب'
+        : '❌ السبب / الملاحظة مطلوبة';
+      msg.classList.add('is-visible');
+    }
+    return;
+  }
+
+  try {
+    await FinancialService.createManualOfficeBalanceEntry(_moduleSessionUsername(), {
+      office_id: _detailsOfficeId,
+      entry_type: _officeBalanceEntryType,
+      amount,
+      date,
+      note,
+    });
+    _closeOfficeBalanceEntryModal();
+    await showOfficeDetails(_detailsOfficeId);
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || 'حدث خطأ أثناء حفظ حركة الرصيد';
+      msg.classList.add('is-visible');
+    }
+  }
+}
+
 function _openHamolaModal(title, row = null) {
   const modal = document.getElementById('hamolaModal');
   const msg = document.getElementById('hamolaModalMsg');
@@ -998,6 +1093,20 @@ function attachOfficesPageListeners() {
 
   document.addEventListener('click', async (e) => {
     const target = e.target;
+
+    const openOfficeBalanceEntry = target.closest('[data-action="open-office-balance-entry"]');
+    if (openOfficeBalanceEntry) {
+      _openOfficeBalanceEntryModal(openOfficeBalanceEntry.dataset.entryType);
+      return;
+    }
+    if (target.closest('[data-action="close-office-balance-entry"]')) {
+      _closeOfficeBalanceEntryModal();
+      return;
+    }
+    if (target.closest('[data-action="save-office-balance-entry"]')) {
+      await _saveOfficeBalanceEntry();
+      return;
+    }
 
     if (target.closest('[data-action="office-add"]')) {
       _openOfficeModal();
