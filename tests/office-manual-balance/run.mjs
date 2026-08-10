@@ -10,6 +10,7 @@ installIDB();
 const { DB } = await import('./database.js');
 const { FinancialService } = await import('./financial.js');
 const { ClientRepository } = await import('./services/clientRepository.js');
+const { DateUtils } = await import('./dateUtils.js');
 
 const U = 'manual-office-balance-tester';
 let failures = 0;
@@ -21,6 +22,21 @@ const uuid = () => crypto.randomUUID();
 
 const FINANCIAL_SRC = readFileSync('./financial.js', 'utf8');
 const OFFICES_SRC = readFileSync('./_src/offices.js', 'utf8');
+
+function extractFn(src, name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`extractFn: ${name} not found`);
+  const bodyStart = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`extractFn: ${name} unbalanced`);
+}
 
 await DB.init();
 
@@ -151,10 +167,33 @@ ok((await officeBalanceCents(OFFICE_B.id)) === 0,
   'reversing B manual movement removes its company effect without affecting A');
 
 console.log('\n— UI and domain isolation fingerprints —');
+ok(OFFICES_SRC.includes("import { DateUtils } from './dateUtils.js';"),
+  'offices.js explicitly imports the shared DateUtils module for the manual office modal');
 ok(OFFICES_SRC.includes('data-action="open-office-balance-entry"')
   && OFFICES_SRC.includes('await FinancialService.createManualOfficeBalanceEntry(_moduleSessionUsername(), {')
   && OFFICES_SRC.includes('await showOfficeDetails(_detailsOfficeId);'),
   'Office Details balance buttons open the connected modal and refresh the selected office after save');
+
+const modalFields = new Map([
+  ['officeBalanceEntryModal', { classList: { remove() {} } }],
+  ['officeBalanceEntryTitle', { textContent: '' }],
+  ['officeBalanceEntryAmount', { value: 'old' }],
+  ['officeBalanceEntryDate', { value: '' }],
+  ['officeBalanceEntryNote', { value: 'old' }],
+  ['officeBalanceEntryMsg', { textContent: 'old', classList: { remove() {} } }],
+]);
+const openOfficeBalanceEntryModal = new Function('DateUtils', 'document', `
+  let _detailsOfficeId = 'office-test-id';
+  let _officeBalanceEntryType = 'deposit';
+  function _ensureOfficeBalanceEntryModal() {}
+  ${extractFn(OFFICES_SRC, '_openOfficeBalanceEntryModal')}
+  return _openOfficeBalanceEntryModal;
+`)(DateUtils, { getElementById: (id) => modalFields.get(id) || null });
+let dateInitError = null;
+try { openOfficeBalanceEntryModal('deposit'); } catch (error) { dateInitError = error; }
+ok(!dateInitError && modalFields.get('officeBalanceEntryDate').value === DateUtils.todayLocal(),
+  'manual office modal initializes its date through DateUtils.todayLocal() without a ReferenceError');
+
 ok(FINANCIAL_SRC.includes("const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';")
   && FINANCIAL_SRC.includes("const MANUAL_OFFICE_EFFECT = 'manual_office_balance';"),
   'manual office namespace is explicit and distinct from receipt-row payment');

@@ -6,6 +6,7 @@
 import { AuthModule } from './auth.js';
 import { FinancialService } from './financial.js';
 import { Money } from './money.js';
+import { DateUtils } from './dateUtils.js';
 import { calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
