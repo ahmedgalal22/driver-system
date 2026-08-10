@@ -1125,6 +1125,14 @@ const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
 // origin classification via `effect`, exactly like 'salfa').
 const KARTA_CHARGE_EFFECT = 'karta_settlement_charge';
 
+// The receipt row persists the driver's display-name snapshot specifically for
+// receipt/Karta presentation. Use that existing association for the vehicle
+// movement label; no extra ledger field or financial lookup is needed.
+function _kartaVehicleSettlementNote(kartaRow) {
+  const driverName = String(kartaRow?.driver_name || '').trim();
+  return driverName ? `تسوية كارتة (${driverName})` : 'تسوية كارتة';
+}
+
 async function _getActiveKartaSettlements() {
   const all = await DB.findByFields(STORE.LEDGER, {
     reference_type: KARTA_REF_TYPE,
@@ -1259,6 +1267,7 @@ async function createKartaSettlement(username, data) {
   // No name-based matching anywhere in this chain.
   const kartaRow = await ReceiptRepository.getRowById(String(rowId));
   const settlementDriverId = kartaRow?.driver_id ?? null;
+  const vehicleMovementNote = _kartaVehicleSettlementNote(kartaRow);
 
   // The vehicle-to-charge must exist — validated BEFORE the atomic write
   // transaction (guards evaluated inside DB.transaction callbacks race with
@@ -1317,7 +1326,7 @@ async function createKartaSettlement(username, data) {
       date,
       applied_at: now,
       is_reversed: false,
-      note: `تحميل تسوية كارتة على المركبة ${chargeVehicle.plate || chargeVehicleId}`,
+      note: vehicleMovementNote,
     });
   }, { username, stores: [STORE.LEDGER] });
 
@@ -1357,6 +1366,7 @@ async function updateKartaSettlement(username, data) {
   const kartaRow = await ReceiptRepository.getRowById(String(rowId));
   if (!kartaRow) throw new Error('[FinancialService:updateKartaSettlement] karta row not found');
   const settlementDriverId = kartaRow?.driver_id ?? null;
+  const vehicleMovementNote = _kartaVehicleSettlementNote(kartaRow);
 
   const existing = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', rowId);
   const activeLegs = existing.filter(e =>
@@ -1416,7 +1426,7 @@ async function updateKartaSettlement(username, data) {
     date,
     applied_at: now,
     is_reversed: false,
-    note: `تحميل تسوية كارتة على المركبة ${chargeVehicle.plate || chargeVehicleId}`,
+    note: vehicleMovementNote,
   };
 
   const ops = [
