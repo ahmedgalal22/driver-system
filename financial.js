@@ -968,11 +968,12 @@ async function createDriverSalfaRecovery(username, data) {
   const driver_id = String(data.driver_id || '').trim();
   const amount = Money.toCents(data.amount);
   const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' ? data.note.trim() : '';
+  const note = typeof data.note === 'string' && data.note.trim()
+    ? data.note.trim()
+    : 'استرداد سلفة';
 
   if (!driver_id) throw new Error('[FinancialService:createDriverSalfaRecovery] driver_id is required.');
   if (amount <= 0) throw new Error('[FinancialService:createDriverSalfaRecovery] amount must be greater than zero.');
-  if (!note) throw new Error('[FinancialService:createDriverSalfaRecovery] note is required.');
   if (!date || isNaN(Date.parse(date))) {
     throw new Error('[FinancialService:createDriverSalfaRecovery] date must be a valid ISO date string.');
   }

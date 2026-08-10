@@ -826,7 +826,7 @@ function _openDriverSalfaRecoveryModal() {
   if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
   if (amountEl) amountEl.value = '';
   if (dateEl) dateEl.value = DateUtils.todayLocal();
-  if (noteEl) noteEl.value = '';
+  if (noteEl) noteEl.value = 'استرداد سلفة';
   modal?.classList.remove('hidden');
 }
 
@@ -838,13 +838,12 @@ async function _saveDriverSalfaRecovery() {
   const msgEl = document.getElementById('driverSalfaRecoveryMsg');
   const amount = parseFloat(document.getElementById('driverSalfaRecoveryAmount')?.value) || 0;
   const date = document.getElementById('driverSalfaRecoveryDate')?.value || '';
-  const note = document.getElementById('driverSalfaRecoveryNote')?.value?.trim() || '';
+  const note = document.getElementById('driverSalfaRecoveryNote')?.value?.trim() || 'استرداد سلفة';
 
-  if (amount <= 0 || !date || !note) {
+  if (amount <= 0 || !date) {
     if (msgEl) {
       msgEl.textContent = amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
-        : !date ? '❌ التاريخ مطلوب'
-        : '❌ السبب / الملاحظة مطلوبة';
+        : '❌ التاريخ مطلوب';
       msgEl.classList.add('is-visible');
     }
     return;

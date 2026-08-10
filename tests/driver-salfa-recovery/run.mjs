@@ -84,6 +84,10 @@ ok(INDEX_SRC.includes('data-action="open-driver-salfa"')
 ok(ENTITIES_SRC.includes('FinancialService.createDriverSalfaRecovery(_currentUsername(), {')
   && ENTITIES_SRC.includes('FinancialService.deleteDriverSalfaRecovery(username, refId)'),
   'Driver Details recovery modal and audit-preserving delete route use FinancialService');
+ok(ENTITIES_SRC.includes("if (noteEl) noteEl.value = 'استرداد سلفة';")
+  && INDEX_SRC.includes('placeholder="استرداد سلفة"')
+  && !INDEX_SRC.includes('for="driverSalfaRecoveryNote">السبب / ملاحظة <span'),
+  'recovery note UI defaults to استرداد سلفة and is not marked required');
 
 console.log('\n— receipt / vehicle / company / Karta baseline —');
 ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800,
@@ -112,28 +116,24 @@ try {
     driver_id: DRIVER_A.id, amount: 0, date: '2026-08-10', note: 'غير صالح',
   });
 } catch (error) { invalidAmount = error.message; }
-let missingNote = '';
-try {
-  await FinancialService.createDriverSalfaRecovery(U, {
-    driver_id: DRIVER_A.id, amount: 1, date: '2026-08-10', note: '',
-  });
-} catch (error) { missingNote = error.message; }
-ok(/amount must be greater than zero/.test(invalidAmount) && /note is required/.test(missingNote),
-  'recovery requires a positive amount and required reason/note');
+ok(/amount must be greater than zero/.test(invalidAmount),
+  'recovery still requires a positive amount');
 
 console.log('\n— recovery —');
 const recoveryOne = await FinancialService.createDriverSalfaRecovery(U, {
   driver_id: DRIVER_A.id,
   amount: 40,
   date: '2026-08-11',
-  note: 'استرداد أول',
+  // Intentionally empty: it must save with the default without failure.
+  note: '',
 });
 ok(recoveryOne.reference_type === 'salfa_recovery'
   && recoveryOne.effect === 'salfa_recovery'
   && recoveryOne.type === 'deposit'
   && recoveryOne.amount === 40
+  && recoveryOne.note === 'استرداد سلفة'
   && recoveryOne.vehicle_id === null,
-  'recovery is a separate driver deposit ledger event with no vehicle link');
+  'recovery with an empty note succeeds and persists the default استرداد سلفة note');
 ok((await driverBalanceCents(DRIVER_A.id)) === -6000 && (await driverBalanceCents(DRIVER_B.id)) === 0,
   'recovery moves driver A balance from -100 to -60 without affecting driver B');
 ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800,
@@ -146,22 +146,35 @@ const recoveryTwo = await FinancialService.createDriverSalfaRecovery(U, {
   driver_id: DRIVER_A.id,
   amount: 10,
   date: '2026-08-12',
-  note: 'استرداد ثان',
+  note: 'استرداد مخصص',
 });
-ok((await driverBalanceCents(DRIVER_A.id)) === -5000,
-  'multiple recoveries accumulate correctly (-100 + 40 + 10 = -50)');
+ok(recoveryTwo.note === 'استرداد مخصص',
+  'recovery with a custom note persists the custom note unchanged');
+const recoveryThree = await FinancialService.createDriverSalfaRecovery(U, {
+  driver_id: DRIVER_A.id,
+  amount: 5,
+  date: '2026-08-13',
+  // Intentionally omit note: the default must be applied without validation failure.
+});
+ok(recoveryThree.note === 'استرداد سلفة',
+  'recovery with an omitted note succeeds and persists the default note');
+ok((await driverBalanceCents(DRIVER_A.id)) === -4500,
+  'multiple recoveries accumulate correctly (-100 + 40 + 10 + 5 = -45)');
 const ledgerA = await FinancialService.getDriverLedger(DRIVER_A.id);
-ok(ledgerA.filter(entry => entry.reference_type === 'salfa_recovery').length === 2,
-  'both recovery movements appear in the authoritative driver ledger');
+ok(ledgerA.filter(entry => entry.reference_type === 'salfa_recovery').length === 3,
+  'all recovery movements appear in the authoritative driver ledger');
 
 console.log('\n— audit-preserving reversal —');
 await FinancialService.deleteDriverSalfaRecovery(U, recoveryOne.reference_id);
-ok((await driverBalanceCents(DRIVER_A.id)) === -9000,
-  'reversing one recovery restores only its 40 amount while the second recovery remains');
+ok((await driverBalanceCents(DRIVER_A.id)) === -8500,
+  'reversing one recovery restores only its 40 amount while later recoveries remain');
 const recoveryAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', recoveryOne.reference_id))[0];
 ok(recoveryAudit.is_reversed === true && recoveryAudit.reversed_at && recoveryAudit.reversed_by === U,
   'deleting recovery uses is_reversed audit metadata and preserves the original record');
 await FinancialService.deleteDriverSalfaRecovery(U, recoveryTwo.reference_id);
+ok((await driverBalanceCents(DRIVER_A.id)) === -9500,
+  'reversing the custom recovery leaves only the omitted-note recovery active');
+await FinancialService.deleteDriverSalfaRecovery(U, recoveryThree.reference_id);
 ok((await driverBalanceCents(DRIVER_A.id)) === -10000,
   'reversing all recoveries restores the unchanged original salfa debt state');
 ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800
