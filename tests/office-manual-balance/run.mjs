@@ -79,11 +79,11 @@ const vehicleBalanceCents = async () =>
   Math.round((await FinancialService.rebuildVehicleBalance(VEHICLE.id)).balance * 100);
 
 console.log('\n— receipt-row-payment baseline —');
-ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'unpaid receipt row leaves both companies unchanged');
+ok((await officeBalanceCents(OFFICE_A.id)) === -1800 && (await officeBalanceCents(OFFICE_B.id)) === 0,
+  'unpaid receipt row creates the independent company charge of net+sarf');
 await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'paid');
-ok((await officeBalanceCents(OFFICE_A.id)) === 1800,
-  'existing receipt-row company posting remains net+sarf (11 + 7 = 18)');
+ok((await officeBalanceCents(OFFICE_A.id)) === 0,
+  'existing receipt-row payment deposit offsets the independent net+sarf company charge while paid');
 ok((await vehicleBalanceCents()) === 1100,
   'existing receipt-row vehicle posting remains net only (11)');
 
@@ -104,8 +104,8 @@ ok(depositA.reference_type === 'manual_office_balance'
   && depositA.type === 'deposit'
   && depositA.amount === 100,
   'manual deposit uses the dedicated company-only vehicle_ledger convention');
-ok((await officeBalanceCents(OFFICE_A.id)) === 11800 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'manual deposit increases only the selected company (receipt 18 + manual 100)');
+ok((await officeBalanceCents(OFFICE_A.id)) === 10000 && (await officeBalanceCents(OFFICE_B.id)) === 0,
+  'manual deposit increases only the selected company from its paid-row net balance');
 ok((await vehicleBalanceCents()) === 1100,
   'manual company deposit does not affect vehicle balance');
 
@@ -118,8 +118,8 @@ const withdrawalA = await FinancialService.createManualOfficeBalanceEntry(U, {
 });
 ok(withdrawalA.type === 'withdraw' && withdrawalA.amount === 40,
   'manual company withdrawal persists as a withdrawal movement');
-ok((await officeBalanceCents(OFFICE_A.id)) === 7800 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'manual withdrawal decreases only the selected company (118 - 40 = 78)');
+ok((await officeBalanceCents(OFFICE_A.id)) === 6000 && (await officeBalanceCents(OFFICE_B.id)) === 0,
+  'manual withdrawal decreases only the selected company (100 - 40 = 60)');
 ok((await vehicleBalanceCents()) === 1100,
   'manual company withdrawal does not affect vehicle balance');
 
@@ -141,27 +141,27 @@ const depositB = await FinancialService.createManualOfficeBalanceEntry(U, {
   date: '2026-08-12',
   note: 'إيداع يدوي للشركة ب',
 });
-ok((await officeBalanceCents(OFFICE_A.id)) === 7800 && (await officeBalanceCents(OFFICE_B.id)) === 3000,
-  'different companies remain isolated (A=78; B=30)');
+ok((await officeBalanceCents(OFFICE_A.id)) === 6000 && (await officeBalanceCents(OFFICE_B.id)) === 3000,
+  'different companies remain isolated (A=60; B=30)');
 
 const { FinancialService: ReloadedFinancialService } = await import('./financial.js?manual-office-reload');
-ok((await officeBalanceCents(OFFICE_A.id, ReloadedFinancialService)) === 7800
+ok((await officeBalanceCents(OFFICE_A.id, ReloadedFinancialService)) === 6000
   && (await officeBalanceCents(OFFICE_B.id, ReloadedFinancialService)) === 3000,
   'manual company movements persist after a fresh FinancialService reload');
 
 console.log('\n— audit-preserving reversal —');
 await FinancialService.deleteManualOfficeBalanceEntry(U, depositA.reference_id);
-ok((await officeBalanceCents(OFFICE_A.id)) === -2200,
+ok((await officeBalanceCents(OFFICE_A.id)) === -4000,
   'reversing the manual deposit removes only that manual effect while receipt and withdrawal remain');
 const depositAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', depositA.reference_id))[0];
 ok(depositAudit.is_reversed === true && depositAudit.reversed_at && depositAudit.reversed_by === U,
   'manual company deletion follows the existing is_reversed audit convention without hard deletion');
 await FinancialService.deleteManualOfficeBalanceEntry(U, withdrawalA.reference_id);
-ok((await officeBalanceCents(OFFICE_A.id)) === 1800,
-  'reversing both manual A movements restores the automatic receipt-row-payment balance only');
+ok((await officeBalanceCents(OFFICE_A.id)) === 0,
+  'reversing both manual A movements restores the paid-row net company balance');
 await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'unpaid');
-ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 3000,
-  'receipt-row payment reversal and manual company movement remain independent');
+ok((await officeBalanceCents(OFFICE_A.id)) === -1800 && (await officeBalanceCents(OFFICE_B.id)) === 3000,
+  'payment reversal leaves the independent receipt-created company charge active');
 await FinancialService.deleteManualOfficeBalanceEntry(U, depositB.reference_id);
 ok((await officeBalanceCents(OFFICE_B.id)) === 0,
   'reversing B manual movement removes its company effect without affecting A');

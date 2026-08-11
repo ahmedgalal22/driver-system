@@ -340,6 +340,9 @@ console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE C — What is actually persisted (REAL FinancialService.createReceipt)
 // ════════════════════════════════════════════════════════════════════════════
+// The receipt-created company charge resolves the persisted row company.
+await DB.init();
+await DB.add('offices', { id: crypto.randomUUID(), username: U, name: 'شركة الأمل', phone: null }, { username: U });
 console.log('\n══ STAGE C — persisted IndexedDB records (REAL FinancialService) ══');
 const createRes = await FinancialService.createReceipt(U, servicePayload);
 const rid = createRes.receipt.id;

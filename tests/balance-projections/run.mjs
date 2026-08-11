@@ -86,58 +86,61 @@ const officeBalanceCents = async (officeId) =>
 console.log('\n— unpaid baseline —');
 ok((await vehicleBalanceCents(V1.id)) === 0 && (await vehicleBalanceCents(V2.id)) === 0,
   'unpaid rows leave both authoritative vehicle balances unchanged');
-ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'unpaid rows leave both company projections unchanged');
+ok((await officeBalanceCents(OFFICE_A.id)) === -3600 && (await officeBalanceCents(OFFICE_B.id)) === -2500,
+  'unpaid rows create independent company charge withdrawals while vehicle balances remain unchanged');
 ok((await FinancialService.getVehicleLedger(V1.id)).length === 0
-  && (await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.length === 0,
-  'unpaid rows produce no balance movements in either read projection');
+  && (await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.length === 2,
+  'unpaid rows produce company-only charge movements but no vehicle movements');
 
 console.log('\n— first paid row —');
 await FinancialService.setReceiptRowPaymentStatus(U, r1.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 1100 && (await vehicleBalanceCents(V2.id)) === 0,
   'unpaid → paid adds row.net to its vehicle only (11.00 to V1; V2 unchanged)');
-ok((await officeBalanceCents(OFFICE_A.id)) === 1800 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'unpaid → paid adds row.net + row.sarf to its company only (18.00 to A; B unchanged)');
+ok((await officeBalanceCents(OFFICE_A.id)) === -1800 && (await officeBalanceCents(OFFICE_B.id)) === -2500,
+  'unpaid → paid adds the existing payment deposit without removing independent company charges');
 const firstVehicleEntries = await FinancialService.getVehicleLedger(V1.id);
 const firstOffice = await FinancialService.getOfficeBalance(OFFICE_A.id);
 ok(firstVehicleEntries.length === 1 && firstVehicleEntries[0].amount === 11
   && firstVehicleEntries[0].reference_id === r1.row_id,
   'vehicle movement projection exposes the existing net deposit under row UUID r1');
-ok(firstOffice.entries.length === 1 && firstOffice.entries[0].amount === 18
-  && firstOffice.entries[0].reference_id === r1.row_id
-  && firstOffice.entries[0].vehicle_id === null,
-  'company movement projection exposes the existing net+sarf leg outside vehicle balance');
+ok(firstOffice.entries.length === 3
+  && firstOffice.entries.filter(entry => entry.reference_type === 'receipt_row_company_charge').length === 2
+  && firstOffice.entries.some(entry => entry.reference_type === 'receipt_row_payment'
+    && entry.amount === 18 && entry.reference_id === r1.row_id && entry.vehicle_id === null),
+  'company projection exposes both receipt-created charges and the independent paid-row net+sarf leg');
 
 console.log('\n— multiple independent paid rows —');
 await FinancialService.setReceiptRowPaymentStatus(U, r2.row_id, 'paid');
-ok((await vehicleBalanceCents(V1.id)) === 2200 && (await officeBalanceCents(OFFICE_A.id)) === 3600,
-  'multiple paid rows on the same vehicle/company accumulate (22.00 vehicle; 36.00 company)');
+ok((await vehicleBalanceCents(V1.id)) === 2200 && (await officeBalanceCents(OFFICE_A.id)) === 0,
+  'multiple paid rows on the same vehicle/company offset their independent creation charges');
 const officeAAfterTwo = await FinancialService.getOfficeBalance(OFFICE_A.id);
-const refsA = officeAAfterTwo.entries.map((entry) => entry.reference_id).sort();
-ok(officeAAfterTwo.entries.length === 2
-  && refsA.join(',') === [r1.row_id, r2.row_id].sort().join(','),
-  'identical receipt rows remain independently represented by their distinct row UUIDs');
+const chargeRefsA = officeAAfterTwo.entries
+  .filter(entry => entry.reference_type === 'receipt_row_company_charge')
+  .map(entry => entry.reference_id).sort();
+ok(officeAAfterTwo.entries.length === 4
+  && chargeRefsA.join(',') === [r1.row_id, r2.row_id].sort().join(','),
+  'identical receipt rows retain independent company-charge UUID traceability');
 
 await FinancialService.setReceiptRowPaymentStatus(U, r3.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await vehicleBalanceCents(V2.id)) === 2000,
   'different vehicles remain isolated (V1=22.00; V2=20.00)');
-ok((await officeBalanceCents(OFFICE_A.id)) === 3600 && (await officeBalanceCents(OFFICE_B.id)) === 2500,
-  'different companies remain isolated (A=36.00; B=25.00)');
+ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 0,
+  'different companies remain isolated while each paid-row deposit offsets only its own charge');
 
 console.log('\n— reversals —');
 await FinancialService.setReceiptRowPaymentStatus(U, r2.row_id, 'unpaid');
-ok((await vehicleBalanceCents(V1.id)) === 1100 && (await officeBalanceCents(OFFICE_A.id)) === 1800,
-  'paid → unpaid removes only that row UUID effect; sibling paid row remains active');
-ok((await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.length === 1
-  && (await FinancialService.getOfficeBalance(OFFICE_A.id)).entries[0].reference_id === r1.row_id,
-  'reversed company entry no longer contributes to the active company projection');
+ok((await vehicleBalanceCents(V1.id)) === 1100 && (await officeBalanceCents(OFFICE_A.id)) === -1800,
+  'paid → unpaid removes only that row payment effect while both receipt-created charges remain active');
+ok((await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.length === 3
+  && (await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.filter(entry => entry.reference_type === 'receipt_row_company_charge').length === 2,
+  'reversed payment entry no longer contributes while independent company charges remain in the projection');
 
 await FinancialService.setReceiptRowPaymentStatus(U, r1.row_id, 'unpaid');
 await FinancialService.setReceiptRowPaymentStatus(U, r3.row_id, 'unpaid');
 ok((await vehicleBalanceCents(V1.id)) === 0 && (await vehicleBalanceCents(V2.id)) === 0,
   'reversing all paid rows removes all vehicle effects through existing is_reversed entries');
-ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 0,
-  'reversing all paid rows removes all company effects through existing is_reversed entries');
+ok((await officeBalanceCents(OFFICE_A.id)) === -3600 && (await officeBalanceCents(OFFICE_B.id)) === -2500,
+  'reversing all paid rows leaves the independent receipt-created company charges active');
 
 console.log('\n— UI binding fingerprints —');
 ok(FINANCIAL_SRC.includes('async function getVehicleLedger(vehicle_id)')

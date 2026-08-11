@@ -64,11 +64,11 @@ const companyBalanceCents = async () =>
   Math.round((await FinancialService.getOfficeBalance(OFFICE.id)).balance * 100);
 
 console.log('\n— receipt-row baseline remains unchanged —');
-ok((await vehicleBalanceCents(V1.id)) === 0 && (await companyBalanceCents()) === 0,
-  'unpaid receipt row has no vehicle or company financial effect before manual operations');
+ok((await vehicleBalanceCents(V1.id)) === 0 && (await companyBalanceCents()) === -1800,
+  'unpaid receipt row creates only the independent company charge before manual operations');
 await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'paid');
-ok((await vehicleBalanceCents(V1.id)) === 1100 && (await companyBalanceCents()) === 1800,
-  'existing receipt-row payment still posts net to vehicle and net+sarf to company');
+ok((await vehicleBalanceCents(V1.id)) === 1100 && (await companyBalanceCents()) === 0,
+  'existing receipt-row payment still posts net to vehicle and offsets its independent net+sarf company charge');
 
 console.log('\n— manual deposit / withdrawal —');
 const deposit = await FinancialService.createManualVehicleBalanceEntry(U, {
@@ -85,7 +85,7 @@ ok(deposit.reference_type === 'manual_vehicle_balance'
   'manual deposit uses the dedicated existing vehicle_ledger convention');
 ok((await vehicleBalanceCents(V1.id)) === 11100 && (await vehicleBalanceCents(V2.id)) === 0,
   'manual deposit increases only its selected vehicle (receipt 11 + manual 100; V2 unchanged)');
-ok((await companyBalanceCents()) === 1800,
+ok((await companyBalanceCents()) === 0,
   'manual vehicle deposit does not affect the existing company balance projection');
 
 const withdrawal = await FinancialService.createManualVehicleBalanceEntry(U, {
@@ -125,15 +125,15 @@ ok((await vehicleBalanceCents(V1.id)) === -2900,
 const depositAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', deposit.reference_id))[0];
 ok(depositAudit.is_reversed === true && depositAudit.reversed_at && depositAudit.reversed_by === U,
   'manual deletion follows the existing audit-preserving is_reversed convention');
-ok((await companyBalanceCents()) === 1800,
+ok((await companyBalanceCents()) === 0,
   'manual reversal does not affect the separate company receipt-row-payment effect');
 
 await FinancialService.deleteManualVehicleBalanceEntry(U, withdrawal.reference_id);
 ok((await vehicleBalanceCents(V1.id)) === 1100,
   'reversing the manual withdrawal restores the balance to the receipt-row-payment baseline');
 await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'unpaid');
-ok((await vehicleBalanceCents(V1.id)) === 0 && (await companyBalanceCents()) === 0,
-  'existing receipt-row reversal remains unchanged after manual vehicle activity');
+ok((await vehicleBalanceCents(V1.id)) === 0 && (await companyBalanceCents()) === -1800,
+  'existing receipt-row payment reversal leaves the independent company charge unchanged after manual vehicle activity');
 
 console.log('\n— UI and domain isolation fingerprints —');
 ok(ENTITIES_SRC.includes('data-action="open-balance-entry"')

@@ -48,6 +48,8 @@ const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
 const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
 const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';
 const MANUAL_OFFICE_EFFECT = 'manual_office_balance';
+const RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE = 'receipt_row_company_charge';
+const RECEIPT_ROW_COMPANY_CHARGE_EFFECT = 'receipt_row_company_charge';
 const SALFA_RECOVERY_REF_TYPE = 'salfa_recovery';
 const SALFA_RECOVERY_EFFECT = 'salfa_recovery';
 
@@ -350,6 +352,74 @@ function _paymentReverseCommands(entries, username) {
   );
 }
 
+// ─── RECEIPT-ROW COMPANY CHARGES (Karta creation) ───────────────────────────
+// Every persisted receipt row with a resolved company creates one independent
+// company withdrawal. This is intentionally separate from receipt_row_payment:
+// it exists at receipt creation regardless of payment_status and remains linked
+// to the row UUID through the receipt lifecycle.
+async function _resolveReceiptRowCompany(row) {
+  const officeName = String(row.office || '').trim();
+  if (!officeName) return null;
+
+  const offices = await OfficeRepository.findByName(officeName);
+  const office = (offices || []).find(candidate => candidate && candidate.deleted_at === null);
+  if (!office) {
+    throw new Error(`[FinancialService] unknown office: ${officeName}`);
+  }
+  return office;
+}
+
+function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
+  const now = DateUtils.nowLocal();
+  const date = row.date || receiptDate || DateUtils.todayLocal();
+  const netCents = Number(row.net) || 0;
+  const sarfCents = Number(row.sarf) || 0;
+
+  return {
+    username,
+    owner_id: String(office.id),
+    owner_name: office.name || null,
+    client_id: String(office.id),
+    client_type: 'office',
+    client_name: office.name || null,
+    vehicle_id: null,
+    type: 'withdraw',
+    amount: netCents + sarfCents,
+    reference_type: RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE,
+    effect: RECEIPT_ROW_COMPANY_CHARGE_EFFECT,
+    reference_id: String(row.row_id),
+    date,
+    applied_at: now,
+    is_reversed: false,
+    note: `تحميل كارتة على الشركة — الصافي + الصرف (${office.name || ''})`,
+  };
+}
+
+async function _receiptRowCompanyChargeAddCommands(username, row, receiptDate) {
+  const office = await _resolveReceiptRowCompany(row);
+  if (!office) return [];
+  const payload = _receiptRowCompanyChargePayload(username, row, office, receiptDate);
+  return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
+}
+
+async function _getActiveReceiptRowCompanyCharges(rowId) {
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
+  return entries.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE
+    && entry.effect === RECEIPT_ROW_COMPANY_CHARGE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+function _receiptRowCompanyChargeReverseCommands(entries, username) {
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return entries.map(entry =>
+    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
+  );
+}
+
 async function createReceipt(username, data) {
   if (!username) throw new Error('[FinancialService:create] username is required.');
 
@@ -374,6 +444,15 @@ async function createReceipt(username, data) {
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
 
+  // Receipt creation charges each resolved company once per row UUID. These
+  // withdrawals are independent from the later paid/unpaid payment postings.
+  const companyChargeAddCommands = [];
+  for (const row of receiptRows) {
+    companyChargeAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
+      username, row, receiptRecord.receipt_date
+    )));
+  }
+
   // Payment postings: a newly created row enters paid only if explicitly
   // collected as such (form default is unpaid → normally zero commands here).
   // Fresh row UUIDs → no pre-existing postings can exist for these ids.
@@ -384,8 +463,14 @@ async function createReceipt(username, data) {
     }
   }
 
-  // Combine all commands
-  const allCommands = [receiptCommand, ...receiptRowCommands, ...paymentAddCommands];
+  // Combine all commands: header + rows + company charges + any paid-row
+  // payment postings commit atomically through the existing write boundary.
+  const allCommands = [
+    receiptCommand,
+    ...receiptRowCommands,
+    ...companyChargeAddCommands,
+    ...paymentAddCommands,
+  ];
 
   // Execute through WriteDataSource
   const results = await WriteDataSource.execute(allCommands, { username });
@@ -443,6 +528,23 @@ async function updateReceipt(username, id, data) {
     }
   }
 
+  // Row replacement mints fresh row UUIDs. Reverse every old receipt-created
+  // company charge into audit history, then create exactly one charge for every
+  // new row with a resolved company.
+  const companyChargeReverseCommands = [];
+  for (const oldRow of existingReceiptRows) {
+    const active = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
+    if (active.length > 0) {
+      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(active, username));
+    }
+  }
+  const companyChargeAddCommands = [];
+  for (const newRow of newReceiptRows) {
+    companyChargeAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
+      username, newRow, receiptRecord.receipt_date
+    )));
+  }
+
   // Prepare PersistenceCommands via ReceiptRepository
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
     receiptRecord, { username }, PersistenceCommandType.UPDATE
@@ -456,14 +558,16 @@ async function updateReceipt(username, id, data) {
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
 
-  // Combine all commands: header update → delete old rows → add new rows →
-  // payment effects (reverse replaced paid rows → post newly paid rows).
+  // Combine all commands: header update → replace rows → reverse/recreate both
+  // independent financial namespaces in one atomic write batch.
   const allCommands = [
     receiptCommand,
     ...deleteRowCommands,
     ...receiptRowCommands,
     ...paymentReverseCommands,
-    ...paymentAddCommands
+    ...companyChargeReverseCommands,
+    ...companyChargeAddCommands,
+    ...paymentAddCommands,
   ];
 
   // Execute through WriteDataSource
@@ -501,17 +605,27 @@ async function deleteReceipt(username, id) {
     }
   }
 
+  const companyChargeReverseCommands = [];
+  for (const row of existingRows) {
+    const active = await _getActiveReceiptRowCompanyCharges(row.row_id);
+    if (active.length > 0) {
+      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(active, username));
+    }
+  }
+
   const receiptRowDeleteCommands = existingRows.map(row =>
     ReceiptRepository.prepareReceiptRowOperations(
       [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
     )[0]
   );
 
-  // Combine all commands: delete rows → delete header → reverse payment effects
+  // Combine all commands: delete rows/header and reverse both independent
+  // receipt-row financial namespaces atomically.
   const allCommands = [
     ...receiptRowDeleteCommands,
     receiptDeleteCommand,
-    ...paymentReverseCommands
+    ...paymentReverseCommands,
+    ...companyChargeReverseCommands,
   ];
 
   // Execute through WriteDataSource
@@ -589,6 +703,7 @@ async function getOfficeBalance(office_id) {
     .filter(e => e.deleted_at === null
       && e.vehicle_id === null
       && ((e.reference_type === PAYMENT_REF_TYPE && e.effect === PAYMENT_EFFECT)
+        || (e.reference_type === RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE && e.effect === RECEIPT_ROW_COMPANY_CHARGE_EFFECT)
         || (e.reference_type === MANUAL_OFFICE_REF_TYPE && e.effect === MANUAL_OFFICE_EFFECT)))
     .sort((a, b) => {
       const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();

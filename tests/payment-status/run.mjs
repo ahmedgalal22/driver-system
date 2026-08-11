@@ -89,10 +89,16 @@ const payEntriesAll = async (rowId) =>
     .filter(e => e.reference_type === NAMESPACE.reference_type && e.effect === NAMESPACE.effect);
 const payEntriesActive = async (rowId) =>
   (await payEntriesAll(rowId)).filter(e => e.is_reversed === false && e.deleted_at === null);
-const ledgerCount = async () => (await DB.getAll(LEDGER)).length; // getAll excludes only soft-deleted
+// This suite counts only the receipt_row_payment namespace it owns; independent
+// receipt-created company charges are covered by their dedicated suite.
+const ledgerCount = async () => (await DB.getAll(LEDGER))
+  .filter(e => e.reference_type === NAMESPACE.reference_type && e.effect === NAMESPACE.effect).length;
 const vBalCents = async (vid) => Math.round((await FinancialService.rebuildVehicleBalance(vid)).balance * 100);
 const coBalCents = async (officeId) => (await DB.findByFields(LEDGER, { client_id: String(officeId) }))
-  .filter(e => e.is_reversed === false && e.deleted_at === null)
+  .filter(e => e.reference_type === NAMESPACE.reference_type
+    && e.effect === NAMESPACE.effect
+    && e.is_reversed === false
+    && e.deleted_at === null)
   .reduce((s, e) => s + (e.type === 'deposit' ? Number(e.amount) : -Number(e.amount)), 0);
 const liveRows = async (rid) => ReceiptReadRepository.getReceiptRowsByReceipt(rid);
 const sortedIds = (arr) => arr.map(e => e.id).sort().join(',');
@@ -357,15 +363,29 @@ ok((await liveRows(RD)).length === 0, 'T12: read path no longer surfaces the del
 
 // ══ GROUP 6 — atomic failure + legacy rows (T13/T14) ══
 console.log('\n— GROUP 6: atomic failure rolls everything back; legacy rows read unpaid (T13/T14) —');
-const fxBad = mkRow({ kartano: '90', office: 'شركة غير معروفة' });
-const rE = await FinancialService.createReceipt(U, mkReceipt([fxBad]));
-const RE = rE.receipt.id; // unpaid create: resolution is NOT attempted, so the unknown name persists fine
+// Receipt creation now rejects an unresolvable company before it can create an
+// independent receipt-row company charge. Insert one legacy-shaped unknown row
+// directly to retain the payment-transition failure test without bypassing that
+// new receipt-creation safety rule.
+const rE = await FinancialService.createReceipt(U, mkReceipt([mkRow({ kartano: '90', office: OFFICE_A.name })]));
+const RE = rE.receipt.id;
+const fxBad = {
+  row_id: uuid(), receipt_id: RE, username: U,
+  driver_id: null, vehicle_id: VID1, vehicle_plate: V1.plate,
+  driver_price: 10000, loading: '', destination: '', office: 'شركة غير معروفة',
+  advance: 0, net: NET_CENTS, sarf: SARF_CENTS,
+  kartano: '90-unknown', date: '2026-08-10', driver_name: null, type: 'نشا',
+  weight: null, weight2: null, deficit: null, weightTotal: null,
+  officeAmount: 0, discount: 0, add: 0, row_order: null,
+  payment_status: 'unpaid',
+};
+await DB.add('receipt_rows', fxBad, { username: U });
 const countBeforeFail = await ledgerCount();
 const v1BeforeFail = await vBalCents(VID1);
 let failErr = '';
 try { await FinancialService.setReceiptRowPaymentStatus(U, fxBad.row_id, 'paid'); } catch (e) { failErr = e.message; }
 ok(/unknown office|لا يمكن ترحيل|شركة/.test(failErr || ''), `T13: toggle to paid with an unregistered company fails LOUDLY ("${String(failErr).slice(0, 60)}…")`);
-ok((await liveRows(RE))[0].payment_status === 'unpaid', 'T13: the failed transition did NOT mark the row paid');
+ok((await liveRows(RE)).find(r => String(r.row_id) === String(fxBad.row_id)).payment_status === 'unpaid', 'T13: the failed transition did NOT mark the row paid');
 ok((await ledgerCount()) === countBeforeFail && (await payEntriesAll(fxBad.row_id)).length === 0,
   'T13: the failed transition committed NOTHING (no partial postings) — one atomic unit');
 ok((await vBalCents(VID1)) === v1BeforeFail, 'T13: vehicle balance completely unchanged by the failure');

@@ -90,8 +90,8 @@ ok(ENTITIES_SRC.includes("if (noteEl) noteEl.value = 'استرداد سلفة';"
   'recovery note UI defaults to استرداد سلفة and is not marked required');
 
 console.log('\n— receipt / vehicle / company / Karta baseline —');
-ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800,
-  'existing paid receipt-row posting remains vehicle=net 11 and company=net+sarf 18');
+ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 0,
+  'existing paid receipt-row posting remains vehicle=net 11 while payment deposit offsets its independent company charge');
 ok((await ReceiptRepository.getRowById(receiptRow.row_id)).payment_status === 'paid',
   'receipt-row payment status baseline is paid');
 const kartaBefore = await kartaCount();
@@ -136,7 +136,7 @@ ok(recoveryOne.reference_type === 'salfa_recovery'
   'recovery with an empty note succeeds and persists the default استرداد سلفة note');
 ok((await driverBalanceCents(DRIVER_A.id)) === -6000 && (await driverBalanceCents(DRIVER_B.id)) === 0,
   'recovery moves driver A balance from -100 to -60 without affecting driver B');
-ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800,
+ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 0,
   'recovery does not affect vehicle or company balances');
 ok((await ReceiptRepository.getRowById(receiptRow.row_id)).payment_status === 'paid'
   && (await kartaCount()) === kartaBefore,
@@ -177,7 +177,7 @@ ok((await driverBalanceCents(DRIVER_A.id)) === -9500,
 await FinancialService.deleteDriverSalfaRecovery(U, recoveryThree.reference_id);
 ok((await driverBalanceCents(DRIVER_A.id)) === -10000,
   'reversing all recoveries restores the unchanged original salfa debt state');
-ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 1800
+ok((await vehicleBalanceCents()) === 1100 && (await officeBalanceCents()) === 0
   && (await ReceiptRepository.getRowById(receiptRow.row_id)).payment_status === 'paid'
   && (await kartaCount()) === kartaBefore,
   'recovery reversals remain isolated from receipt, vehicle, company, and Karta domains');

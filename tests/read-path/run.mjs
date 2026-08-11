@@ -203,15 +203,17 @@ ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (fixture rows c
 // above is a kept, separate surface (verified by the summary asserts).
 const headerR1 = await ReceiptRepository.getById(R1); // kept for GROUP 5
 
-// loud failure on unknown office — preserved semantics
-await FinancialService.createReceipt(U, hdr({ total: 100,
-  rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
-const badReceipts = await ReceiptRepository.getAll(U);
-const badProjection = await _loadReceiptRowsProjection(badReceipts);
+// An unknown row company now fails before receipt creation so no company charge
+// can be associated with an invented office.
+const receiptCountBeforeUnknown = (await ReceiptRepository.getAll(U)).length;
 let threw = null;
-try { _officeSummaryLoop(badReceipts, badProjection, nameMap, offices); }
-catch (e) { threw = e.message; }
-ok(/\[OfficesService\] unknown office/.test(threw || ''), `unknown-office loud failure preserved ("${threw}")`);
+try {
+  await FinancialService.createReceipt(U, hdr({ total: 100,
+    rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
+} catch (e) { threw = e.message; }
+ok(/unknown office/.test(threw || '')
+  && (await ReceiptRepository.getAll(U)).length === receiptCountBeforeUnknown,
+  `unknown-office receipt creation fails before persistence ("${threw}")`);
 
 // ─── GROUP 4: static assertions on the REAL modified sources ───────────────
 console.log('\n— GROUP 4: static source assertions (real dashboard.js / offices.js text) —');

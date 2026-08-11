@@ -60,6 +60,7 @@ const entitiesScope = new Function(
 const { createOwner, updateOwner, addAccount, resolveVehicle } = entitiesScope;
 
 await DB.init();
+await DB.add('offices', { id: uuid(), username: U, name: 'شركة أ', phone: null }, { username: U });
 
 // ══ GROUP 1 — owner registry is number-keyed (real createOwner/updateOwner) ══
 console.log('\n— GROUP 1: owner registry (number-keyed identity) —');

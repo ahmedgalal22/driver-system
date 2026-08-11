@@ -15,6 +15,13 @@ let failures = 0;
 const ok = (cond, label) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`); if (!cond) failures++; };
 const uuid = () => crypto.randomUUID();
 
+// Receipt creation now resolves the row company before its atomic company-side
+// charge is written, so all fixture companies must exist as active offices.
+await DB.init();
+for (const name of ['شركة أ', 'شركة ب', 'شركة ج']) {
+  await DB.add('offices', { id: uuid(), username: U, name, phone: null }, { username: U });
+}
+
 function makePayload(over = {}) {
   const client_id = over.client_id || 'owner-1';
   return {
