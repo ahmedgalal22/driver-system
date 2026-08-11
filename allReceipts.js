@@ -363,6 +363,8 @@ function summarizeReceipts(records) {
       acc.weight += sumVisibleRowWeight(rows);
       acc.noloon += sumVisibleRowField(rows, 'noloon');
       acc.ohda += sumVisibleRowField(rows, 'ohda');
+      acc.net += sumVisibleRowField(rows, 'net');
+      acc.sarf += sumVisibleRowField(rows, 'sarf');
       return acc;
     }
 
@@ -374,10 +376,12 @@ function summarizeReceipts(records) {
     dataRows.forEach((row) => {
       acc.noloon += toNumber(row.noloon);
       acc.ohda += toNumber(row.ohda);
+      acc.net += toNumber(row.net);
+      acc.sarf += toNumber(row.sarf);
     });
     acc.weight += sumVisibleRowWeight(visible);
     return acc;
-  }, { count: 0, weight: 0, noloon: 0, ohda: 0 });
+  }, { count: 0, weight: 0, noloon: 0, ohda: 0, net: 0, sarf: 0 });
 }
 
 
@@ -484,6 +488,8 @@ function renderSummaryCards(_tab, _preFiltered) {
         ${summaryCard('⚖️ إجمالي الوزن', fmtMoney(sums.weight), 'summary-card--green')}
         ${summaryCard('🚛 إجمالي النولون', fmtMoney(sums.noloon), 'summary-card--cyan')}
         ${summaryCard('🏦 إجمالي العهدة', fmtMoney(sums.ohda), 'summary-card--emerald')}
+        ${summaryCard('💜 إجمالي الصافي', fmtMoney(sums.net), 'summary-card--violet')}
+        ${summaryCard('🟠 إجمالي الصرف', fmtMoney(sums.sarf), 'summary-card--orange')}
       </div>
     `;
   const container = document.getElementById('receiptsSummaryContainer');
