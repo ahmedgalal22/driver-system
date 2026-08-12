@@ -42,6 +42,10 @@ EOF
 cat > "$W/dashboard.js" <<'EOF'
 export async function initDashboardPage() {}
 EOF
+cat > "$W/loadPrices.js" <<'EOF'
+export function initLoadPricesPage() {}
+export async function loadLoadPrices() {}
+EOF
 
 cd "$W"
 node run.mjs

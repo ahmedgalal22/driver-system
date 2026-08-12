@@ -27,6 +27,8 @@ import { DB } from './database.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { OfficeRepository } from './services/officeRepository.js';
+import { LoadPriceRepository } from './services/loadPriceRepository.js';
+import { canonicalizeRoutePlace, canonicalRouteKey, displayRoutePlace } from './services/routeNameNorm.js';
 import { WriteDataSource } from './services/writeDataSource.js';
 import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
@@ -420,6 +422,40 @@ function _receiptRowCompanyChargeReverseCommands(entries, username) {
   );
 }
 
+// ─── LOAD PRICE ROUTE DISCOVERY ──────────────────────────────────────────────
+// Reference/master-data only. It neither posts financial entries nor changes a
+// user-managed price. Duplicate rows in one receipt collapse to one route key.
+async function _loadPriceDiscoveryCommands(username, receiptRows) {
+  const candidates = new Map();
+
+  for (const row of receiptRows) {
+    const loading = displayRoutePlace(row.loading);
+    const destination = displayRoutePlace(row.destination);
+    const canonical_route = canonicalRouteKey(loading, destination);
+    if (!canonical_route || candidates.has(canonical_route)) continue;
+
+    candidates.set(canonical_route, {
+      id: _uuid(),
+      username,
+      loading,
+      destination,
+      canonical_loading: canonicalizeRoutePlace(loading),
+      canonical_destination: canonicalizeRoutePlace(destination),
+      canonical_route,
+      price: 0,
+    });
+  }
+
+  const commands = [];
+  for (const route of candidates.values()) {
+    const existing = await LoadPriceRepository.findActiveByCanonicalRoute(route.canonical_route);
+    if (existing) continue;
+    commands.push(LoadPriceRepository.prepareCreate(route, { username }));
+  }
+
+  return commands;
+}
+
 async function createReceipt(username, data) {
   if (!username) throw new Error('[FinancialService:create] username is required.');
 
@@ -443,6 +479,11 @@ async function createReceipt(username, data) {
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(receiptRecord, { username });
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
+
+  // New routes are master-data discoveries. Include their commands in the same
+  // receipt write batch so receipt rows and newly discovered routes commit or
+  // roll back together.
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, receiptRows);
 
   // Receipt creation charges each resolved company once per row UUID. These
   // withdrawals are independent from the later paid/unpaid payment postings.
@@ -468,6 +509,7 @@ async function createReceipt(username, data) {
   const allCommands = [
     receiptCommand,
     ...receiptRowCommands,
+    ...loadPriceCommands,
     ...companyChargeAddCommands,
     ...paymentAddCommands,
   ];
@@ -493,6 +535,10 @@ async function updateReceipt(username, id, data) {
 
   // Build updated ReceiptRow entities
   const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
+
+  // Discover only missing routes from the replacement rows; existing routes
+  // retain their manually managed prices.
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, newReceiptRows);
 
   // Assemble the full persistence record ONCE (Update semantics:
   // notes is only patched when provided).
@@ -564,6 +610,7 @@ async function updateReceipt(username, id, data) {
     receiptCommand,
     ...deleteRowCommands,
     ...receiptRowCommands,
+    ...loadPriceCommands,
     ...paymentReverseCommands,
     ...companyChargeReverseCommands,
     ...companyChargeAddCommands,

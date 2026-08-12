@@ -11,6 +11,7 @@ import { OfficesModule, attachOfficesPageListeners, initOfficesPage, loadOffices
 import { initHomePage } from './home.js';
 import { initSidebarLayout } from './sidebarLayout.js';
 import { initDashboardPage } from './dashboard.js';
+import { initLoadPricesPage, loadLoadPrices } from './loadPrices.js';
 import './entities.js';
 import { DateUtils } from './dateUtils.js';
 
@@ -26,6 +27,7 @@ const PAGE_MAP = {
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
   officeDetailsPage: 'officeDetailsPage',
+  loadPrices: 'loadPricesPage',
 };
 const PAGE_KEY_NORMALIZE = {
   homePage: 'homePage',
@@ -39,6 +41,7 @@ const PAGE_KEY_NORMALIZE = {
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
   officeDetailsPage: 'officeDetailsPage',
+  loadPrices: 'loadPrices',
 };
 
 function _readLastPage() {
@@ -116,6 +119,9 @@ async function showPage(pageName) {
   if (pageName === 'allReceipts' || targetId === 'allReceiptsPage') {
     await initAllReceiptsPage();
   }
+  if (pageName === 'loadPrices' || targetId === 'loadPricesPage') {
+    await loadLoadPrices();
+  }
   if (pageName === 'dashboardPage' || targetId === 'dashboardPage') {
     if (role === 'admin') {
       await initDashboardPage();
@@ -172,6 +178,7 @@ async function boot() {
     _bindLogout();
     initReceiptPage();
     await initAllReceiptsPage();
+    initLoadPricesPage();
     initOfficesPage();
     attachOwnersPageListeners();
     attachOfficesPageListeners();

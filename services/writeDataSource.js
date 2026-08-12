@@ -10,6 +10,7 @@ const AGGREGATE_STORES = Object.freeze({
   Receipt    : 'receipts',
   ReceiptRow : 'receipt_rows',
   Ledger     : 'vehicle_ledger',
+  LoadPrice  : 'loadPrices',
 });
 
 function _resolveStore(aggregate) {

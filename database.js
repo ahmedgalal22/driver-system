@@ -31,7 +31,7 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 14;             // v14: Treasury (الخزنة) subsystem removed — treasury + mainCapitalTreasury stores dropped (clean reset); v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
+  const DB_VERSION = 15;             // v15: Load Prices master-data store added (clean reset); v14: Treasury (الخزنة) subsystem removed — treasury + mainCapitalTreasury stores dropped (clean reset); v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
 
   /**
    * STORES schema.
@@ -88,6 +88,21 @@ const DB = (() => {
       autoIncrement: true,
       indexes: [
         { name: 'by_name',    keyPath: 'name',    options: { unique: true } },
+        { name: 'by_deleted', keyPath: 'deleted_at' },
+      ],
+    },
+
+    /**
+     * loadPrices: global route/price reference records.
+     * canonical_route exists only while a route is active. Soft deletion clears
+     * it so the same route can later be rediscovered at price zero.
+     */
+    loadPrices: {
+      name: 'loadPrices',
+      keyPath: 'id',
+      autoIncrement: false,
+      indexes: [
+        { name: 'by_canonical_route', keyPath: 'canonical_route', options: { unique: true } },
         { name: 'by_deleted', keyPath: 'deleted_at' },
       ],
     },

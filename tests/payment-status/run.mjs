@@ -585,7 +585,7 @@ ok(!/rebuildVehicleBalance\(|vehicle_ledger/.test(RECEIPTS_SRC) && !/rebuildVehi
   'census: UI modules NEVER touch balances directly (no posting math outside financial.js)');
 
 // KEEP / REMOVED contracts
-ok(DATABASE_SRC.includes('const DB_VERSION = 14;'), 'KEEP: DB schema version stays 14 (payment_status is additive row data — no schema churn)');
+ok(DATABASE_SRC.includes('const DB_VERSION = 15;'), 'KEEP: DB schema version is 15 after approved Load Prices store addition');
 // database.js documents the removals in its version-history comments — the census
 // for it must run on CODE ONLY (comments stripped), a structural not textual check.
 const databaseCodeOnly = DATABASE_SRC

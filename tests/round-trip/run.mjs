@@ -153,8 +153,8 @@ ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.t
   'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
 ok(!/name:\s*'counters'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
-ok(DATABASE_SRC.includes('const DB_VERSION = 14;'),
-  'schema bumped to v14 — clean reset purges removed Treasury stores (treasury / mainCapitalTreasury)');
+ok(DATABASE_SRC.includes('const DB_VERSION = 15;'),
+  'schema bumped to v15 for the approved Load Prices store; clean reset still purges removed Treasury stores');
 ok(!/name:\s*'treasury'/.test(DATABASE_SRC) && !/name:\s*'mainCapitalTreasury'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (Treasury phase, schema): treasury + mainCapitalTreasury object stores dropped — no Treasury store exists');
 ok(!/by_entry_type|by_account_type|entry_type|account_type/.test(DATABASE_SRC),
