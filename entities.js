@@ -1063,7 +1063,7 @@ async function _loadDriverKartasTab(driverId) {
       <div class="card p-4"><div class="text-xs text-muted">إجمالي الكارتات</div><div class="text-2xl font-bold">${summary.total_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">غير مدفوعة</div><div class="text-2xl font-bold text-red-600">${summary.unpaid_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">مدفوعة بالكامل</div><div class="text-2xl font-bold text-green-600">${summary.paid_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
+      <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div id="kartaFilteredTotalPrice" class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
     `;
 
     // Table rows — rendered through the Phase 8 in-memory status+search filter
@@ -1096,6 +1096,19 @@ function _syncKartaFilterButtons() {
   });
 }
 
+function _sumKartaPrices(kartas) {
+  const cents = (kartas || []).reduce(
+    (sum, karta) => sum + Money.toCents(karta?.price ?? 0),
+    0
+  );
+  return Money.toDecimal(cents);
+}
+
+function _renderFilteredKartaPriceTotal(kartas) {
+  const totalEl = document.getElementById('kartaFilteredTotalPrice');
+  if (totalEl) totalEl.textContent = _fmt(_sumKartaPrices(kartas));
+}
+
 /**
  * Phase 8 — status filter + search text, composed ENTIRELY in memory over
  * _currentKartas (no FinancialService call, no IndexedDB query, no writes).
@@ -1113,6 +1126,7 @@ function _applyKartaFilters(tbody, driverId) {
     return true;
   });
   _renderKartaTable(filtered, target, driverId);
+  _renderFilteredKartaPriceTotal(filtered);
   _syncKartaFilterButtons();
 }
 
