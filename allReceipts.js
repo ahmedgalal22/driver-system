@@ -33,6 +33,7 @@ function createFilterState() {
     global: '',
     owner: '',
     company: '',
+    driver: '',
     date: '',
     vehicle: '',
     karta: '',
@@ -239,6 +240,7 @@ function hasActiveRowFilters(filters) {
     String(filters.global || '').trim()
     || String(filters.owner || '').trim()
     || String(filters.company || '').trim()
+    || String(filters.driver || '').trim()
     || String(filters.vehicle || '').trim()
     || String(filters.karta || '').trim()
     || String(filters.type || '').trim()
@@ -249,6 +251,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
   const global = String(filters.global || '').trim().toLowerCase();
   const owner = String(filters.owner || '').trim().toLowerCase();
   const company = String(filters.company || '').trim().toLowerCase();
+  const driver = String(filters.driver || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
@@ -258,7 +261,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
     if (global && hay.includes(global)) return true;
     if (vehicle && rowContains(row.vehicleName, vehicle)) return true;
     // If only record-level filters are active (number), show separators
-    if (!global && !owner && !company && !vehicle && !karta && !typeFilter) return true;
+    if (!global && !owner && !company && !driver && !vehicle && !karta && !typeFilter) return true;
     return false;
   }
 
@@ -272,6 +275,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
   if (global && !hay.includes(global)) return false;
   if (owner && !rowContains(row.owner_name, owner) && !rowContains(record.owner_name || record.client_name, owner)) return false;
   if (company && !rowContains(row.office, company) && !rowContains(record.company_name, company)) return false;
+  if (driver && !rowContains(row.data || row.driver, driver)) return false;
   if (vehicle && !rowContains(row.car || row.carNo || row.vehicle_plate, vehicle)) return false;
   if (karta && !rowContains(row.kartano || row.kartaNo || row.karta, karta)) return false;
   if (typeFilter && !rowContains(row.type, typeFilter)) return false;
@@ -310,6 +314,7 @@ function getReceiptCardsFiltered() {
   const global = String(filters.global || '').trim().toLowerCase();
   const owner = String(filters.owner || '').trim().toLowerCase();
   const company = String(filters.company || '').trim().toLowerCase();
+  const driver = String(filters.driver || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
@@ -340,6 +345,7 @@ function getReceiptCardsFiltered() {
       if (global && !haystack.includes(global)) return false;
       if (owner && !rowContains(record.owner_name || record.client_name, owner) && !rows.some((row) => rowContains(row.owner_name, owner))) return false;
       if (company && !rowContains(record.company_name, company) && !rows.some((row) => rowContains(row.office, company))) return false;
+      if (driver && !rows.some((row) => rowContains(row.data || row.driver, driver))) return false;
       if (vehicle && !rowContains(record.vehicle_id, vehicle) && !rows.some((row) => rowContains(row.carNo || row.car || row.vehicle_plate, vehicle))) return false;
       if (karta && !rows.some((row) => rowContains(row.kartaNo || row.kartano || row.karta, karta))) return false;
       if (typeFilter && !rows.some((row) => rowContains(row.type, typeFilter))) return false;
@@ -446,6 +452,9 @@ function renderReceiptsControls() {
         <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم الشركة" list="receiptCompaniesDatalist" />
       </label>
       <label>
+        <input data-filter-tab="receipts" data-filter-key="driver" type="text" value="${esc(f.driver)}" placeholder="اسم السائق" list="receiptDriversDatalist" />
+      </label>
+      <label>
         <input data-filter-tab="receipts" data-filter-key="vehicle" type="text" value="${esc(f.vehicle)}" placeholder="رقم المركبة" list="receiptVehiclesDatalist" />
       </label>
       <label>
@@ -473,6 +482,7 @@ function renderReceiptsControls() {
     </div>
     <datalist id="receiptOwnersDatalist"></datalist>
     <datalist id="receiptCompaniesDatalist"></datalist>
+    <datalist id="receiptDriversDatalist"></datalist>
     <datalist id="receiptVehiclesDatalist"></datalist>
     <datalist id="receiptKartasDatalist"></datalist>
   `;
@@ -626,6 +636,7 @@ function renderDatalists() {
   const receipts = STATE.receipts;
   setDatalist('receiptOwnersDatalist', receipts.map((r) => r.owner_name || r.client_name).filter(Boolean));
   setDatalist('receiptCompaniesDatalist', receipts.map((r) => r.company_name).filter(Boolean));
+  setDatalist('receiptDriversDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.data || row.driver)).filter(Boolean));
   setDatalist('receiptVehiclesDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.car || row.carNo || row.vehicle_plate)).filter(Boolean));
   setDatalist('receiptKartasDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.kartaNo)).filter(Boolean));}
 
