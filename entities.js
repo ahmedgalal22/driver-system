@@ -321,6 +321,7 @@ function _renderShell() {
                 <tr>
                   <th style="color:#fff;">رقم المركبة</th>
                   <th style="color:#fff;">كارتات</th>
+                  <th style="color:#fff;">الرصيد</th>
                   <th style="color:#fff;">إجراءات</th>
                 </tr>
               </thead>
@@ -554,7 +555,16 @@ async function _getKartaCount(clientId) {
   );
 }
 
-function _buildClientRow(client, kartaCount, kind) {
+async function _getVehicleOwnerListBalance(owner) {
+  const plate = String(owner?.vehicle_number || '').trim();
+  if (!plate) return 0;
+  const candidates = await ClientRepository.getVehiclesByPlate(plate);
+  const vehicle = (candidates || []).find(v => String(v.owner_id || '') === String(owner.id)) || null;
+  if (!vehicle) return 0;
+  return (await FinancialService.rebuildVehicleBalance(vehicle.id)).balance;
+}
+
+function _buildClientRow(client, kartaCount, balance, kind) {
   const vNumber = client.vehicle_number || '';
   return `
     <tr data-client-number="${(vNumber || '').toLowerCase()}">
@@ -562,6 +572,7 @@ function _buildClientRow(client, kartaCount, kind) {
         ${vNumber || '—'}
       </td>
       <td class="text-center">${kartaCount > 0 ? '<span class="ent-karta-badge">' + kartaCount + '</span>' : '—'}</td>
+      <td class="${_balanceClass(balance)} text-center">${_fmt(balance)}</td>
       <td>
         <button type="button" data-action="edit-account" data-id="${client.id}" data-kind="owner" class="ent-action-btn ent-action-btn--edit" title="تعديل">✏️</button>
         <button type="button" data-action="delete-account" data-id="${client.id}" data-kind="owner" class="ent-action-btn ent-action-btn--delete" title="حذف">🗑️</button>
@@ -613,15 +624,19 @@ async function loadOwners() {
       vehicle_number: o.vehicle_number || '',
       updated_at: o.updated_at ?? o.created_at ?? 0,
     }));
-    const ownerKartas = await Promise.all(ownerList.map(o => _getKartaCount(o.id)));
+    const ownerStats = await Promise.all(ownerList.map(async (owner) => ({
+      kartaCount: await _getKartaCount(owner.id),
+      balance: await _getVehicleOwnerListBalance(owner),
+    })));
     const sortedOwners = [...ownerList].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 
     if (sortedOwners.length === 0) {
-      ownersTbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
+      ownersTbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center p-6">لا توجد بيانات</td></tr>';
     } else {
       ownersTbody.innerHTML = sortedOwners.map((client) => {
         const idx = ownerList.indexOf(client);
-        return _buildClientRow(client, ownerKartas[idx], 'owner');
+        const stats = ownerStats[idx];
+        return _buildClientRow(client, stats.kartaCount, stats.balance, 'owner');
       }).join('');
     }
   } else {
