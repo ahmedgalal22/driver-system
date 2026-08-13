@@ -722,6 +722,31 @@ function _renderHamolaTable(rows) {
 // The renderer preserves the existing layout. Its entries come from the
 // read-only FinancialService office projection, including receipt-row-payment
 // company legs and explicit manual office movements.
+async function _resolveOfficeBalanceReferences(entries) {
+  const companyChargeIds = [...new Set((entries || [])
+    .filter(entry => entry.reference_type === 'receipt_row_company_charge'
+      && entry.effect === 'receipt_row_company_charge'
+      && entry.reference_id)
+    .map(entry => String(entry.reference_id)))];
+
+  if (companyChargeIds.length === 0) return entries || [];
+
+  const rows = await Promise.all(companyChargeIds.map(async (rowId) => {
+    try { return await ReceiptRepository.getRowById(rowId); } catch (_) { return null; }
+  }));
+  const kartanoByRowId = new Map(rows
+    .filter(row => row?.row_id && String(row.kartano || '').trim())
+    .map(row => [String(row.row_id), String(row.kartano).trim()]));
+
+  return (entries || []).map(entry => {
+    const kartano = entry.reference_type === 'receipt_row_company_charge'
+      && entry.effect === 'receipt_row_company_charge'
+      ? kartanoByRowId.get(String(entry.reference_id))
+      : '';
+    return kartano ? { ...entry, reference_display: `إضافة كارتة: ${kartano}` } : entry;
+  });
+}
+
 function _renderOfficeBalance(entries) {
   function entryDate(entry) {
     return entry.date || entry.applied_at || entry.created_at || '';
@@ -767,7 +792,7 @@ function _renderOfficeBalance(entries) {
         <td>${entryTypeLabel(entry)}</td>
         <td>${delta < 0 ? '-' : ''}${_fmt(Math.abs(delta))}</td>
         <td>${_fmt(balance)}</td>
-        <td>${_text(entry.reference_number || entry.reference_id || '-')}</td>
+        <td>${_text(entry.reference_display || entry.reference_number || entry.reference_id || '-')}</td>
       </tr>
     `).join('')
     : `<tr><td colspan="5" class="text-center text-muted p-4">لا توجد حركات</td></tr>`;
@@ -897,7 +922,8 @@ async function _renderDetailsContent(office) {
 
   if (_activeDetailsTab === 'balance') {
     const balanceData = await FinancialService.getOfficeBalance(office.id);
-    content.innerHTML = _renderOfficeBalance(balanceData.entries);
+    const displayEntries = await _resolveOfficeBalanceReferences(balanceData.entries);
+    content.innerHTML = _renderOfficeBalance(displayEntries);
     return;
   }
 

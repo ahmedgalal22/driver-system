@@ -151,8 +151,9 @@ ok(ENTITIES_SRC.includes('FinancialService.rebuildVehicleBalance(vehicle.id)')
   && ENTITIES_SRC.includes('const ledgerHtml = _renderLedger(client, financials.ledger);'),
   'Vehicle/Owner Details binds its balance and movement UI to the existing vehicle ledger projections');
 ok(OFFICES_SRC.includes('const balanceData = await FinancialService.getOfficeBalance(office.id);')
-  && OFFICES_SRC.includes('content.innerHTML = _renderOfficeBalance(balanceData.entries);'),
-  'Office Details binds the existing Company Balance layout to the office ledger projection');
+  && OFFICES_SRC.includes('const displayEntries = await _resolveOfficeBalanceReferences(balanceData.entries);')
+  && OFFICES_SRC.includes('content.innerHTML = _renderOfficeBalance(displayEntries);'),
+  'Office Details binds the existing Company Balance layout to the office ledger projection with display-only references');
 ok(!FINANCIAL_SRC.includes("STORE.LEDGER, 'read_only_company_ledger'")
   && !FINANCIAL_SRC.includes('company_ledger'),
   'no second company ledger/store or duplicate posting mechanism was introduced');
