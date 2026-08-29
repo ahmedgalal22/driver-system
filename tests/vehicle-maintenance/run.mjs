@@ -177,11 +177,26 @@ const ordinaryManual = await FinancialService.createManualVehicleBalanceEntry(U,
 ok(ordinaryManual.type === 'deposit' && !('maintenance_type' in ordinaryManual)
    && !('maintenance_quantity' in ordinaryManual) && (await cents(V2.id)) === -10300,
   'existing manual vehicle deposits continue unchanged when maintenance metadata is absent');
-ok(ENTITIES_SRC.includes('الحركات المالية') && ENTITIES_SRC.includes('الصيانة')
-   && ENTITIES_SRC.includes('vehicleDetailsTabFinancial') && ENTITIES_SRC.includes('vehicleDetailsTabMaintenance')
-   && ENTITIES_SRC.includes('classList.toggle(\'hidden\', !isFinancial)')
-   && ENTITIES_SRC.includes('classList.toggle(\'hidden\', isFinancial)'),
-  'Vehicle Details uses real mutually exclusive Financial Movements and Maintenance tabs');
+ok(ENTITIES_SRC.includes('الحركات المالية') && ENTITIES_SRC.includes('الصيانة') && ENTITIES_SRC.includes('المركبات')
+   && ENTITIES_SRC.includes('vehicleDetailsTabFinancial')
+   && ENTITIES_SRC.includes('vehicleDetailsTabMaintenance')
+   && ENTITIES_SRC.includes('vehicleDetailsTabVehicles')
+   && ENTITIES_SRC.includes("classList.toggle('hidden', !isFinancial)")
+   && ENTITIES_SRC.includes("classList.toggle('hidden', !isMaintenance)")
+   && ENTITIES_SRC.includes("classList.toggle('hidden', !isVehicles)"),
+  'Vehicle Details uses three real mutually exclusive Financial Movements, Maintenance, and Vehicles tabs');
+ok(ENTITIES_SRC.includes("const vehicle_id = String(_selectedVehicle?.id || '');")
+   && ENTITIES_SRC.includes('_getVehicleDetailsFinancials(vehicle.id)')
+   && ENTITIES_SRC.includes("showOwnerDetails(viewBtn.dataset.id, 'owner', viewBtn.dataset.vehicleId || null)")
+   && !ENTITIES_SRC.includes('maintenanceVehicleFilter')
+   && !ENTITIES_SRC.includes('vehicleMaintenanceVehicle')
+   && !ENTITIES_SRC.includes('vehicleBalanceEntryVehicle'),
+  'current Vehicle Details context supplies the vehicle_id automatically; neither maintenance nor manual balance forms show a vehicle selector');
+ok(ENTITIES_SRC.includes('<section id="vehicleDetailsTabVehicles" class="hidden" role="tabpanel">')
+   && ENTITIES_SRC.includes('${relatedHtml}')
+   && ENTITIES_SRC.includes('vehicleDetailsTabFinancial')
+   && ENTITIES_SRC.includes('vehicleDetailsTabMaintenance'),
+  'Vehicles content is isolated inside its own tab panel, not rendered below financial or maintenance content');
 ok(['جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت'].every(type => ENTITIES_SRC.includes(`'${type}'`))
    && ENTITIES_SRC.includes("e.target.id === 'vehicleMaintenanceType'")
    && ENTITIES_SRC.includes('select-maintenance-type'),

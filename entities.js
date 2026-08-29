@@ -212,6 +212,7 @@ window.OwnersModule = OwnersModule;
 
 let _ownersActiveSubTab = 'vehicles';
 let _selectedClient = null;
+let _selectedVehicle = null;
 let _editingDriverId = null;
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 function _getCurrentDriverId() {
@@ -566,20 +567,23 @@ async function _getKartaCount(clientId) {
   );
 }
 
-async function _getVehicleOwnerListBalance(owner) {
+async function _getVehicleOwnerListFinancials(owner) {
   const plate = String(owner?.vehicle_number || '').trim();
-  if (!plate) return 0;
+  if (!plate) return { vehicle_id: null, balance: 0 };
   const candidates = await ClientRepository.getVehiclesByPlate(plate);
   const vehicle = (candidates || []).find(v => String(v.owner_id || '') === String(owner.id)) || null;
-  if (!vehicle) return 0;
-  return (await FinancialService.rebuildVehicleBalance(vehicle.id)).balance;
+  if (!vehicle) return { vehicle_id: null, balance: 0 };
+  return {
+    vehicle_id: String(vehicle.id),
+    balance: (await FinancialService.rebuildVehicleBalance(vehicle.id)).balance,
+  };
 }
 
-function _buildClientRow(client, kartaCount, balance, kind) {
+function _buildClientRow(client, kartaCount, balance, kind, vehicleId = null) {
   const vNumber = client.vehicle_number || '';
   return `
     <tr data-client-number="${(vNumber || '').toLowerCase()}">
-      <td data-action="view-client" data-id="${client.id}" data-type="owner" class="ent-name-cell ent-name-cell--blue">
+      <td data-action="view-client" data-id="${client.id}" data-type="owner" data-vehicle-id="${vehicleId || ''}" class="ent-name-cell ent-name-cell--blue">
         ${vNumber || '—'}
       </td>
       <td class="text-center">${kartaCount > 0 ? '<span class="ent-karta-badge">' + kartaCount + '</span>' : '—'}</td>
@@ -637,7 +641,7 @@ async function loadOwners() {
     }));
     const ownerStats = await Promise.all(ownerList.map(async (owner) => ({
       kartaCount: await _getKartaCount(owner.id),
-      balance: await _getVehicleOwnerListBalance(owner),
+      ...(await _getVehicleOwnerListFinancials(owner)),
     })));
     const sortedOwners = [...ownerList].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 
@@ -647,7 +651,7 @@ async function loadOwners() {
       ownersTbody.innerHTML = sortedOwners.map((client) => {
         const idx = ownerList.indexOf(client);
         const stats = ownerStats[idx];
-        return _buildClientRow(client, stats.kartaCount, stats.balance, 'owner');
+        return _buildClientRow(client, stats.kartaCount, stats.balance, 'owner', stats.vehicle_id);
       }).join('');
     }
   } else {
@@ -1387,37 +1391,45 @@ async function _getClient(type, id) {
 }
 
 /**
- * Owner Details is the current vehicle/customer details surface. A vehicle
- * owner may have more than one linked vehicle, so aggregate the authoritative
- * per-vehicle rebuild result and the matching read-only movements. No balance
- * is persisted or posted here.
+ * Vehicle Details uses one selected vehicle only. The surrounding owner record
+ * remains available solely for the separate «المركبات» management tab.
  */
-async function _getOwnerVehicleFinancials(ownerId) {
-  const vehicles = await OwnersModule.getOwnerVehicles(ownerId);
-  const projections = await Promise.all(vehicles.map(async (vehicle) => {
-    const [balance, ledger] = await Promise.all([
-      FinancialService.rebuildVehicleBalance(vehicle.id),
-      FinancialService.getVehicleLedger(vehicle.id),
-    ]);
-    return { balance, ledger };
-  }));
-
-  const balanceCents = projections.reduce(
-    (sum, projection) => sum + Money.toCents(projection.balance.balance),
-    0
-  );
-  const ledger = projections
-    .flatMap(projection => projection.ledger)
-    .sort((a, b) => {
-      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
-      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
-      return db - da;
-    });
-
+async function _getVehicleDetailsFinancials(vehicleId) {
+  const [balance, ledger] = await Promise.all([
+    FinancialService.rebuildVehicleBalance(vehicleId),
+    FinancialService.getVehicleLedger(vehicleId),
+  ]);
   return {
-    balance: Money.toDecimal(balanceCents),
+    balance: balance.balance,
     ledger,
   };
+}
+
+function _readRestoredVehicleId(ownerId) {
+  try {
+    const raw = sessionStorage.getItem(LAST_PAGE_CTX_KEY);
+    const context = raw ? JSON.parse(raw) : null;
+    if (context?.page === 'ownerDetailsPage'
+      && String(context.ownerId || '') === String(ownerId || '')
+      && context.vehicleId) {
+      return String(context.vehicleId);
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _resolveDetailVehicle(ownerId, preferredVehicleId = null) {
+  const preferredId = String(preferredVehicleId || _readRestoredVehicleId(ownerId) || '').trim();
+  if (preferredId) {
+    const preferred = await ClientRepository.getVehicleById(preferredId);
+    if (preferred && preferred.deleted_at === null && String(preferred.owner_id || '') === String(ownerId)) {
+      return preferred;
+    }
+  }
+
+  const vehicles = await OwnersModule.getOwnerVehicles(ownerId);
+  if (vehicles.length === 0) return null;
+  return vehicles[0];
 }
 
 // ── Vehicle Details tabs + structured manual maintenance metadata ────────────
@@ -1427,7 +1439,6 @@ const MAINTENANCE_TYPE_SUGGESTIONS = Object.freeze([
   'جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت',
 ]);
 let _vehicleDetailsTab = 'financial';
-let _maintenanceVehicleFilter = '';
 let _maintenanceEntriesCache = [];
 let _editingMaintenanceReferenceId = null;
 
@@ -1450,78 +1461,61 @@ function _isActiveMaintenanceEntry(entry) {
 }
 
 function _setVehicleDetailsTab(tab) {
-  _vehicleDetailsTab = tab === 'maintenance' ? 'maintenance' : 'financial';
+  _vehicleDetailsTab = ['financial', 'maintenance', 'vehicles'].includes(tab) ? tab : 'financial';
   const financialPanel = document.getElementById('vehicleDetailsTabFinancial');
   const maintenancePanel = document.getElementById('vehicleDetailsTabMaintenance');
+  const vehiclesPanel = document.getElementById('vehicleDetailsTabVehicles');
   const financialButton = document.getElementById('vehicleDetailsTabBtnFinancial');
   const maintenanceButton = document.getElementById('vehicleDetailsTabBtnMaintenance');
+  const vehiclesButton = document.getElementById('vehicleDetailsTabBtnVehicles');
   const isFinancial = _vehicleDetailsTab === 'financial';
+  const isMaintenance = _vehicleDetailsTab === 'maintenance';
+  const isVehicles = _vehicleDetailsTab === 'vehicles';
 
   if (financialPanel) financialPanel.classList.toggle('hidden', !isFinancial);
-  if (maintenancePanel) maintenancePanel.classList.toggle('hidden', isFinancial);
+  if (maintenancePanel) maintenancePanel.classList.toggle('hidden', !isMaintenance);
+  if (vehiclesPanel) vehiclesPanel.classList.toggle('hidden', !isVehicles);
   if (financialButton) {
     financialButton.classList.toggle('active-purple', isFinancial);
     financialButton.setAttribute('aria-selected', String(isFinancial));
   }
   if (maintenanceButton) {
-    maintenanceButton.classList.toggle('active-purple', !isFinancial);
-    maintenanceButton.setAttribute('aria-selected', String(!isFinancial));
+    maintenanceButton.classList.toggle('active-purple', isMaintenance);
+    maintenanceButton.setAttribute('aria-selected', String(isMaintenance));
+  }
+  if (vehiclesButton) {
+    vehiclesButton.classList.toggle('active-purple', isVehicles);
+    vehiclesButton.setAttribute('aria-selected', String(isVehicles));
   }
 }
 
-async function _renderMaintenanceTab(client, ledger = []) {
-  const vehicles = await OwnersModule.getOwnerVehicles(client.id);
+async function _renderMaintenanceTab(ledger = []) {
   const activeMaintenance = (ledger || []).filter(_isActiveMaintenanceEntry);
   _maintenanceEntriesCache = activeMaintenance;
 
-  const validFilter = vehicles.some(vehicle => String(vehicle.id) === String(_maintenanceVehicleFilter));
-  if (!validFilter) {
-    _maintenanceVehicleFilter = vehicles.length === 1 ? String(vehicles[0].id) : '';
-  }
-
-  const selectedVehicleId = _maintenanceVehicleFilter;
-  const entries = selectedVehicleId
-    ? activeMaintenance.filter(entry => String(entry.vehicle_id) === selectedVehicleId)
-    : [];
-  const selectedVehicle = vehicles.find(vehicle => String(vehicle.id) === selectedVehicleId) || null;
-  const selectorOptions = vehicles.map(vehicle => `
-    <option value="${_escapeMaintenanceText(vehicle.id)}"${String(vehicle.id) === selectedVehicleId ? ' selected' : ''}>
-      ${_escapeMaintenanceText(vehicle.plate || vehicle.id)}
-    </option>`).join('');
-
-  const tableRows = selectedVehicleId
-    ? entries.length
-      ? entries.map(entry => `
-          <tr>
-            <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
-            <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
-            <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
-            <td class="font-semibold">${_fmt(entry.amount)}</td>
-            <td>${_escapeMaintenanceText(entry.note || '—')}</td>
-            <td class="text-center">
-              <div class="flex gap-1 justify-center">
-                <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
-                <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
-              </div>
-            </td>
-          </tr>
-        `).join('')
-      : `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة للمركبة المحددة</td></tr>`
-    : `<tr><td colspan="6" class="text-muted text-center p-6">اختر مركبة لعرض حركات الصيانة</td></tr>`;
+  const tableRows = activeMaintenance.length
+    ? activeMaintenance.map(entry => `
+        <tr>
+          <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
+          <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
+          <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
+          <td class="font-semibold">${_fmt(entry.amount)}</td>
+          <td>${_escapeMaintenanceText(entry.note || '—')}</td>
+          <td class="text-center">
+            <div class="flex gap-1 justify-center">
+              <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
+              <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
+            </div>
+          </td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة</td></tr>`;
 
   return `
     <section class="mb-8" role="tabpanel" id="vehicleDetailsTabMaintenance">
-      <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
-        <div class="form-group mb-0" style="min-width:220px;">
-          <label class="label mb-1 text-muted text-xs" for="maintenanceVehicleFilter">المركبة</label>
-          <select id="maintenanceVehicleFilter" class="input input-sm" data-action="maintenance-vehicle-filter">
-            <option value="">— اختر المركبة —</option>
-            ${selectorOptions}
-          </select>
-        </div>
-        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm"${vehicles.length ? '' : ' disabled'}>
-          صيانة${selectedVehicle ? ` — ${_escapeMaintenanceText(selectedVehicle.plate || selectedVehicle.id)}` : ''}
-        </button>
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <h3 class="text-lg font-bold mb-0">الصيانة</h3>
+        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">صيانة</button>
       </div>
       <div class="table-wrapper">
         <table class="table">
@@ -1531,7 +1525,7 @@ async function _renderMaintenanceTab(client, ledger = []) {
               <th>نوع الصيانة</th>
               <th>العدد</th>
               <th>المبلغ</th>
-              <th>ملاحظة</th>
+              <th>الملاحظة</th>
               <th>الإجراءات</th>
             </tr>
           </thead>
@@ -1564,10 +1558,6 @@ function _ensureVehicleMaintenanceModal() {
           <button type="button" data-action="close-vehicle-maintenance" class="btn btn-secondary btn-sm">إغلاق</button>
         </div>
         <div class="grid gap-3 mb-4">
-          <div>
-            <label class="label mb-1" for="vehicleMaintenanceVehicle">المركبة <span class="text-red-500">*</span></label>
-            <select id="vehicleMaintenanceVehicle" class="input input-sm"></select>
-          </div>
           <div>
             <label class="label mb-1" for="vehicleMaintenanceDate">التاريخ <span class="text-red-500">*</span></label>
             <input id="vehicleMaintenanceDate" type="date" class="input input-sm">
@@ -1602,12 +1592,10 @@ function _ensureVehicleMaintenanceModal() {
 }
 
 async function _openVehicleMaintenanceModal(entry = null) {
-  if (!_selectedClient?.id) return;
+  if (!_selectedVehicle?.id) return;
   _ensureVehicleMaintenanceModal();
-  const vehicles = await OwnersModule.getOwnerVehicles(_selectedClient.id);
   const modal = document.getElementById('vehicleMaintenanceModal');
   const title = document.getElementById('vehicleMaintenanceTitle');
-  const vehicleSelect = document.getElementById('vehicleMaintenanceVehicle');
   const date = document.getElementById('vehicleMaintenanceDate');
   const type = document.getElementById('vehicleMaintenanceType');
   const quantity = document.getElementById('vehicleMaintenanceQuantity');
@@ -1616,13 +1604,7 @@ async function _openVehicleMaintenanceModal(entry = null) {
   const msg = document.getElementById('vehicleMaintenanceMsg');
 
   _editingMaintenanceReferenceId = entry?.reference_id || null;
-  if (title) title.textContent = entry ? 'تعديل صيانة مركبة' : 'صيانة مركبة';
-  if (vehicleSelect) {
-    vehicleSelect.innerHTML = '<option value="">— اختر المركبة —</option>'
-      + vehicles.map(vehicle => `<option value="${vehicle.id}">${vehicle.plate || vehicle.id}</option>`).join('');
-    const preferredVehicleId = entry?.vehicle_id || _maintenanceVehicleFilter || (vehicles.length === 1 ? vehicles[0].id : '');
-    vehicleSelect.value = String(preferredVehicleId || '');
-  }
+  if (title) title.textContent = `${entry ? 'تعديل صيانة مركبة' : 'صيانة مركبة'} — ${_selectedVehicle.plate || _selectedVehicle.id}`;
   if (date) date.value = entry?.date || DateUtils.todayLocal();
   if (type) type.value = entry?.maintenance_type || '';
   if (quantity) quantity.value = entry?.maintenance_quantity ?? '';
@@ -1640,7 +1622,7 @@ function _closeVehicleMaintenanceModal() {
 }
 
 async function _saveVehicleMaintenance() {
-  const vehicle_id = document.getElementById('vehicleMaintenanceVehicle')?.value || '';
+  const vehicle_id = String(_selectedVehicle?.id || '');
   const date = document.getElementById('vehicleMaintenanceDate')?.value || '';
   const maintenance_type = document.getElementById('vehicleMaintenanceType')?.value?.trim() || '';
   const maintenance_quantity = Number(document.getElementById('vehicleMaintenanceQuantity')?.value);
@@ -1650,7 +1632,7 @@ async function _saveVehicleMaintenance() {
 
   if (!vehicle_id || !date || !maintenance_type || !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 || amount <= 0) {
     if (msg) {
-      msg.textContent = !vehicle_id ? '❌ يجب اختيار المركبة'
+      msg.textContent = !vehicle_id ? '❌ لم يتم تحديد المركبة الحالية'
         : !date ? '❌ التاريخ مطلوب'
         : !maintenance_type ? '❌ نوع الصيانة مطلوب'
         : !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 ? '❌ العدد يجب أن يكون أكبر من صفر'
@@ -1667,10 +1649,9 @@ async function _saveVehicleMaintenance() {
     } else {
       await FinancialService.createManualVehicleBalanceEntry(_currentUsername(), data);
     }
-    _maintenanceVehicleFilter = String(vehicle_id);
     _vehicleDetailsTab = 'maintenance';
     _closeVehicleMaintenanceModal();
-    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner', vehicle_id);
   } catch (err) {
     if (msg) {
       msg.textContent = err.message || '❌ فشل حفظ حركة الصيانة';
@@ -1750,10 +1731,6 @@ function _ensureVehicleBalanceEntryModal() {
         </div>
         <div class="grid gap-3 mb-4">
           <div>
-            <label class="label mb-1" for="vehicleBalanceEntryVehicle">المركبة <span class="text-red-500">*</span></label>
-            <select id="vehicleBalanceEntryVehicle" class="input input-sm"></select>
-          </div>
-          <div>
             <label class="label mb-1" for="vehicleBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
             <input id="vehicleBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
           </div>
@@ -1778,25 +1755,18 @@ function _ensureVehicleBalanceEntryModal() {
 }
 
 async function _openVehicleBalanceEntryModal(entryType) {
-  if (!_selectedClient?.id) return;
+  if (!_selectedVehicle?.id) return;
   _ensureVehicleBalanceEntryModal();
   _vehicleBalanceEntryType = entryType === 'withdraw' ? 'withdraw' : 'deposit';
 
-  const vehicles = await OwnersModule.getOwnerVehicles(_selectedClient.id);
   const modal = document.getElementById('vehicleBalanceEntryModal');
   const title = document.getElementById('vehicleBalanceEntryTitle');
-  const vehicleSelect = document.getElementById('vehicleBalanceEntryVehicle');
   const amount = document.getElementById('vehicleBalanceEntryAmount');
   const date = document.getElementById('vehicleBalanceEntryDate');
   const note = document.getElementById('vehicleBalanceEntryNote');
   const msg = document.getElementById('vehicleBalanceEntryMsg');
 
-  if (title) title.textContent = _vehicleBalanceEntryType === 'deposit' ? 'إيداع رصيد للمركبة' : 'سحب رصيد من المركبة';
-  if (vehicleSelect) {
-    vehicleSelect.innerHTML = '<option value="">— اختر المركبة —</option>'
-      + vehicles.map(vehicle => `<option value="${vehicle.id}">${vehicle.plate || vehicle.id}</option>`).join('');
-    if (vehicles.length === 1) vehicleSelect.value = String(vehicles[0].id);
-  }
+  if (title) title.textContent = `${_vehicleBalanceEntryType === 'deposit' ? 'إيداع رصيد للمركبة' : 'سحب رصيد من المركبة'} — ${_selectedVehicle.plate || _selectedVehicle.id}`;
   if (amount) amount.value = '';
   if (date) date.value = DateUtils.todayLocal();
   if (note) note.value = '';
@@ -1809,7 +1779,7 @@ function _closeVehicleBalanceEntryModal() {
 }
 
 async function _saveVehicleBalanceEntry() {
-  const vehicleId = document.getElementById('vehicleBalanceEntryVehicle')?.value || '';
+  const vehicleId = String(_selectedVehicle?.id || '');
   const amount = parseFloat(document.getElementById('vehicleBalanceEntryAmount')?.value) || 0;
   const date = document.getElementById('vehicleBalanceEntryDate')?.value || '';
   const note = document.getElementById('vehicleBalanceEntryNote')?.value?.trim() || '';
@@ -1817,7 +1787,7 @@ async function _saveVehicleBalanceEntry() {
 
   if (!vehicleId || amount <= 0 || !date || !note) {
     if (msg) {
-      msg.textContent = !vehicleId ? '❌ يجب اختيار المركبة'
+      msg.textContent = !vehicleId ? '❌ لم يتم تحديد المركبة الحالية'
         : amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
         : !date ? '❌ التاريخ مطلوب'
         : '❌ السبب / الملاحظة مطلوبة';
@@ -1835,7 +1805,7 @@ async function _saveVehicleBalanceEntry() {
       note,
     });
     _closeVehicleBalanceEntryModal();
-    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
   } catch (err) {
     if (msg) {
       msg.textContent = err.message || '❌ فشل حفظ حركة الرصيد';
@@ -1930,20 +1900,25 @@ async function _renderOwnerVehicles(client) {
   `;
 }
 
-async function showOwnerDetails(id, type = 'owner') {
+async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
   const client = await _getClient('owner', id);
   if (!client) return;
+  const vehicle = await _resolveDetailVehicle(client.id, vehicleId);
+  if (!vehicle) return;
+
   _selectedClient = client;
+  _selectedVehicle = vehicle;
 
   sessionStorage.setItem(LAST_PAGE_CTX_KEY, JSON.stringify({
     page: 'ownerDetailsPage',
     ownerId: String(id),
     ownerType: type,
+    vehicleId: String(vehicle.id),
   }));
 
-  const financials = await _getOwnerVehicleFinancials(client.id);
+  const financials = await _getVehicleDetailsFinancials(vehicle.id);
   const ledgerHtml = _renderLedger(client, financials.ledger);
-  const maintenanceHtml = await _renderMaintenanceTab(client, financials.ledger);
+  const maintenanceHtml = await _renderMaintenanceTab(financials.ledger);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
@@ -1953,7 +1928,7 @@ async function showOwnerDetails(id, type = 'owner') {
     <div class="ent-details-page">
       <div class="ent-details-header">
         <button type="button" data-action="back-to-customers" class="ent-btn-back">← رجوع</button>
-        <h2 class="ent-details-name">${client.name}</h2>
+        <h2 class="ent-details-name">${vehicle.plate || client.name}</h2>
         <span class="ent-details-type">مركبة</span>
       </div>
 
@@ -1977,13 +1952,16 @@ async function showOwnerDetails(id, type = 'owner') {
       <div class="tabs mb-6" role="tablist" aria-label="تفاصيل المركبة">
         <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn active-purple" aria-selected="true">الحركات المالية</button>
         <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn" aria-selected="false">الصيانة</button>
+        <button type="button" role="tab" id="vehicleDetailsTabBtnVehicles" data-action="vehicle-details-tab" data-tab="vehicles" class="tab-btn" aria-selected="false">المركبات</button>
       </div>
 
       <section id="vehicleDetailsTabFinancial" role="tabpanel">
         ${ledgerHtml}
       </section>
       ${maintenanceHtml}
-      ${relatedHtml}
+      <section id="vehicleDetailsTabVehicles" class="hidden" role="tabpanel">
+        ${relatedHtml}
+      </section>
     </div>
   `;
 
@@ -2107,7 +2085,7 @@ function attachOwnersPageListeners() {
       try {
         await FinancialService.deleteManualVehicleBalanceEntry(_currentUsername(), entry.reference_id);
         _vehicleDetailsTab = 'maintenance';
-        if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+        if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
       } catch (err) {
         alert(err.message || '❌ فشل حذف حركة الصيانة');
       }
@@ -2355,7 +2333,7 @@ function attachOwnersPageListeners() {
     // View client details
     const viewBtn = e.target.closest('[data-action="view-client"]');
     if (viewBtn) {
-      await showOwnerDetails(viewBtn.dataset.id, 'owner');
+      await showOwnerDetails(viewBtn.dataset.id, 'owner', viewBtn.dataset.vehicleId || null);
       return;
     }
 
@@ -2440,7 +2418,7 @@ function attachOwnersPageListeners() {
       if (!confirm('حذف المركبة؟')) return;
       try {
         await ClientRepository.deleteVehicle(delVeh.dataset.id, { username: _currentUsername() });
-        if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner');
+        if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
       } catch (err) {
         alert(err.message || '❌ فشل حذف المركبة');
       }
@@ -2471,7 +2449,7 @@ function attachOwnersPageListeners() {
           await ClientRepository.saveVehicle({ username, ...vehiclePayload }, { username });
         }
         modal.classList.add('hidden');
-        if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner');
+        if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
       } catch (err) {
         alert(err.message || '❌ فشل حفظ المركبة');
       }
@@ -2491,13 +2469,6 @@ function attachOwnersPageListeners() {
     }
   });
 
-  document.addEventListener('change', async (e) => {
-    if (e.target.id === 'maintenanceVehicleFilter') {
-      _maintenanceVehicleFilter = e.target.value || '';
-      _vehicleDetailsTab = 'maintenance';
-      if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
-    }
-  });
 }
 
 
@@ -2505,7 +2476,7 @@ window.addEventListener('owners:changed', () => {
   // Only refresh details if details page is currently visible
   const detailsPage = document.getElementById('ownerDetailsPage');
   if (detailsPage && !detailsPage.classList.contains('hidden') && _selectedClient?.type === 'owner') {
-    showOwnerDetails(_selectedClient.id, 'owner');
+    showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
   }
   loadOwners();
 });

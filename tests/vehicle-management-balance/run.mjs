@@ -38,8 +38,9 @@ ok(!!dynamicHeader,
   'Vehicle Management headers are exactly Vehicle Number, Karta Count, Balance, Actions');
 ok(SRC.includes('FinancialService.rebuildVehicleBalance(vehicle.id)'),
   'Vehicle Management balance uses the existing authoritative rebuildVehicleBalance source');
-ok(SRC.includes('return _buildClientRow(client, stats.kartaCount, stats.balance, \'owner\');'),
-  'Vehicle list renderer supplies Karta Count and authoritative balance to each row');
+ok(SRC.includes("return _buildClientRow(client, stats.kartaCount, stats.balance, 'owner', stats.vehicle_id);")
+   && SRC.includes("data-vehicle-id=\"${vehicleId || ''}\""),
+  'Vehicle list renderer supplies Karta Count, authoritative balance, and the specific Vehicle Details context');
 ok(SRC.includes('data-action="edit-account"') && SRC.includes('data-action="delete-account"'),
   'existing vehicle owner actions remain present');
 
@@ -58,14 +59,16 @@ await FinancialService.createManualVehicleBalanceEntry(U, {
   vehicle_id: V2.id, entry_type: 'withdraw', amount: 40, date: '2026-08-10', note: 'سحب V2',
 });
 
-const ownerBalanceFn = new Function('ClientRepository', 'FinancialService', `
-  ${extractFn(SRC, '_getVehicleOwnerListBalance')}
-  return _getVehicleOwnerListBalance;
+const ownerFinancialsFn = new Function('ClientRepository', 'FinancialService', `
+  ${extractFn(SRC, '_getVehicleOwnerListFinancials')}
+  return _getVehicleOwnerListFinancials;
 `)(ClientRepository, FinancialService);
-const b1 = await ownerBalanceFn({ id: OWNER_A, vehicle_number: V1.plate });
-const b2 = await ownerBalanceFn({ id: OWNER_B, vehicle_number: V2.plate });
-ok(b1 === 100 && b2 === -40,
-  'each Vehicle Management row obtains the balance of its matching vehicle without cross-vehicle mixing');
+const f1 = await ownerFinancialsFn({ id: OWNER_A, vehicle_number: V1.plate });
+const f2 = await ownerFinancialsFn({ id: OWNER_B, vehicle_number: V2.plate });
+const b1 = f1.balance;
+const b2 = f2.balance;
+ok(b1 === 100 && b2 === -40 && f1.vehicle_id === V1.id && f2.vehicle_id === V2.id,
+  'each Vehicle Management row obtains its matching vehicle balance and passes the specific vehicle ID to Vehicle Details');
 
 const rowRenderer = new Function('_fmt', '_balanceClass', `
   ${extractFn(SRC, '_buildClientRow')}

@@ -146,10 +146,11 @@ console.log('\n— UI binding fingerprints —');
 ok(FINANCIAL_SRC.includes('async function getVehicleLedger(vehicle_id)')
   && FINANCIAL_SRC.includes('async function getOfficeBalance(office_id)'),
   'FinancialService exposes read-only vehicle and office balance projections');
-ok(ENTITIES_SRC.includes('FinancialService.rebuildVehicleBalance(vehicle.id)')
-  && ENTITIES_SRC.includes('FinancialService.getVehicleLedger(vehicle.id)')
+ok(ENTITIES_SRC.includes('async function _getVehicleDetailsFinancials(vehicleId)')
+  && ENTITIES_SRC.includes('FinancialService.rebuildVehicleBalance(vehicleId)')
+  && ENTITIES_SRC.includes('FinancialService.getVehicleLedger(vehicleId)')
   && ENTITIES_SRC.includes('const ledgerHtml = _renderLedger(client, financials.ledger);'),
-  'Vehicle/Owner Details binds its balance and movement UI to the existing vehicle ledger projections');
+  'Vehicle Details binds its selected vehicle balance and movements to the existing vehicle ledger projections');
 ok(OFFICES_SRC.includes('const balanceData = await FinancialService.getOfficeBalance(office.id);')
   && OFFICES_SRC.includes('const displayEntries = await _resolveOfficeBalanceReferences(balanceData.entries);')
   && OFFICES_SRC.includes('content.innerHTML = _renderOfficeBalance(displayEntries);'),
