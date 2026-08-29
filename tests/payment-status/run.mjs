@@ -585,7 +585,7 @@ ok(!/rebuildVehicleBalance\(|vehicle_ledger/.test(RECEIPTS_SRC) && !/rebuildVehi
   'census: UI modules NEVER touch balances directly (no posting math outside financial.js)');
 
 // KEEP / REMOVED contracts
-ok(DATABASE_SRC.includes('const DB_VERSION = 15;'), 'KEEP: DB schema version is 15 after approved Load Prices store addition');
+ok(DATABASE_SRC.includes('const DB_VERSION = 16;'), 'KEEP: DB schema version is 16 after approved Dashboard Capital Treasury store addition');
 // database.js documents the removals in its version-history comments — the census
 // for it must run on CODE ONLY (comments stripped), a structural not textual check.
 const databaseCodeOnly = DATABASE_SRC
@@ -593,11 +593,14 @@ const databaseCodeOnly = DATABASE_SRC
   .replace(/(^|[^:])\/\/[^\n]*/gm, '$1');
 for (const [label, src] of [
   ['financial.js', FINANCIAL_SRC], ['receipts.js', RECEIPTS_SRC],
-  ['allReceipts.js', ALLRECEIPTS_SRC], ['excelService.js', EXCEL_SRC], ['database.js(code)', databaseCodeOnly],
+  ['allReceipts.js', ALLRECEIPTS_SRC], ['excelService.js', EXCEL_SRC],
 ]) {
-  ok(!/treasury|خزنة|mainCapital/i.test(src), `REMOVED-CONTRACT: ${label} carries ZERO treasury references (subsystem stays permanently removed)`);
+  ok(!/treasury|خزنة|mainCapital/i.test(src), `EXCLUSION-CONTRACT: ${label} carries ZERO standalone-Treasury references`);
   ok(!/receipt_number|receiptNumber/.test(src), `REMOVED-CONTRACT: ${label} carries ZERO receipt-numbering references (stays permanently removed)`);
 }
+ok(/name\s*:\s*'mainCapitalTreasury'/.test(databaseCodeOnly)
+   && !/name\s*:\s*'treasury'/.test(databaseCodeOnly),
+  'APPROVED-CONTRACT: database carries the Dashboard-only mainCapitalTreasury store, never the standalone treasury store');
 const badStatusLiterals = [FINANCIAL_SRC, RECEIPTS_SRC, ALLRECEIPTS_SRC, EXCEL_SRC]
   .some(src => /payment_status\s*===\s*'(?!paid'|unpaid')/.test(src)
     || /payment_status\s*:\s*'(?!paid'|unpaid')/.test(src));

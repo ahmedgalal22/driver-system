@@ -1,16 +1,21 @@
 /**
  * dashboard.js — لوحة التحكم / Dashboard العميل
- * Completely isolated from core financial operations, read-only to existing data.
+ * Completely isolated from core financial operations, read-only to existing data,
+ * and maintains an independent Primary Capital Treasury store in IndexedDB.
  */
 
 import { Money } from './money.js';
 import { AuthModule } from './auth.js';
+import { printHTML, buildPrintDocument } from './printEngine.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
+import { DashboardRepository } from './services/dashboardRepository.js';
 import { DateUtils } from './dateUtils.js';
 
 // ── Domain constants (self-contained — no external import dependency) ──────
+const CAPITAL_ENTRY_TYPE = Object.freeze({ DEPOSIT: 'deposit', WITHDRAW: 'withdraw' });
 const DOMAIN_EVENT = Object.freeze({
+  CAPITAL_CHANGED  : 'capital:changed',
   RECEIPTS_CHANGED : 'receipts:changed',
   OFFICES_CHANGED  : 'offices:changed',
 });
@@ -21,12 +26,24 @@ const STATE = {
   quickRange: '', // 'day', 'week', 'month', or ''
   from: '',
   to: '',
+  capitalSearchQuery: '',
+  capitalCollapsed: false,
 };
+
+let _isSavingCapital = false; // module-scoped submit lock to prevent double-click submissions
 
 function _currentUsername() {
   const session = AuthModule.getSession();
   if (!session?.username) throw new Error('Username required');
   return session.username;
+}
+
+function _todayISO() {
+  return DateUtils.todayLocal();
+}
+
+function _uuid() {
+  return crypto.randomUUID();
 }
 
 function _esc(v) {
@@ -82,6 +99,34 @@ async function _loadReceiptRowsProjection(receipts) {
     }
   }));
   return projection;
+}
+
+// ─── PRIMARY CAPITAL TREASURY STORAGE LAYER ──────────────────────────────────
+
+async function _getCapitalTransactions(username) {
+  return DashboardRepository.getCapitalTransactions(username);
+}
+
+async function _addCapitalTransaction(username, type, amount, note, date) {
+  const cents = Money.toCents(amount);
+  if (cents <= 0) throw new Error('❌ يجب أن يكون المبلغ أكبر من صفر');
+
+  const payload = {
+    id: _uuid(),
+    username,
+    type, // 'deposit' | 'withdraw'
+    amount: cents,
+    note: String(note || '').trim() || (type === CAPITAL_ENTRY_TYPE.DEPOSIT ? 'إيداع رأس مال' : 'سحب رأس مال'),
+    date: date || _todayISO(),
+  };
+
+  await DashboardRepository.saveTransaction(payload, { username });
+  window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.CAPITAL_CHANGED));
+}
+
+async function _deleteCapitalTransaction(username, id) {
+  await DashboardRepository.deleteTransaction(id, { username });
+  window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.CAPITAL_CHANGED));
 }
 
 // ─── STYLE INJECTION FOR COMPLETE CSS ISOLATION ──────────────────────────────
@@ -322,6 +367,381 @@ function _injectIsolatedStyles() {
     .dashboard-stat-indigo  { background: linear-gradient(135deg, #4f46e5, #7c3aed) !important; }
     .dashboard-stat-teal    { background: linear-gradient(135deg, #0d9488, #115e59) !important; }
     .dashboard-stat-emerald { background: linear-gradient(135deg, #10b981, #047857) !important; }
+
+    /* Capital treasury independent section container */
+    .dashboard-capital-box {
+      background: #ffffff !important;
+      border-radius: 1rem !important;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.08) !important;
+      border: 1px solid #e5e7eb !important;
+      overflow: hidden !important;
+    }
+
+    .dashboard-capital-header {
+      background: linear-gradient(135deg, #1f2937, #374151) !important;
+      padding: 1rem 1.5rem !important;
+      display: flex !important;
+      justify-content: space-between !important;
+      align-items: center !important;
+      cursor: pointer !important;
+      user-select: none !important;
+      color: #ffffff !important;
+    }
+
+    .dashboard-capital-header-title {
+      display: flex !important;
+      align-items: center !important;
+      gap: 0.75rem !important;
+      margin: 0 !important;
+      color: #ffffff !important;
+      font-size: 1.0625rem !important;
+      font-weight: 800 !important;
+    }
+
+    .dashboard-capital-arrow {
+      color: #ffffff !important;
+      background: none !important;
+      border: none !important;
+      cursor: pointer !important;
+      padding: 0.25rem !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      transition: transform 0.25s ease !important;
+    }
+
+    .dashboard-capital-arrow svg {
+      width: 1.25rem !important;
+      height: 1.25rem !important;
+    }
+
+    .dashboard-capital-content {
+      padding: 1.5rem !important;
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 1.5rem !important;
+    }
+
+    .dashboard-capital-content.hidden {
+      display: none !important;
+    }
+
+    .dashboard-capital-layout {
+      display: grid !important;
+      grid-template-columns: 1fr 2fr !important;
+      gap: 1.5rem !important;
+    }
+
+    @media (max-width: 1024px) {
+      .dashboard-capital-layout {
+        grid-template-columns: 1fr !important;
+      }
+    }
+
+    /* Balance presentation box inside capital */
+    .dashboard-capital-balance-card {
+      background: linear-gradient(135deg, #f9fafb, #f3f4f6) !important;
+      border: 1px solid #e5e7eb !important;
+      border-radius: 0.75rem !important;
+      padding: 1.5rem !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.01) !important;
+      height: 100% !important;
+    }
+
+    .dashboard-capital-balance-label {
+      font-size: 0.8125rem !important;
+      font-weight: 700 !important;
+      color: #4b5563 !important;
+      margin: 0 0 0.5rem 0 !important;
+    }
+
+    .dashboard-capital-balance-value {
+      font-size: 2.125rem !important;
+      font-weight: 800 !important;
+      color: #1f2937 !important;
+      margin: 0 !important;
+      font-variant-numeric: tabular-nums !important;
+      direction: ltr !important;
+      unicode-bidi: embed !important;
+      text-align: right !important;
+    }
+
+    /* Action buttons in balance card */
+    .dashboard-capital-actions {
+      display: flex !important;
+      gap: 0.75rem !important;
+      margin-top: 1.5rem !important;
+    }
+
+    .dashboard-btn {
+      flex: 1 !important;
+      font-weight: 700 !important;
+      padding: 0.625rem 1rem !important;
+      border-radius: 0.5rem !important;
+      border: none !important;
+      cursor: pointer !important;
+      transition: background-color 0.15s, box-shadow 0.15s !important;
+      font-size: 0.75rem !important;
+      text-align: center !important;
+      font-family: inherit !important;
+    }
+
+    .dashboard-btn-success {
+      background-color: #16a34a !important;
+      color: #ffffff !important;
+    }
+
+    .dashboard-btn-success:hover {
+      background-color: #15803d !important;
+      box-shadow: 0 4px 6px rgba(22, 163, 74, 0.15) !important;
+    }
+
+    .dashboard-btn-danger {
+      background-color: #dc2626 !important;
+      color: #ffffff !important;
+    }
+
+    .dashboard-btn-danger:hover {
+      background-color: #b91c1c !important;
+      box-shadow: 0 4px 6px rgba(220, 38, 38, 0.15) !important;
+    }
+
+    /* Transaction history controls */
+    .dashboard-capital-controls {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 1rem !important;
+    }
+
+    .dashboard-search-bar {
+      display: flex !important;
+      gap: 0.75rem !important;
+      align-items: center !important;
+    }
+
+    .dashboard-search-input {
+      flex: 1 !important;
+      padding: 0.5rem 1rem !important;
+      border: 1px solid #cbd5e1 !important;
+      border-radius: 0.5rem !important;
+      font-size: 0.75rem !important;
+      outline: none !important;
+      font-family: inherit !important;
+      transition: border-color 0.15s, box-shadow 0.15s !important;
+    }
+
+    .dashboard-search-input:focus {
+      border-color: #4f46e5 !important;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15) !important;
+    }
+
+    .dashboard-print-btn {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9) !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      font-size: 0.75rem !important;
+      padding: 0.5rem 1.25rem !important;
+      border-radius: 0.5rem !important;
+      border: none !important;
+      cursor: pointer !important;
+      font-family: inherit !important;
+      white-space: nowrap !important;
+      transition: filter 0.15s, box-shadow 0.15s !important;
+    }
+
+    .dashboard-print-btn:hover {
+      filter: brightness(0.95) !important;
+      box-shadow: 0 4px 6px rgba(124, 58, 237, 0.15) !important;
+    }
+
+    /* Scrolling Table Wrapper for Transactions */
+    .dashboard-table-wrapper {
+      border-radius: 0.75rem !important;
+      border: 1px solid #e5e7eb !important;
+      overflow-x: auto !important;
+      overflow-y: auto !important;
+      max-height: 250px !important;
+    }
+
+    /* Namespaced Table */
+    .dashboard-table {
+      width: 100% !important;
+      border-collapse: collapse !important;
+      font-size: 0.75rem !important;
+      background: #ffffff !important;
+    }
+
+    .dashboard-table th {
+      background-color: #1f2937 !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      padding: 0.75rem 1rem !important;
+      text-align: right !important;
+      white-space: nowrap !important;
+    }
+
+    .dashboard-table td {
+      padding: 0.625rem 1rem !important;
+      border-bottom: 1px solid #f3f4f6 !important;
+      color: #374151 !important;
+      vertical-align: middle !important;
+      white-space: nowrap !important;
+    }
+
+    .dashboard-table tbody tr:nth-child(even) {
+      background-color: #f9fafb !important;
+    }
+
+    .dashboard-table tbody tr:hover {
+      background-color: #f1f5f9 !important;
+    }
+
+    /* Labels inside table */
+    .dashboard-deposit-label {
+      color: #15803d !important;
+      font-weight: 700 !important;
+      background-color: #dcfce7 !important;
+      padding: 0.125rem 0.5rem !important;
+      border-radius: 0.25rem !important;
+      font-size: 0.6875rem !important;
+      display: inline-block !important;
+    }
+
+    .dashboard-withdraw-label {
+      color: #b91c1c !important;
+      font-weight: 700 !important;
+      background-color: #fee2e2 !important;
+      padding: 0.125rem 0.5rem !important;
+      border-radius: 0.25rem !important;
+      font-size: 0.6875rem !important;
+      display: inline-block !important;
+    }
+
+    /* Dialog Modals */
+    .dashboard-modal-overlay {
+      position: fixed !important;
+      inset: 0 !important;
+      background-color: rgba(0, 0, 0, 0.5) !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      z-index: 9999 !important;
+      padding: 1rem !important;
+    }
+
+    .dashboard-modal-overlay.hidden {
+      display: none !important;
+    }
+
+    .dashboard-modal {
+      background-color: #ffffff !important;
+      border-radius: 1rem !important;
+      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04) !important;
+      width: 100% !important;
+      max-width: 24rem !important;
+      padding: 1.5rem !important;
+      direction: rtl !important;
+      text-align: right !important;
+      font-family: inherit !important;
+    }
+
+    .dashboard-modal-header {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      margin-bottom: 1rem !important;
+      padding-bottom: 0.5rem !important;
+      border-b: 1px solid #f3f4f6 !important;
+    }
+
+    .dashboard-modal-title {
+      font-size: 0.9375rem !important;
+      font-weight: 800 !important;
+      color: #1f2937 !important;
+      margin: 0 !important;
+    }
+
+    .dashboard-modal-close {
+      background: none !important;
+      border: none !important;
+      color: #9ca3af !important;
+      cursor: pointer !important;
+      padding: 0.25rem !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      transition: color 0.15s !important;
+    }
+
+    .dashboard-modal-close:hover {
+      color: #4b5563 !important;
+    }
+
+    .dashboard-modal-body {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 1rem !important;
+    }
+
+    .dashboard-modal-field {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 0.25rem !important;
+    }
+
+    .dashboard-modal-label {
+      font-size: 0.75rem !important;
+      font-weight: 700 !important;
+      color: #4b5563 !important;
+    }
+
+    .dashboard-modal-input {
+      width: 100% !important;
+      padding: 0.5rem 0.75rem !important;
+      border: 1px solid #cbd5e1 !important;
+      border-radius: 0.5rem !important;
+      font-size: 0.8125rem !important;
+      outline: none !important;
+      background-color: #ffffff !important;
+      font-family: inherit !important;
+      transition: border-color 0.15s, box-shadow 0.15s !important;
+    }
+
+    .dashboard-modal-input:focus {
+      border-color: #2563eb !important;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+    }
+
+    .dashboard-modal-button {
+      width: 100% !important;
+      background-color: #2563eb !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+      padding: 0.625rem 1rem !important;
+      border-radius: 0.5rem !important;
+      border: none !important;
+      cursor: pointer !important;
+      font-size: 0.75rem !important;
+      font-family: inherit !important;
+      transition: background-color 0.15s !important;
+    }
+
+    .dashboard-modal-button:hover {
+      background-color: #1d4ed8 !important;
+    }
+
+    .dashboard-modal-msg {
+      font-size: 0.75rem !important;
+      color: #b91c1c !important;
+      font-weight: 700 !important;
+      background-color: #fee2e2 !important;
+      border: 1px solid rgba(220, 38, 38, 0.2) !important;
+      border-radius: 0.5rem !important;
+      padding: 0.5rem !important;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -376,11 +796,105 @@ function _renderShell() {
         <!-- Dynamic Cards Inserted Here -->
       </div>
 
-      <!-- Section 3: Spacing Area / Footer -->
+      <!-- Section 3: Capital Treasury Section -->
+      <div class="dashboard-capital-box">
+        <!-- Collapsible Header -->
+        <div id="capitalHeader" class="dashboard-capital-header">
+          <div class="dashboard-capital-header-title">
+            <span>💼</span>
+            <span>الخزنة الرئيسية (رأس المال الخاص)</span>
+          </div>
+          <button id="btnCollapseCapital" class="dashboard-capital-arrow" aria-label="عرض أو إخفاء الخزنة الرئيسية">
+            <svg id="svgCollapseArrow" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:20px;height:20px; transition: transform 0.2s ease;">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Collapsible Content -->
+        <div id="capitalContent" class="dashboard-capital-content">
+          <div class="dashboard-capital-layout">
+            <!-- Balance and Quick Actions Card -->
+            <div class="dashboard-capital-balance-card">
+              <div>
+                <p class="dashboard-capital-balance-label">رصيد الخزنة الرئيسية الحالي</p>
+                <h3 id="capitalBalanceVal" class="dashboard-capital-balance-value">0.00 جنيه</h3>
+              </div>
+              <div class="dashboard-capital-actions">
+                <button id="btnCapitalDeposit" type="button" class="dashboard-btn dashboard-btn-success">➕ إيداع رأس مال</button>
+                <button id="btnCapitalWithdraw" type="button" class="dashboard-btn dashboard-btn-danger">➖ سحب رأس مال</button>
+              </div>
+            </div>
+
+            <!-- Transaction Table and Search Area -->
+            <div class="dashboard-capital-controls">
+              <div class="dashboard-search-bar">
+                <input id="capitalSearchInput" type="text" placeholder="🔍 ابحث في حركات الخزنة الرئيسية..." class="dashboard-search-input">
+                <button id="btnPrintCapital" type="button" class="dashboard-print-btn">🖨️ طباعة كشف الخزنة</button>
+              </div>
+
+              <div class="dashboard-table-wrapper">
+                <table class="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th>التاريخ</th>
+                      <th style="text-align:center;">النوع</th>
+                      <th>المبلغ</th>
+                      <th>البيان / الملاحظات</th>
+                      <th style="text-align:center;">المسؤول</th>
+                      <th style="text-align:center;" class="no-print">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody id="capitalTableBody">
+                    <!-- Dynamic rows inserted here -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Spacing Area / Footer -->
       <div style="padding: 1rem 0; text-align: center; font-size: 0.75rem; color: var(--color-gray-400); font-weight: 700; border-top: 1px solid var(--color-gray-200);">
         نظام Karta المالي — لوحة التحكم الذكية &copy; 2026
       </div>
   `;
+
+  // Render the modal overlay container ONLY once
+  let modal = page.querySelector('#dashCapitalModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'dashCapitalModal';
+    modal.className = 'dashboard-modal-overlay hidden';
+    modal.innerHTML = `
+      <div class="dashboard-modal">
+        <div class="dashboard-modal-header">
+          <h3 id="dashModalTitle" class="dashboard-modal-title">إيداع رأس مال</h3>
+          <button id="btnDashModalClose" type="button" class="dashboard-modal-close" aria-label="إغلاق النافذة">
+            <svg style="width:20px;height:20px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="dashboard-modal-body">
+          <div class="dashboard-modal-field">
+            <label class="dashboard-modal-label" for="dashModalAmount">المبلغ (جنيه)</label>
+            <input id="dashModalAmount" type="number" min="0.01" step="0.01" placeholder="0.00" class="dashboard-modal-input">
+          </div>
+          <div class="dashboard-modal-field">
+            <label class="dashboard-modal-label" for="dashModalDate">التاريخ</label>
+            <input id="dashModalDate" type="date" class="dashboard-modal-input">
+          </div>
+          <div class="dashboard-modal-field">
+            <label class="dashboard-modal-label" for="dashModalNote">ملاحظة / بيان الحركة</label>
+            <input id="dashModalNote" type="text" placeholder="اكتب بياناً موجزاً للحركة" class="dashboard-modal-input">
+          </div>
+          <div id="dashModalMsg" class="dashboard-modal-msg hidden"></div>
+          <button id="btnDashModalSave" type="button" class="dashboard-modal-button">حفظ الحركة</button>
+        </div>
+      </div>
+    `;
+    page.appendChild(modal);
+  }
 }
 
 async function _refreshDashboard() {
@@ -422,6 +936,7 @@ async function _refreshDashboard() {
   // ─── RENDER STATISTICS CARDS ────────────────────────────────────────────────
 
   _renderSummaryCards(totalOfficeVal);
+  await _renderCapitalTreasury(username);
 }
 
 function _renderSummaryCards(office) {
@@ -442,6 +957,235 @@ function _renderSummaryCards(office) {
   container.innerHTML = `
     ${cardHtml('إجمالي المكتب', office, 'نسبة عمولة المكتب المحصلة من الكارتات', 'dashboard-stat-teal')}
   `;
+}
+
+async function _renderCapitalTreasury(username) {
+  const tableBody = document.getElementById('capitalTableBody');
+  const balanceValEl = document.getElementById('capitalBalanceVal');
+  if (!tableBody || !balanceValEl) return;
+
+  const transactions = await _getCapitalTransactions(username);
+
+  // Calculate Running Balance
+  let totalBalanceCents = 0;
+  for (const t of (transactions || [])) {
+    if (t) {
+      if (t.type === CAPITAL_ENTRY_TYPE.DEPOSIT) {
+        totalBalanceCents += Number(t.amount) || 0;
+      } else {
+        totalBalanceCents -= Number(t.amount) || 0;
+      }
+    }
+  }
+  const currentBalanceDecimal = Money.toDecimal(totalBalanceCents);
+  balanceValEl.textContent = `${Money.fmt(currentBalanceDecimal)} جنيه`;
+
+  // Apply Search Query Filter safely
+  const query = (STATE.capitalSearchQuery || '').trim().toLowerCase();
+  const filtered = query
+    ? (transactions || []).filter(t => {
+        if (!t) return false;
+        const typeLabel = t.type === CAPITAL_ENTRY_TYPE.DEPOSIT ? 'إيداع' : 'سحب';
+        const hay = [
+          t.date,
+          typeLabel,
+          String(Money.toDecimal(t.amount)),
+          t.note,
+          t.created_by,
+        ].join(' ').toLowerCase();
+        return hay.includes(query);
+      })
+    : (transactions || []);
+
+  // Sort by created_at descending (latest first)
+  filtered.sort((a, b) => {
+    const timeA = a && a.created_at ? a.created_at : 0;
+    const timeB = b && b.created_at ? b.created_at : 0;
+    return timeB - timeA;
+  });
+
+  if (filtered.length === 0) {
+    tableBody.innerHTML = `<tr><td colspan="6" class="text-center text-gray-400 p-6 font-bold" style="background:#f9fafb;">لا توجد حركات مطابقة في سجل الخزنة الرئيسية</td></tr>`;
+    return;
+  }
+
+  tableBody.innerHTML = filtered.map(t => {
+    if (!t) return '';
+    const isDeposit = t.type === CAPITAL_ENTRY_TYPE.DEPOSIT;
+    const amountFormatted = Money.fmt(Money.toDecimal(t.amount));
+    const typeLabel = isDeposit ? 'إيداع' : 'سحب';
+    const labelClass = isDeposit ? 'dashboard-deposit-label' : 'dashboard-withdraw-label';
+
+    return `
+      <tr>
+        <td>${_esc(t.date)}</td>
+        <td style="text-align:center;"><span class="${labelClass}">${typeLabel}</span></td>
+        <td class="font-bold ${isDeposit ? 'text-success' : 'text-danger'}" style="direction:ltr;unicode-bidi:embed;text-align:right;">${isDeposit ? '+' : '-'}${amountFormatted}</td>
+        <td style="color:#4b5563; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${_esc(t.note)}">${_esc(t.note)}</td>
+        <td style="text-align:center; color:#6b7280;">${_esc(t.created_by)}</td>
+        <td style="text-align:center;" class="no-print">
+          <button type="button" data-action="delete-capital" data-id="${t.id}" style="background:none;border:none;cursor:pointer;font-size:0.875rem;" title="حذف الحركة">
+            🗑️
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// ─── PRINT HANDLER ───────────────────────────────────────────────────────────
+
+function _printCapitalTreasury() {
+  const tbody = document.getElementById('capitalTableBody');
+  if (!tbody) return;
+
+  const rows = [...tbody.querySelectorAll('tr')];
+  if (rows.length === 0 || rows[0].textContent.includes('لا توجد حركات')) {
+    alert('لا توجد حركات للطباعة في سجل الخزنة الرئيسية');
+    return;
+  }
+
+  let tableRows = '';
+  let totalIn = 0, totalOut = 0;
+
+  rows.forEach(tr => {
+    const cells = tr.querySelectorAll('td');
+    if (cells.length < 5) return;
+    const date = (cells[0]?.textContent || '').trim();
+    const type = (cells[1]?.textContent || '').trim();
+    const amountText = (cells[2]?.textContent || '').trim();
+    const notes = (cells[3]?.textContent || '').trim();
+    const creator = (cells[4]?.textContent || '').trim();
+
+    const amount = parseFloat(amountText.replace(/[^0-9.\-]/g, '')) || 0;
+    if (amountText.startsWith('+')) totalIn += Math.abs(amount);
+    else totalOut += Math.abs(amount);
+
+    tableRows += `
+      <tr>
+        <td style="padding:6px;border:1px solid #000;text-align:center;">${date}</td>
+        <td style="padding:6px;border:1px solid #000;text-align:center;">${type}</td>
+        <td style="padding:6px;border:1px solid #000;text-align:center;font-weight:700;">${amountText}</td>
+        <td style="padding:6px;border:1px solid #000;text-align:right;">${notes}</td>
+        <td style="padding:6px;border:1px solid #000;text-align:center;">${creator}</td>
+      </tr>`;
+  });
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('ar-EG', { dateStyle: 'full' });
+  const timeStr = now.toLocaleTimeString('ar-EG', { timeStyle: 'short' });
+
+  const body = `
+    <div style="text-align:center;margin-bottom:16px;border-bottom:2px solid #1e3a8a;padding-bottom:10px;">
+      <h2 style="margin:0;color:#1e3a8a;font-size:16pt;">كشف حساب الخزنة الرئيسية (رأس المال الخاص)</h2>
+      <p style="margin:4px 0 0;color:#6b7280;font-size:9pt;">تاريخ الطباعة: ${dateStr} — ${timeStr}</p>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:14px;direction:rtl;">
+      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8pt;color:#6b7280;">إجمالي الإيداعات</div>
+        <div style="font-size:13pt;font-weight:800;color:#059669;">+${Money.fmt(totalIn)} ج.م</div>
+      </div>
+      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:8px;text-align:center;">
+        <div style="font-size:8pt;color:#6b7280;">إجمالي السحوبات</div>
+        <div style="font-size:13pt;font-weight:800;color:#dc2626;">-${Money.fmt(totalOut)} ج.م</div>
+      </div>
+      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:8px;text-align:center;background-color:#f1f5f9;">
+        <div style="font-size:8pt;color:#6b7280;">صافي الحالي</div>
+        <div style="font-size:13pt;font-weight:800;color:#1e3a8a;">${Money.fmt(totalIn - totalOut)} ج.م</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;direction:rtl;text-align:right;">
+      <thead>
+        <tr>
+          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">التاريخ</th>
+          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">النوع</th>
+          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">المبلغ</th>
+          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:right;">الملاحظات / البيان</th>
+          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">المسؤول</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows}</tbody>
+    </table>`;
+
+  printHTML(buildPrintDocument({
+    title: 'طباعة كشف الخزنة الرئيسية',
+    body,
+    orientation: 'portrait',
+  }), { id: 'capital-print-iframe' });
+}
+
+// ─── CAPITAL TREASURY MODAL OPERATIONS ────────────────────────────────────────
+
+let _modalTransactionType = CAPITAL_ENTRY_TYPE.DEPOSIT; // 'deposit' or 'withdraw'
+
+function _openCapitalModal(type) {
+  _modalTransactionType = type;
+  const modal = document.getElementById('dashCapitalModal');
+  const title = document.getElementById('dashModalTitle');
+  const amount = document.getElementById('dashModalAmount');
+  const date = document.getElementById('dashModalDate');
+  const note = document.getElementById('dashModalNote');
+  const msg = document.getElementById('dashModalMsg');
+
+  if (title) title.textContent = type === CAPITAL_ENTRY_TYPE.DEPOSIT ? '➕ إيداع رأس مال في الخزنة الرئيسية' : '➖ سحب رأس مال من الخزنة الرئيسية';
+  if (amount) amount.value = '';
+  if (date) date.value = _todayISO();
+  if (note) note.value = '';
+  if (msg) { msg.textContent = ''; msg.classList.add('hidden'); }
+
+  modal?.classList.remove('hidden');
+}
+
+function _closeCapitalModal() {
+  document.getElementById('dashCapitalModal')?.classList.add('hidden');
+}
+
+async function _saveCapitalTransactionFromModal() {
+  if (_isSavingCapital) return;
+
+  const btn = document.getElementById('btnDashModalSave');
+  const amountEl = document.getElementById('dashModalAmount');
+  const dateEl = document.getElementById('dashModalDate');
+  const noteEl = document.getElementById('dashModalNote');
+  const msgEl = document.getElementById('dashModalMsg');
+
+  const amount = parseFloat(amountEl?.value) || 0;
+  const date = dateEl?.value || '';
+  const note = noteEl?.value || '';
+
+  if (msgEl) { msgEl.textContent = ''; msgEl.classList.add('hidden'); }
+
+  if (amount <= 0) {
+    if (msgEl) { msgEl.textContent = '❌ الرجاء إدخال مبلغ صحيح أكبر من صفر'; msgEl.classList.remove('hidden'); }
+    return;
+  }
+  if (!date) {
+    if (msgEl) { msgEl.textContent = '❌ الرجاء اختيار التاريخ'; msgEl.classList.remove('hidden'); }
+    return;
+  }
+
+  _isSavingCapital = true;
+  let originalBtnText = '';
+  if (btn) {
+    btn.disabled = true;
+    originalBtnText = btn.textContent;
+    btn.textContent = 'جاري الحفظ...';
+  }
+
+  try {
+    const username = _currentUsername();
+    await _addCapitalTransaction(username, _modalTransactionType, amount, note, date);
+    _closeCapitalModal();
+    await _refreshDashboard();
+  } catch (err) {
+    if (msgEl) { msgEl.textContent = err.message || '❌ حدث خطأ غير متوقع'; msgEl.classList.remove('hidden'); }
+  } finally {
+    _isSavingCapital = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalBtnText;
+    }
+  }
 }
 
 // ─── SYNC NAVIGATION ACTIVE TABS ─────────────────────────────────────────────
@@ -480,11 +1224,12 @@ function _attachListeners() {
   _bound = true;
 
   document.addEventListener('click', async (e) => {
-    // Scope all delegated click listeners strictly inside #dashboardPage
-    const insideDashboard = e.target.closest('#dashboardPage');
+    // Scope all delegated click listeners strictly inside #dashboardPage or modal overlay
+    const insideDashboard = e.target.closest('#dashboardPage') || e.target.closest('#dashCapitalModal');
     if (!insideDashboard) return;
 
     const id = e.target.id;
+    const action = e.target.dataset.action;
 
     // Quick range filters
     if (id === 'btnRangeDay') {
@@ -521,9 +1266,79 @@ function _attachListeners() {
       await _refreshDashboard();
       return;
     }
+
+    // Collapsible capital header
+    const capitalHeader = e.target.closest('#capitalHeader');
+    if (capitalHeader) {
+      STATE.capitalCollapsed = !STATE.capitalCollapsed;
+      const content = document.getElementById('capitalContent');
+      const arrow = document.getElementById('svgCollapseArrow');
+      if (content) content.classList.toggle('hidden', STATE.capitalCollapsed);
+      if (arrow) {
+        if (STATE.capitalCollapsed) {
+          arrow.style.transform = 'rotate(180deg)';
+        } else {
+          arrow.style.transform = 'rotate(0deg)';
+        }
+      }
+      return;
+    }
+
+    // Capital deposits / withdrawals
+    if (id === 'btnCapitalDeposit') {
+      _openCapitalModal(CAPITAL_ENTRY_TYPE.DEPOSIT);
+      return;
+    }
+    if (id === 'btnCapitalWithdraw') {
+      _openCapitalModal(CAPITAL_ENTRY_TYPE.WITHDRAW);
+      return;
+    }
+    if (e.target.closest('#btnDashModalClose')) {
+      _closeCapitalModal();
+      return;
+    }
+    if (e.target.closest('#btnDashModalSave')) {
+      await _saveCapitalTransactionFromModal();
+      return;
+    }
+
+    // Delete capital entry
+    if (action === 'delete-capital') {
+      if (!confirm('هل تريد حذف هذه الحركة من سجل الخزنة الرئيسية؟')) return;
+      const entryId = e.target.dataset.id;
+      if (entryId) {
+        await _deleteCapitalTransaction(_currentUsername(), entryId);
+        await _refreshDashboard();
+      }
+      return;
+    }
+
+    // Print capital treasury
+    if (id === 'btnPrintCapital') {
+      _printCapitalTreasury();
+      return;
+    }
+  });
+
+  // Search filter typing - scoped strictly inside #dashboardPage
+  document.addEventListener('input', async (e) => {
+    const dashboardRoot = e.target.closest('#dashboardPage') || e.target.closest('#dashCapitalModal');
+    if (!dashboardRoot) return;
+
+    if (e.target.id === 'capitalSearchInput') {
+      STATE.capitalSearchQuery = e.target.value || '';
+      await _renderCapitalTreasury(_currentUsername());
+    }
   });
 
   // External sync events - these are window events but guarded by visibility checks inside
+  window.addEventListener(DOMAIN_EVENT.CAPITAL_CHANGED, async () => {
+    const page = document.getElementById('dashboardPage');
+    if (page && !page.classList.contains('hidden')) {
+      await _refreshDashboard();
+    }
+  });
+
   window.addEventListener(DOMAIN_EVENT.RECEIPTS_CHANGED, async () => {
     const page = document.getElementById('dashboardPage');
     if (page && !page.classList.contains('hidden')) {

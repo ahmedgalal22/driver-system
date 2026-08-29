@@ -52,8 +52,8 @@ const routes = async () => DB.getAll('loadPrices');
 const ledgerCount = async () => (await DB.getAll('vehicle_ledger')).length;
 
 console.log('\n— page and schema contract —');
-ok(DB_SRC.includes('const DB_VERSION = 15;') && DB.STORES.loadPrices,
-  'database version 15 defines the Load Prices store');
+ok(DB_SRC.includes('const DB_VERSION = 16;') && DB.STORES.loadPrices,
+  'database version 16 retains the Load Prices store');
 ok(INDEX_SRC.includes('data-page="loadPrices"') && INDEX_SRC.includes('أسعار الحمولة')
   && INDEX_SRC.includes('id="loadPricesPage"') && APP_SRC.includes("loadPrices: 'loadPricesPage'"),
   'sidebar and page routing include أسعار الحمولة');

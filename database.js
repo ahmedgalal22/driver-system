@@ -31,7 +31,7 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 15;             // v15: Load Prices master-data store added (clean reset); v14: Treasury (الخزنة) subsystem removed — treasury + mainCapitalTreasury stores dropped (clean reset); v13: receipt-numbering system removed — receipts.by_number index + receipt_number header field + entire counters store dropped (clean reset); receipts rely on the internal UUID id only
+  const DB_VERSION = 16;             // v16: Dashboard Capital Treasury (mainCapitalTreasury) restored (clean reset); v15: Load Prices master-data store added (clean reset); v14: standalone Treasury (treasury store) removed; v13: receipt-numbering system removed — receipts rely on the internal UUID id only
 
   /**
    * STORES schema.
@@ -160,6 +160,22 @@ const DB = (() => {
         { name: 'by_driver',         keyPath: 'driver_id',                     options: { unique: false } },
         { name: 'by_vehicle',        keyPath: 'vehicle_id',                    options: { unique: false } },
         { name: 'by_receipt_driver', keyPath: ['receipt_id', 'driver_id'],     options: { unique: false } },
+      ],
+    },
+
+    /**
+     * mainCapitalTreasury: owner primary capital book for the embedded
+     * Dashboard section. It is intentionally separate from vehicle_ledger
+     * and the removed standalone treasury page.
+     */
+    mainCapitalTreasury: {
+      name          : 'mainCapitalTreasury',
+      keyPath       : 'id',
+      autoIncrement : false,
+      indexes: [
+        { name: 'by_username', keyPath: 'username',   options: { unique: false } },
+        { name: 'by_type',     keyPath: 'type',       options: { unique: false } },
+        { name: 'by_deleted',  keyPath: 'deleted_at',  options: { unique: false } },
       ],
     },
 

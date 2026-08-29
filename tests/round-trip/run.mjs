@@ -153,12 +153,17 @@ ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.t
   'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
 ok(!/name:\s*'counters'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
-ok(DATABASE_SRC.includes('const DB_VERSION = 15;'),
-  'schema bumped to v15 for the approved Load Prices store; clean reset still purges removed Treasury stores');
-ok(!/name:\s*'treasury'/.test(DATABASE_SRC) && !/name:\s*'mainCapitalTreasury'/.test(DATABASE_SRC),
-  'REMOVED-CONTRACT (Treasury phase, schema): treasury + mainCapitalTreasury object stores dropped — no Treasury store exists');
+ok(DATABASE_SRC.includes('const DB_VERSION = 16;'),
+  'schema bumped to v16 for the approved Dashboard Capital Treasury store');
+ok(/name\s*:\s*'mainCapitalTreasury'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_username'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_type'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_deleted'/.test(DATABASE_SRC),
+  'APPROVED-CONTRACT (Dashboard Capital Treasury): mainCapitalTreasury store and its historical indexes exist');
+ok(!/name:\s*'treasury'/.test(DATABASE_SRC),
+  'EXCLUSION-CONTRACT: the removed standalone treasury store remains absent');
 ok(!/by_entry_type|by_account_type|entry_type|account_type/.test(DATABASE_SRC),
-  'REMOVED-CONTRACT (Treasury phase, schema): treasury-only indexes (by_entry_type / by_account_type) and their keyPaths dropped with the store');
+  'EXCLUSION-CONTRACT: standalone-Treasury-only indexes remain absent');
 
 // ══ Treasury (الخزنة) phase — PERMANENT removal census (production sources) ══
 for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', ALLRECEIPTS_SRC], ['financial.js', FINANCIAL_SRC]]) {
