@@ -254,6 +254,17 @@ function _ledgerNote(entry) {
   if (refType === 'salfa_recovery') {
     return note || 'استرداد سلفة';
   }
+  // Structured maintenance withdrawals remain normal manual vehicle
+  // movements, while their note in the Financial Movements tab identifies the
+  // maintenance type without changing any ledger calculation.
+  const maintenanceType = String(entry.maintenance_type || '').trim();
+  if (maintenanceType) {
+    const quantity = entry.maintenance_quantity;
+    const quantityText = quantity === null || quantity === undefined || quantity === ''
+      ? ''
+      : ` — العدد: ${quantity}`;
+    return `صيانة — ${maintenanceType}${quantityText}${note ? ` — ${note}` : ''}`;
+  }
   // Generic
   if (note) return note;
   return _ledgerType(type);
@@ -1409,6 +1420,265 @@ async function _getOwnerVehicleFinancials(ownerId) {
   };
 }
 
+// ── Vehicle Details tabs + structured manual maintenance metadata ────────────
+// Maintenance remains a normal `manual_vehicle_balance` withdrawal. These
+// fields only classify the existing active vehicle-ledger movement for UI.
+const MAINTENANCE_TYPE_SUGGESTIONS = Object.freeze([
+  'جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت',
+]);
+let _vehicleDetailsTab = 'financial';
+let _maintenanceVehicleFilter = '';
+let _maintenanceEntriesCache = [];
+let _editingMaintenanceReferenceId = null;
+
+function _escapeMaintenanceText(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function _isActiveMaintenanceEntry(entry) {
+  return !!entry
+    && entry.reference_type === 'manual_vehicle_balance'
+    && entry.effect === 'manual_vehicle_balance'
+    && entry.type === 'withdraw'
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+    && String(entry.maintenance_type || '').trim().length > 0;
+}
+
+function _setVehicleDetailsTab(tab) {
+  _vehicleDetailsTab = tab === 'maintenance' ? 'maintenance' : 'financial';
+  const financialPanel = document.getElementById('vehicleDetailsTabFinancial');
+  const maintenancePanel = document.getElementById('vehicleDetailsTabMaintenance');
+  const financialButton = document.getElementById('vehicleDetailsTabBtnFinancial');
+  const maintenanceButton = document.getElementById('vehicleDetailsTabBtnMaintenance');
+  const isFinancial = _vehicleDetailsTab === 'financial';
+
+  if (financialPanel) financialPanel.classList.toggle('hidden', !isFinancial);
+  if (maintenancePanel) maintenancePanel.classList.toggle('hidden', isFinancial);
+  if (financialButton) {
+    financialButton.classList.toggle('active-purple', isFinancial);
+    financialButton.setAttribute('aria-selected', String(isFinancial));
+  }
+  if (maintenanceButton) {
+    maintenanceButton.classList.toggle('active-purple', !isFinancial);
+    maintenanceButton.setAttribute('aria-selected', String(!isFinancial));
+  }
+}
+
+async function _renderMaintenanceTab(client, ledger = []) {
+  const vehicles = await OwnersModule.getOwnerVehicles(client.id);
+  const activeMaintenance = (ledger || []).filter(_isActiveMaintenanceEntry);
+  _maintenanceEntriesCache = activeMaintenance;
+
+  const validFilter = vehicles.some(vehicle => String(vehicle.id) === String(_maintenanceVehicleFilter));
+  if (!validFilter) {
+    _maintenanceVehicleFilter = vehicles.length === 1 ? String(vehicles[0].id) : '';
+  }
+
+  const selectedVehicleId = _maintenanceVehicleFilter;
+  const entries = selectedVehicleId
+    ? activeMaintenance.filter(entry => String(entry.vehicle_id) === selectedVehicleId)
+    : [];
+  const selectedVehicle = vehicles.find(vehicle => String(vehicle.id) === selectedVehicleId) || null;
+  const selectorOptions = vehicles.map(vehicle => `
+    <option value="${_escapeMaintenanceText(vehicle.id)}"${String(vehicle.id) === selectedVehicleId ? ' selected' : ''}>
+      ${_escapeMaintenanceText(vehicle.plate || vehicle.id)}
+    </option>`).join('');
+
+  const tableRows = selectedVehicleId
+    ? entries.length
+      ? entries.map(entry => `
+          <tr>
+            <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
+            <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
+            <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
+            <td class="font-semibold">${_fmt(entry.amount)}</td>
+            <td>${_escapeMaintenanceText(entry.note || '—')}</td>
+            <td class="text-center">
+              <div class="flex gap-1 justify-center">
+                <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
+                <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
+              </div>
+            </td>
+          </tr>
+        `).join('')
+      : `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة للمركبة المحددة</td></tr>`
+    : `<tr><td colspan="6" class="text-muted text-center p-6">اختر مركبة لعرض حركات الصيانة</td></tr>`;
+
+  return `
+    <section class="mb-8" role="tabpanel" id="vehicleDetailsTabMaintenance">
+      <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div class="form-group mb-0" style="min-width:220px;">
+          <label class="label mb-1 text-muted text-xs" for="maintenanceVehicleFilter">المركبة</label>
+          <select id="maintenanceVehicleFilter" class="input input-sm" data-action="maintenance-vehicle-filter">
+            <option value="">— اختر المركبة —</option>
+            ${selectorOptions}
+          </select>
+        </div>
+        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm"${vehicles.length ? '' : ' disabled'}>
+          صيانة${selectedVehicle ? ` — ${_escapeMaintenanceText(selectedVehicle.plate || selectedVehicle.id)}` : ''}
+        </button>
+      </div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>نوع الصيانة</th>
+              <th>العدد</th>
+              <th>المبلغ</th>
+              <th>ملاحظة</th>
+              <th>الإجراءات</th>
+            </tr>
+          </thead>
+          <tbody id="vehicleMaintenanceBody">${tableRows}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function _renderMaintenanceTypeSuggestions(query = '') {
+  const box = document.getElementById('vehicleMaintenanceTypeSuggestions');
+  if (!box) return;
+  const normalized = String(query || '').trim().toLowerCase();
+  const matches = MAINTENANCE_TYPE_SUGGESTIONS.filter(type => type.toLowerCase().includes(normalized));
+  box.innerHTML = matches.length
+    ? matches.map(type => `<button type="button" data-action="select-maintenance-type" data-value="${type}" style="display:block;width:100%;border:0;background:#fff;padding:8px 10px;text-align:right;cursor:pointer;font:inherit;">${type}</button>`).join('')
+    : '<div class="text-muted text-xs" style="padding:8px 10px;">يمكنك إدخال نوع مخصص</div>';
+  box.classList.remove('hidden');
+}
+
+function _ensureVehicleMaintenanceModal() {
+  if (document.getElementById('vehicleMaintenanceModal')) return;
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div id="vehicleMaintenanceModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold" id="vehicleMaintenanceTitle">صيانة مركبة</h3>
+          <button type="button" data-action="close-vehicle-maintenance" class="btn btn-secondary btn-sm">إغلاق</button>
+        </div>
+        <div class="grid gap-3 mb-4">
+          <div>
+            <label class="label mb-1" for="vehicleMaintenanceVehicle">المركبة <span class="text-red-500">*</span></label>
+            <select id="vehicleMaintenanceVehicle" class="input input-sm"></select>
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleMaintenanceDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceDate" type="date" class="input input-sm">
+          </div>
+          <div style="position:relative;">
+            <label class="label mb-1" for="vehicleMaintenanceType">نوع الصيانة <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceType" type="text" autocomplete="off" class="input input-sm" placeholder="اختر أو اكتب نوع الصيانة">
+            <div id="vehicleMaintenanceTypeSuggestions" class="hidden" style="position:absolute;z-index:60;top:100%;right:0;left:0;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 8px 18px rgba(0,0,0,.12);max-height:180px;overflow:auto;"></div>
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleMaintenanceQuantity">العدد <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceQuantity" type="number" min="0" step="any" class="input input-sm" placeholder="0">
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleMaintenanceAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceAmount" type="number" min="0" step="0.01" class="input input-sm" placeholder="0.00">
+          </div>
+          <div>
+            <label class="label mb-1" for="vehicleMaintenanceNote">ملاحظة</label>
+            <input id="vehicleMaintenanceNote" type="text" class="input input-sm" placeholder="ملاحظة اختيارية">
+          </div>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-action="close-vehicle-maintenance" class="btn btn-secondary btn-sm">إلغاء</button>
+          <button type="button" data-action="save-vehicle-maintenance" class="btn btn-primary btn-sm">💾 حفظ</button>
+        </div>
+        <div id="vehicleMaintenanceMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(div.firstElementChild);
+}
+
+async function _openVehicleMaintenanceModal(entry = null) {
+  if (!_selectedClient?.id) return;
+  _ensureVehicleMaintenanceModal();
+  const vehicles = await OwnersModule.getOwnerVehicles(_selectedClient.id);
+  const modal = document.getElementById('vehicleMaintenanceModal');
+  const title = document.getElementById('vehicleMaintenanceTitle');
+  const vehicleSelect = document.getElementById('vehicleMaintenanceVehicle');
+  const date = document.getElementById('vehicleMaintenanceDate');
+  const type = document.getElementById('vehicleMaintenanceType');
+  const quantity = document.getElementById('vehicleMaintenanceQuantity');
+  const amount = document.getElementById('vehicleMaintenanceAmount');
+  const note = document.getElementById('vehicleMaintenanceNote');
+  const msg = document.getElementById('vehicleMaintenanceMsg');
+
+  _editingMaintenanceReferenceId = entry?.reference_id || null;
+  if (title) title.textContent = entry ? 'تعديل صيانة مركبة' : 'صيانة مركبة';
+  if (vehicleSelect) {
+    vehicleSelect.innerHTML = '<option value="">— اختر المركبة —</option>'
+      + vehicles.map(vehicle => `<option value="${vehicle.id}">${vehicle.plate || vehicle.id}</option>`).join('');
+    const preferredVehicleId = entry?.vehicle_id || _maintenanceVehicleFilter || (vehicles.length === 1 ? vehicles[0].id : '');
+    vehicleSelect.value = String(preferredVehicleId || '');
+  }
+  if (date) date.value = entry?.date || DateUtils.todayLocal();
+  if (type) type.value = entry?.maintenance_type || '';
+  if (quantity) quantity.value = entry?.maintenance_quantity ?? '';
+  if (amount) amount.value = entry?.amount ?? '';
+  if (note) note.value = entry?.note || '';
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+  document.getElementById('vehicleMaintenanceTypeSuggestions')?.classList.add('hidden');
+  modal?.classList.remove('hidden');
+}
+
+function _closeVehicleMaintenanceModal() {
+  document.getElementById('vehicleMaintenanceModal')?.classList.add('hidden');
+  document.getElementById('vehicleMaintenanceTypeSuggestions')?.classList.add('hidden');
+  _editingMaintenanceReferenceId = null;
+}
+
+async function _saveVehicleMaintenance() {
+  const vehicle_id = document.getElementById('vehicleMaintenanceVehicle')?.value || '';
+  const date = document.getElementById('vehicleMaintenanceDate')?.value || '';
+  const maintenance_type = document.getElementById('vehicleMaintenanceType')?.value?.trim() || '';
+  const maintenance_quantity = Number(document.getElementById('vehicleMaintenanceQuantity')?.value);
+  const amount = parseFloat(document.getElementById('vehicleMaintenanceAmount')?.value) || 0;
+  const note = document.getElementById('vehicleMaintenanceNote')?.value?.trim() || '';
+  const msg = document.getElementById('vehicleMaintenanceMsg');
+
+  if (!vehicle_id || !date || !maintenance_type || !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 || amount <= 0) {
+    if (msg) {
+      msg.textContent = !vehicle_id ? '❌ يجب اختيار المركبة'
+        : !date ? '❌ التاريخ مطلوب'
+        : !maintenance_type ? '❌ نوع الصيانة مطلوب'
+        : !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 ? '❌ العدد يجب أن يكون أكبر من صفر'
+        : '❌ المبلغ يجب أن يكون أكبر من صفر';
+      msg.classList.add('is-visible');
+    }
+    return;
+  }
+
+  try {
+    const data = { vehicle_id, entry_type: 'withdraw', amount, date, note, maintenance_type, maintenance_quantity };
+    if (_editingMaintenanceReferenceId) {
+      await FinancialService.updateVehicleMaintenanceEntry(_currentUsername(), _editingMaintenanceReferenceId, data);
+    } else {
+      await FinancialService.createManualVehicleBalanceEntry(_currentUsername(), data);
+    }
+    _maintenanceVehicleFilter = String(vehicle_id);
+    _vehicleDetailsTab = 'maintenance';
+    _closeVehicleMaintenanceModal();
+    if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || '❌ فشل حفظ حركة الصيانة';
+      msg.classList.add('is-visible');
+    }
+  }
+}
+
 // ── رصيد العميل — existing vehicle_ledger read projection ─────────────────
 // The existing layout remains intact. Entries are read-only movements from the
 // same vehicle_ledger records used by rebuildVehicleBalance; the date controls
@@ -1673,6 +1943,7 @@ async function showOwnerDetails(id, type = 'owner') {
 
   const financials = await _getOwnerVehicleFinancials(client.id);
   const ledgerHtml = _renderLedger(client, financials.ledger);
+  const maintenanceHtml = await _renderMaintenanceTab(client, financials.ledger);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
@@ -1703,7 +1974,15 @@ async function showOwnerDetails(id, type = 'owner') {
         </div>
       </div>
 
-      ${ledgerHtml}
+      <div class="tabs mb-6" role="tablist" aria-label="تفاصيل المركبة">
+        <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn active-purple" aria-selected="true">الحركات المالية</button>
+        <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn" aria-selected="false">الصيانة</button>
+      </div>
+
+      <section id="vehicleDetailsTabFinancial" role="tabpanel">
+        ${ledgerHtml}
+      </section>
+      ${maintenanceHtml}
       ${relatedHtml}
     </div>
   `;
@@ -1711,6 +1990,7 @@ async function showOwnerDetails(id, type = 'owner') {
   if (typeof window.showPage === 'function') {
     await window.showPage('ownerDetailsPage');
   }
+  _setVehicleDetailsTab(_vehicleDetailsTab);
 }
 
 // ─── EXCEL HANDLERS ───────────────────────────────────────────────────────────
@@ -1788,6 +2068,52 @@ function attachOwnersPageListeners() {
   document.body.dataset.ownersListenersBound = '1';
 
   document.addEventListener('click', async (e) => {
+    const vehicleDetailsTab = e.target.closest('[data-action="vehicle-details-tab"]');
+    if (vehicleDetailsTab) {
+      _setVehicleDetailsTab(vehicleDetailsTab.dataset.tab);
+      return;
+    }
+
+    if (e.target.closest('[data-action="open-vehicle-maintenance"]')) {
+      await _openVehicleMaintenanceModal();
+      return;
+    }
+    if (e.target.closest('[data-action="close-vehicle-maintenance"]')) {
+      _closeVehicleMaintenanceModal();
+      return;
+    }
+    const selectMaintenanceType = e.target.closest('[data-action="select-maintenance-type"]');
+    if (selectMaintenanceType) {
+      const typeInput = document.getElementById('vehicleMaintenanceType');
+      if (typeInput) typeInput.value = selectMaintenanceType.dataset.value || '';
+      document.getElementById('vehicleMaintenanceTypeSuggestions')?.classList.add('hidden');
+      typeInput?.focus();
+      return;
+    }
+    if (e.target.closest('[data-action="save-vehicle-maintenance"]')) {
+      await _saveVehicleMaintenance();
+      return;
+    }
+    const editMaintenance = e.target.closest('[data-action="edit-vehicle-maintenance"]');
+    if (editMaintenance) {
+      const entry = _maintenanceEntriesCache.find(item => item.reference_id === editMaintenance.dataset.refId);
+      if (entry) await _openVehicleMaintenanceModal(entry);
+      return;
+    }
+    const deleteMaintenance = e.target.closest('[data-action="delete-vehicle-maintenance"]');
+    if (deleteMaintenance) {
+      const entry = _maintenanceEntriesCache.find(item => item.reference_id === deleteMaintenance.dataset.refId);
+      if (!entry || !confirm('هل تريد حذف حركة الصيانة؟')) return;
+      try {
+        await FinancialService.deleteManualVehicleBalanceEntry(_currentUsername(), entry.reference_id);
+        _vehicleDetailsTab = 'maintenance';
+        if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
+      } catch (err) {
+        alert(err.message || '❌ فشل حذف حركة الصيانة');
+      }
+      return;
+    }
+
     // Vehicle/customer manual balance entry — one explicit vehicle-ledger
     // movement, separate from receipt payments, company balances, and kartas.
     const openVehicleBalanceEntry = e.target.closest('[data-action="open-balance-entry"]');
@@ -2150,6 +2476,26 @@ function attachOwnersPageListeners() {
         alert(err.message || '❌ فشل حفظ المركبة');
       }
       return;
+    }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (e.target.id === 'vehicleMaintenanceType') {
+      _renderMaintenanceTypeSuggestions(e.target.value);
+    }
+  });
+
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'vehicleMaintenanceType') {
+      _renderMaintenanceTypeSuggestions(e.target.value);
+    }
+  });
+
+  document.addEventListener('change', async (e) => {
+    if (e.target.id === 'maintenanceVehicleFilter') {
+      _maintenanceVehicleFilter = e.target.value || '';
+      _vehicleDetailsTab = 'maintenance';
+      if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner');
     }
   });
 }

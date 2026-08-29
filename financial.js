@@ -779,11 +779,12 @@ async function getOfficeBalance(office_id) {
 // ─── MANUAL VEHICLE BALANCE MOVEMENTS ────────────────────────────────────────
 
 /**
- * Create one manual vehicle balance movement in the existing vehicle_ledger.
- * This is intentionally a single vehicle leg: it has no receipt-row, company,
- * driver, or Karta Settlement side effect.
+ * Prepare the existing single-leg manual vehicle movement payload. Maintenance
+ * is a structured manual withdrawal, not a separate financial engine: when
+ * maintenance metadata is absent, the existing manual deposit/withdraw
+ * contract remains unchanged.
  */
-async function createManualVehicleBalanceEntry(username, data) {
+async function _prepareManualVehicleBalancePayload(username, data) {
   if (!username) throw new Error('[FinancialService:createManualVehicleBalanceEntry] username is required.');
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createManualVehicleBalanceEntry] data must be a plain object.');
@@ -794,13 +795,27 @@ async function createManualVehicleBalanceEntry(username, data) {
   const amount = Money.toCents(data.amount);
   const date = data.date || DateUtils.todayLocal();
   const note = typeof data.note === 'string' ? data.note.trim() : '';
+  const maintenance_type = typeof data.maintenance_type === 'string' ? data.maintenance_type.trim() : '';
+  const hasMaintenance = maintenance_type.length > 0;
+  const maintenance_quantity = hasMaintenance ? Number(data.maintenance_quantity) : null;
 
   if (!vehicle_id) throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle_id is required.');
   if (!entry_type) throw new Error('[FinancialService:createManualVehicleBalanceEntry] entry_type must be deposit or withdraw.');
   if (amount <= 0) throw new Error('[FinancialService:createManualVehicleBalanceEntry] amount must be greater than zero.');
-  if (!note) throw new Error('[FinancialService:createManualVehicleBalanceEntry] note is required.');
+  // Preserve the existing generic-manual validation order and note rule.
+  if (!hasMaintenance && !note) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] note is required.');
+  }
   if (!date || isNaN(Date.parse(date))) {
     throw new Error('[FinancialService:createManualVehicleBalanceEntry] date must be a valid ISO date string.');
+  }
+  if (hasMaintenance) {
+    if (entry_type !== 'withdraw') {
+      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance entries must be withdrawals.');
+    }
+    if (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0) {
+      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance_quantity must be greater than zero.');
+    }
   }
 
   // Resolve the vehicle before scheduling the atomic ledger write. A missing
@@ -810,33 +825,92 @@ async function createManualVehicleBalanceEntry(username, data) {
     throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle not found.');
   }
 
-  const reference_id = _uuid();
   const now = DateUtils.nowLocal();
+  return {
+    username,
+    owner_id: String(vehicle.owner_id || ''),
+    owner_name: vehicle.owner_name || null,
+    client_id: String(vehicle.id),
+    client_type: 'vehicle',
+    client_name: vehicle.plate || null,
+    vehicle_id: vehicle.id,
+    vehicle_plate: vehicle.plate || null,
+    type: entry_type,
+    effect: MANUAL_VEHICLE_EFFECT,
+    amount,
+    reference_type: MANUAL_VEHICLE_REF_TYPE,
+    reference_id: _uuid(),
+    date,
+    applied_at: now,
+    is_reversed: false,
+    // Existing manual entries still require a note. Maintenance allows an
+    // intentionally empty note while preserving it as null in the ledger.
+    note: note || null,
+    ...(hasMaintenance ? {
+      maintenance_type,
+      maintenance_quantity,
+    } : {}),
+  };
+}
+
+async function _getActiveManualVehicleBalanceEntries(reference_id) {
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  return entries.filter(entry =>
+    entry.reference_type === MANUAL_VEHICLE_REF_TYPE
+    && entry.effect === MANUAL_VEHICLE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+/**
+ * Create one manual vehicle balance movement in the existing vehicle_ledger.
+ * This is intentionally a single vehicle leg: it has no receipt-row, company,
+ * driver, or Karta Settlement side effect.
+ */
+async function createManualVehicleBalanceEntry(username, data) {
+  const payload = await _prepareManualVehicleBalancePayload(username, data);
   const [saved] = await DB.transaction([{
     op: 'add',
     store: STORE.LEDGER,
-    payload: {
-      username,
-      owner_id: String(vehicle.owner_id || ''),
-      owner_name: vehicle.owner_name || null,
-      client_id: String(vehicle.id),
-      client_type: 'vehicle',
-      client_name: vehicle.plate || null,
-      vehicle_id: vehicle.id,
-      vehicle_plate: vehicle.plate || null,
-      type: entry_type,
-      effect: MANUAL_VEHICLE_EFFECT,
-      amount,
-      reference_type: MANUAL_VEHICLE_REF_TYPE,
-      reference_id,
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note,
-    },
+    payload,
   }], { username });
 
   return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Replace one active structured maintenance withdrawal atomically. The old
+ * manual record is audit-reversed and a fresh record is created, so an amount
+ * or vehicle correction never leaves duplicate active withdrawals.
+ */
+async function updateVehicleMaintenanceEntry(username, reference_id, data) {
+  if (!username) throw new Error('[FinancialService:updateVehicleMaintenanceEntry] username is required.');
+  const active = await _getActiveManualVehicleBalanceEntries(reference_id);
+  const previous = active.find(entry => entry.type === 'withdraw' && String(entry.maintenance_type || '').trim());
+  if (!previous) {
+    throw new Error('[FinancialService:updateVehicleMaintenanceEntry] maintenance transaction not found or already reversed.');
+  }
+
+  const payload = await _prepareManualVehicleBalancePayload(username, {
+    ...data,
+    entry_type: 'withdraw',
+  });
+  if (!String(payload.maintenance_type || '').trim()) {
+    throw new Error('[FinancialService:updateVehicleMaintenanceEntry] maintenance_type is required.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const results = await DB.transaction([
+    ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { op: 'add', store: STORE.LEDGER, payload },
+  ], { username });
+
+  return Money.decimalizeRecord(results[results.length - 1]);
 }
 
 /**
@@ -844,16 +918,7 @@ async function createManualVehicleBalanceEntry(username, data) {
  */
 async function deleteManualVehicleBalanceEntry(username, reference_id) {
   if (!username) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] username is required.');
-  const referenceKey = String(reference_id || '').trim();
-  if (!referenceKey) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] reference_id is required.');
-
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
-  const active = entries.filter(entry =>
-    entry.reference_type === MANUAL_VEHICLE_REF_TYPE
-    && entry.effect === MANUAL_VEHICLE_EFFECT
-    && entry.is_reversed === false
-    && entry.deleted_at === null
-  );
+  const active = await _getActiveManualVehicleBalanceEntries(reference_id);
   if (active.length === 0) {
     throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] manual vehicle transaction not found or already reversed.');
   }
@@ -1799,6 +1864,7 @@ export const FinancialService = Object.freeze({
   getVehicleLedger,
   getOfficeBalance,
   createManualVehicleBalanceEntry,
+  updateVehicleMaintenanceEntry,
   deleteManualVehicleBalanceEntry,
   createManualOfficeBalanceEntry,
   deleteManualOfficeBalanceEntry,
