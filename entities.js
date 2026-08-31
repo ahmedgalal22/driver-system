@@ -1418,18 +1418,26 @@ function _readRestoredVehicleId(ownerId) {
   return null;
 }
 
-async function _resolveDetailVehicle(ownerId, preferredVehicleId = null) {
+async function _resolveDetailVehicle(owner, preferredVehicleId = null) {
+  const ownerId = String(owner?.id || '').trim();
+  if (!ownerId) return null;
+
   const preferredId = String(preferredVehicleId || _readRestoredVehicleId(ownerId) || '').trim();
   if (preferredId) {
     const preferred = await ClientRepository.getVehicleById(preferredId);
-    if (preferred && preferred.deleted_at === null && String(preferred.owner_id || '') === String(ownerId)) {
+    if (preferred && preferred.deleted_at === null && String(preferred.owner_id || '') === ownerId) {
       return preferred;
     }
   }
 
-  const vehicles = await OwnersModule.getOwnerVehicles(ownerId);
-  if (vehicles.length === 0) return null;
-  return vehicles[0];
+  // Vehicle Management rows identify the specific vehicle by the owner's
+  // vehicle number. Some current development records have not reached receipt
+  // creation yet, so their physical vehicles-store record does not exist. Use
+  // the existing canonical resolver to materialize that exact selected vehicle
+  // rather than silently falling back to another vehicle owned by the same owner.
+  const vehicleNumber = String(owner?.vehicle_number || owner?.name || '').trim();
+  if (!vehicleNumber) return null;
+  return resolveVehicle(_currentUsername(), vehicleNumber, owner);
 }
 
 // ── Vehicle Details tabs + structured manual maintenance metadata ────────────
@@ -1903,7 +1911,7 @@ async function _renderOwnerVehicles(client) {
 async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
   const client = await _getClient('owner', id);
   if (!client) return;
-  const vehicle = await _resolveDetailVehicle(client.id, vehicleId);
+  const vehicle = await _resolveDetailVehicle(client, vehicleId);
   if (!vehicle) return;
 
   _selectedClient = client;

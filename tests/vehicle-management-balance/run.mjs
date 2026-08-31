@@ -70,6 +70,33 @@ const b2 = f2.balance;
 ok(b1 === 100 && b2 === -40 && f1.vehicle_id === V1.id && f2.vehicle_id === V2.id,
   'each Vehicle Management row obtains its matching vehicle balance and passes the specific vehicle ID to Vehicle Details');
 
+console.log('\n— Vehicle Details opening from a management row without a vehicles-store record —');
+const OWNER_C = uuid();
+const legacyOwner = await ClientRepository.saveOwner({
+  id: OWNER_C,
+  username: U,
+  vehicle_number: '333 ص ي',
+  name: '333 ص ي',
+}, { username: U });
+ok((await ClientRepository.getVehiclesByPlate(legacyOwner.vehicle_number)).length === 0,
+  'fixture begins as a Vehicle Management row with no physical vehicles-store record');
+const resolveDetailVehicle = new Function('ClientRepository', '_currentUsername', 'sessionStorage', `
+  ${extractFn(SRC, '_normalizePlate')}
+  ${extractFn(SRC, 'resolveVehicle')}
+  ${extractFn(SRC, '_readRestoredVehicleId')}
+  ${extractFn(SRC, '_resolveDetailVehicle')}
+  return _resolveDetailVehicle;
+`)(ClientRepository, () => U, { getItem: () => null });
+const openedVehicle = await resolveDetailVehicle(legacyOwner, null);
+const restoredVehicle = await resolveDetailVehicle(legacyOwner, openedVehicle.id);
+ok(openedVehicle && openedVehicle.id && openedVehicle.plate === legacyOwner.vehicle_number
+   && String(openedVehicle.owner_id) === String(legacyOwner.id),
+  'opening details materializes the exact clicked Vehicle Management vehicle rather than failing navigation');
+ok(restoredVehicle.id === openedVehicle.id
+   && SRC.includes("await window.showPage('ownerDetailsPage');")
+   && !SRC.includes('return vehicles[0];'),
+  'selected vehicle ID is preserved for detail navigation and no first-owner-vehicle fallback remains');
+
 const rowRenderer = new Function('_fmt', '_balanceClass', `
   ${extractFn(SRC, '_buildClientRow')}
   return _buildClientRow;
