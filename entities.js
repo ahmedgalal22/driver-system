@@ -1513,19 +1513,23 @@ function _filterMaintenanceEntries(entries, query = _maintenanceSearchQuery) {
 
 function _renderMaintenanceRows(entries) {
   if (!entries.length) {
-    return `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة مطابقة</td></tr>`;
+    return `<tr><td colspan="6" class="vehicle-details-empty-state">لا توجد حركات صيانة مطابقة</td></tr>`;
   }
   return entries.map(entry => `
     <tr>
-      <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
-      <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
-      <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
-      <td class="font-semibold">${_fmt(entry.amount)}</td>
-      <td>${_escapeMaintenanceText(entry.note || '—')}</td>
-      <td class="text-center">
-        <div class="flex gap-1 justify-center">
-          <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
-          <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
+      <td class="vehicle-details-date-cell">${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
+      <td class="vehicle-details-strong-cell">${_escapeMaintenanceText(entry.maintenance_type)}</td>
+      <td class="vehicle-details-number-cell">${_escapeMaintenanceText(entry.maintenance_quantity ?? '—')}</td>
+      <td class="vehicle-details-amount-cell">${_fmt(entry.amount)}</td>
+      <td class="vehicle-details-note-cell">${_escapeMaintenanceText(entry.note || '—')}</td>
+      <td class="vehicle-details-actions-cell">
+        <div class="vehicle-details-row-actions">
+          <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn vehicle-details-icon-action vehicle-details-icon-action--edit" title="تعديل" aria-label="تعديل حركة الصيانة">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+          <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn vehicle-details-icon-action vehicle-details-icon-action--delete" title="حذف" aria-label="حذف حركة الصيانة">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
+          </button>
         </div>
       </td>
     </tr>
@@ -1544,18 +1548,28 @@ async function _renderMaintenanceTab(ledger = []) {
   const tableRows = _renderMaintenanceRows(_filterMaintenanceEntries(activeMaintenance));
 
   return `
-    <section class="mb-8" role="tabpanel" id="vehicleDetailsTabMaintenance">
-      <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
-        <div>
-          <h3 class="text-lg font-bold mb-0">الصيانة</h3>
+    <section class="vehicle-details-panel vehicle-maintenance-panel" role="tabpanel" id="vehicleDetailsTabMaintenance">
+      <header class="vehicle-details-panel-header">
+        <div class="vehicle-details-panel-title-group">
+          <span class="vehicle-details-panel-icon vehicle-details-panel-icon--maintenance" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m14.7 6.3 3 3"/><path d="m5 19 8.9-8.9a4.8 4.8 0 0 0 5.5-6.2l-3.2 3.2-2.8-2.8L16.6 1a4.8 4.8 0 0 0-6.2 5.5L1.5 15.4A2.12 2.12 0 0 0 4.6 18.5l8.9-8.9"/><path d="m15 15 4.5 4.5"/><path d="m18 18 2 2"/></svg>
+          </span>
+          <div>
+            <h3>الصيانة</h3>
+            <p>تسجيل ومتابعة سحوبات صيانة المركبة</p>
+          </div>
         </div>
-        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">سحب للصيانة</button>
+        <button type="button" data-action="open-vehicle-maintenance" class="btn vehicle-details-action vehicle-details-action--maintenance">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.7 6.3 3 3"/><path d="m5 19 8.9-8.9a4.8 4.8 0 0 0 5.5-6.2l-3.2 3.2-2.8-2.8L16.6 1a4.8 4.8 0 0 0-6.2 5.5L1.5 15.4A2.12 2.12 0 0 0 4.6 18.5l8.9-8.9"/></svg>
+          <span>سحب للصيانة</span>
+        </button>
+      </header>
+      <div class="vehicle-details-search-wrap">
+        <svg class="vehicle-details-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.2-4.2"/></svg>
+        <input id="vehicleMaintenanceSearch" type="search" class="input vehicle-details-search-input" aria-label="بحث" value="${_escapeMaintenanceText(_maintenanceSearchQuery)}" placeholder="ابحث بالتاريخ أو النوع أو العدد أو المبلغ أو الملاحظة">
       </div>
-      <div class="form-group mb-4" style="max-width:320px;">
-        <input id="vehicleMaintenanceSearch" type="search" class="input input-sm" aria-label="بحث" value="${_escapeMaintenanceText(_maintenanceSearchQuery)}" placeholder="ابحث بالتاريخ أو النوع أو العدد أو المبلغ أو الملاحظة">
-      </div>
-      <div class="table-wrapper">
-        <table class="table">
+      <div class="table-wrapper vehicle-details-table-wrap">
+        <table class="table vehicle-details-table vehicle-details-table--maintenance">
           <thead>
             <tr>
               <th>التاريخ</th>
@@ -1563,7 +1577,7 @@ async function _renderMaintenanceTab(ledger = []) {
               <th>العدد</th>
               <th>المبلغ</th>
               <th>الملاحظة</th>
-              <th>الإجراءات</th>
+              <th class="vehicle-details-actions-heading">الإجراءات</th>
             </tr>
           </thead>
           <tbody id="vehicleMaintenanceBody">${tableRows}</tbody>
@@ -1579,8 +1593,8 @@ function _renderMaintenanceTypeSuggestions(query = '') {
   const normalized = String(query || '').trim().toLowerCase();
   const matches = MAINTENANCE_TYPE_SUGGESTIONS.filter(type => type.toLowerCase().includes(normalized));
   box.innerHTML = matches.length
-    ? matches.map(type => `<button type="button" data-action="select-maintenance-type" data-value="${type}" style="display:block;width:100%;border:0;background:#fff;padding:8px 10px;text-align:right;cursor:pointer;font:inherit;">${type}</button>`).join('')
-    : '<div class="text-muted text-xs" style="padding:8px 10px;">يمكنك إدخال نوع مخصص</div>';
+    ? matches.map(type => `<button type="button" data-action="select-maintenance-type" data-value="${type}" class="vehicle-maintenance-suggestion">${type}</button>`).join('')
+    : '<div class="vehicle-maintenance-suggestion-empty">يمكنك إدخال نوع مخصص</div>';
   box.classList.remove('hidden');
 }
 
@@ -1588,40 +1602,53 @@ function _ensureVehicleMaintenanceModal() {
   if (document.getElementById('vehicleMaintenanceModal')) return;
   const div = document.createElement('div');
   div.innerHTML = `
-    <div id="vehicleMaintenanceModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold" id="vehicleMaintenanceTitle">صيانة مركبة</h3>
-          <button type="button" data-action="close-vehicle-maintenance" class="btn btn-secondary btn-sm">إغلاق</button>
+    <div id="vehicleMaintenanceModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 vehicle-maintenance-modal">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md vehicle-maintenance-modal__dialog">
+        <div class="vehicle-maintenance-modal__header">
+          <div class="vehicle-maintenance-modal__title-group">
+            <span class="vehicle-maintenance-modal__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.7 6.3 3 3"/><path d="m5 19 8.9-8.9a4.8 4.8 0 0 0 5.5-6.2l-3.2 3.2-2.8-2.8L16.6 1a4.8 4.8 0 0 0-6.2 5.5L1.5 15.4A2.12 2.12 0 0 0 4.6 18.5l8.9-8.9"/></svg>
+            </span>
+            <div>
+              <h3 id="vehicleMaintenanceTitle">صيانة مركبة</h3>
+              <p>سحب مباشر من رصيد المركبة الحالية</p>
+            </div>
+          </div>
+          <button type="button" data-action="close-vehicle-maintenance" class="btn vehicle-details-close-button" aria-label="إغلاق نافذة الصيانة">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
         </div>
-        <div class="grid gap-3 mb-4">
-          <div>
-            <label class="label mb-1" for="vehicleMaintenanceDate">التاريخ <span class="text-red-500">*</span></label>
-            <input id="vehicleMaintenanceDate" type="date" class="input input-sm">
+        <div class="vehicle-maintenance-form">
+          <div class="vehicle-maintenance-field">
+            <label class="label" for="vehicleMaintenanceDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceDate" type="date" class="input">
           </div>
-          <div style="position:relative;">
-            <label class="label mb-1" for="vehicleMaintenanceType">نوع الصيانة <span class="text-red-500">*</span></label>
-            <input id="vehicleMaintenanceType" type="text" autocomplete="off" class="input input-sm" placeholder="اختر أو اكتب نوع الصيانة">
-            <div id="vehicleMaintenanceTypeSuggestions" class="hidden" style="position:absolute;z-index:60;top:100%;right:0;left:0;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 8px 18px rgba(0,0,0,.12);max-height:180px;overflow:auto;"></div>
+          <div class="vehicle-maintenance-field vehicle-maintenance-field--suggestions">
+            <label class="label" for="vehicleMaintenanceType">نوع الصيانة <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceType" type="text" autocomplete="off" class="input" placeholder="اختر أو اكتب نوع الصيانة">
+            <div id="vehicleMaintenanceTypeSuggestions" class="hidden vehicle-maintenance-suggestions"></div>
           </div>
-          <div>
-            <label class="label mb-1" for="vehicleMaintenanceQuantity">العدد</label>
-            <input id="vehicleMaintenanceQuantity" type="number" min="0" step="any" class="input input-sm" placeholder="0">
+          <div class="vehicle-maintenance-field">
+            <label class="label" for="vehicleMaintenanceQuantity">العدد <span class="vehicle-maintenance-optional">اختياري</span></label>
+            <input id="vehicleMaintenanceQuantity" type="number" min="0" step="any" class="input" placeholder="0">
           </div>
-          <div>
-            <label class="label mb-1" for="vehicleMaintenanceAmount">المبلغ <span class="text-red-500">*</span></label>
-            <input id="vehicleMaintenanceAmount" type="number" min="0" step="0.01" class="input input-sm" placeholder="0.00">
+          <div class="vehicle-maintenance-field">
+            <label class="label" for="vehicleMaintenanceAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="vehicleMaintenanceAmount" type="number" min="0" step="0.01" class="input" placeholder="0.00">
           </div>
-          <div>
-            <label class="label mb-1" for="vehicleMaintenanceNote">ملاحظة</label>
-            <input id="vehicleMaintenanceNote" type="text" class="input input-sm" placeholder="ملاحظة اختيارية">
+          <div class="vehicle-maintenance-field vehicle-maintenance-field--full">
+            <label class="label" for="vehicleMaintenanceNote">ملاحظة <span class="vehicle-maintenance-optional">اختيارية</span></label>
+            <input id="vehicleMaintenanceNote" type="text" class="input" placeholder="أضف ملاحظة عند الحاجة">
           </div>
         </div>
-        <div class="flex gap-2 justify-end">
-          <button type="button" data-action="close-vehicle-maintenance" class="btn btn-secondary btn-sm">إلغاء</button>
-          <button type="button" data-action="save-vehicle-maintenance" class="btn btn-primary btn-sm">💾 حفظ</button>
+        <div class="vehicle-maintenance-modal__footer">
+          <button type="button" data-action="close-vehicle-maintenance" class="btn vehicle-details-secondary-action">إلغاء</button>
+          <button type="button" data-action="save-vehicle-maintenance" class="btn vehicle-details-action vehicle-details-action--maintenance">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+            <span>حفظ السحب</span>
+          </button>
         </div>
-        <div id="vehicleMaintenanceMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+        <div id="vehicleMaintenanceMsg" class="field-msg-inline field-msg-inline--error vehicle-maintenance-modal__message" role="alert"></div>
       </div>
     </div>
   `;
@@ -1706,28 +1733,38 @@ async function _saveVehicleMaintenance() {
 // remain visual-only because no client-ledger filtering workflow exists.
 function _renderLedger(client, ledger = []) {
   return `
-    <section class="mb-8">
-      <h3 class="text-lg font-bold mb-4">الحركات</h3>
-      <div class="filter-row mb-6 flex-wrap">
+    <section class="vehicle-details-panel vehicle-financial-panel">
+      <header class="vehicle-details-panel-header vehicle-details-panel-header--financial">
+        <div class="vehicle-details-panel-title-group">
+          <span class="vehicle-details-panel-icon vehicle-details-panel-icon--financial" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>
+          </span>
+          <div>
+            <h3>الحركات المالية</h3>
+            <p>سجل الحركات المرتبطة بالمركبة الحالية</p>
+          </div>
+        </div>
+      </header>
+      <div class="filter-row vehicle-details-filter-bar">
         <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientFromDate">من</label>
-          <input id="clientFromDate" type="date" class="input input-sm">
+          <label class="label" for="clientFromDate">من</label>
+          <input id="clientFromDate" type="date" class="input">
         </div>
         <div class="form-group mb-0">
-          <label class="label mb-2 text-muted text-xs" for="clientToDate">إلى</label>
-          <input id="clientToDate" type="date" class="input input-sm">
+          <label class="label" for="clientToDate">إلى</label>
+          <input id="clientToDate" type="date" class="input">
         </div>
-        <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-primary btn-sm mb-4">
-          تطبيق
-        </button>
-        <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}"
-          class="btn btn-secondary btn-sm mb-4">
-          مسح التحديد
-        </button>
+        <div class="vehicle-details-filter-actions">
+          <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-secondary-action">
+            تطبيق
+          </button>
+          <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-ghost-action">
+            مسح التحديد
+          </button>
+        </div>
       </div>
-      <div class="table-wrapper">
-        <table class="table">
+      <div class="table-wrapper vehicle-details-table-wrap">
+        <table class="table vehicle-details-table vehicle-details-table--financial">
           <thead>
             <tr>
               <th>التاريخ</th>
@@ -1739,14 +1776,17 @@ function _renderLedger(client, ledger = []) {
           <tbody id="clientLedgerBody">
             ${ledger.length ? ledger.map(e => `
               <tr>
-                <td>${_dateLabel(e.date || e.applied_at)}</td>
-                <td class="font-semibold">${_fmt(e.amount)}</td>
-                <td>${e.vehicle_plate || '-'}</td>
-                <td>${_ledgerNote(e)}</td>
+                <td class="vehicle-details-date-cell">${_dateLabel(e.date || e.applied_at)}</td>
+                <td class="vehicle-details-amount-cell">${_fmt(e.amount)}</td>
+                <td class="vehicle-details-strong-cell">${e.vehicle_plate || '-'}</td>
+                <td class="vehicle-details-note-cell">${_ledgerNote(e)}</td>
               </tr>
             `).join('') : `
               <tr>
-                <td colspan="4" class="text-muted text-center">لا توجد حركات</td>
+                <td colspan="4" class="vehicle-details-empty-state">
+                  <span class="vehicle-details-empty-state__icon" aria-hidden="true">▱</span>
+                  لا توجد حركات مالية للمركبة حتى الآن
+                </td>
               </tr>
             `}
           </tbody>
@@ -1763,31 +1803,44 @@ function _ensureVehicleBalanceEntryModal() {
   if (document.getElementById('vehicleBalanceEntryModal')) return;
   const div = document.createElement('div');
   div.innerHTML = `
-    <div id="vehicleBalanceEntryModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold" id="vehicleBalanceEntryTitle">حركة رصيد للمركبة</h3>
-          <button type="button" data-action="close-vehicle-balance-entry" class="btn btn-secondary btn-sm">إغلاق</button>
-        </div>
-        <div class="grid gap-3 mb-4">
-          <div>
-            <label class="label mb-1" for="vehicleBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
-            <input id="vehicleBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
+    <div id="vehicleBalanceEntryModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 vehicle-balance-modal">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md vehicle-balance-modal__dialog">
+        <div class="vehicle-maintenance-modal__header">
+          <div class="vehicle-maintenance-modal__title-group">
+            <span class="vehicle-maintenance-modal__icon vehicle-maintenance-modal__icon--balance" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>
+            </span>
+            <div>
+              <h3 id="vehicleBalanceEntryTitle">حركة رصيد للمركبة</h3>
+              <p>تسجيل حركة مباشرة على رصيد المركبة الحالية</p>
+            </div>
           </div>
-          <div>
-            <label class="label mb-1" for="vehicleBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
-            <input id="vehicleBalanceEntryDate" type="date" class="input input-sm">
+          <button type="button" data-action="close-vehicle-balance-entry" class="btn vehicle-details-close-button" aria-label="إغلاق نافذة حركة الرصيد">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <div class="vehicle-maintenance-form">
+          <div class="vehicle-maintenance-field">
+            <label class="label" for="vehicleBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryAmount" type="number" step="0.01" min="0" class="input" placeholder="0.00">
           </div>
-          <div>
-            <label class="label mb-1" for="vehicleBalanceEntryNote">السبب / ملاحظة <span class="text-red-500">*</span></label>
-            <input id="vehicleBalanceEntryNote" type="text" class="input input-sm" placeholder="اكتب سبب الحركة">
+          <div class="vehicle-maintenance-field">
+            <label class="label" for="vehicleBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryDate" type="date" class="input">
+          </div>
+          <div class="vehicle-maintenance-field vehicle-maintenance-field--full">
+            <label class="label" for="vehicleBalanceEntryNote">السبب / ملاحظة <span class="text-red-500">*</span></label>
+            <input id="vehicleBalanceEntryNote" type="text" class="input" placeholder="اكتب سبب الحركة">
           </div>
         </div>
-        <div class="flex gap-2 justify-end">
-          <button type="button" data-action="close-vehicle-balance-entry" class="btn btn-secondary btn-sm">إلغاء</button>
-          <button type="button" data-action="save-vehicle-balance-entry" class="btn btn-primary btn-sm">💾 حفظ</button>
+        <div class="vehicle-maintenance-modal__footer">
+          <button type="button" data-action="close-vehicle-balance-entry" class="btn vehicle-details-secondary-action">إلغاء</button>
+          <button type="button" data-action="save-vehicle-balance-entry" class="btn vehicle-details-action vehicle-details-action--primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+            <span>حفظ الحركة</span>
+          </button>
         </div>
-        <div id="vehicleBalanceEntryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+        <div id="vehicleBalanceEntryMsg" class="field-msg-inline field-msg-inline--error vehicle-maintenance-modal__message" role="alert"></div>
       </div>
     </div>
   `;
@@ -1965,36 +2018,59 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
   if (!page) return;
 
   page.innerHTML = `
-    <div class="ent-details-page">
-      <div class="ent-details-header">
-        <button type="button" data-action="back-to-customers" class="ent-btn-back">← رجوع</button>
-        <h2 class="ent-details-name">${vehicle.plate || client.name}</h2>
-        <span class="ent-details-type">مركبة</span>
-      </div>
-
-      <div class="stat-grid mb-8">
-        <div class="card">
-          <p class="text-muted text-xs mb-2">الرصيد الحالي</p>
-          <div class="text-3xl font-bold ${_balanceClass(financials.balance)} mb-6">${_fmt(financials.balance)}</div>
-          <div class="flex gap-2 flex-wrap justify-end">
-            <button type="button" data-action="open-balance-entry" data-entry-type="deposit"
-              class="btn btn-success btn-sm">
-              إيداع رصيد
-            </button>
-            <button type="button" data-action="open-balance-entry" data-entry-type="withdraw"
-              class="btn btn-danger btn-sm">
-              سحب رصيد
-            </button>
+    <div class="ent-details-page vehicle-details-page">
+      <header class="vehicle-details-hero">
+        <button type="button" data-action="back-to-customers" class="btn ent-btn-back vehicle-details-back" aria-label="العودة إلى إدارة المركبات">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+          <span>رجوع</span>
+        </button>
+        <div class="vehicle-details-identity">
+          <span class="vehicle-details-identity__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="11" rx="2"/><path d="M6 7 8 4h8l2 3M7 18v2m10-2v2M7 12h.01M17 12h.01"/></svg>
+          </span>
+          <div>
+            <p class="vehicle-details-eyebrow">تفاصيل مركبة</p>
+            <h2 class="ent-details-name vehicle-details-name">${vehicle.plate || client.name}</h2>
+            <p class="vehicle-details-caption">سجل مالي وصيانة للمركبة الحالية</p>
           </div>
         </div>
+        <div class="vehicle-details-hero-spacer" aria-hidden="true"></div>
+      </header>
+
+      <section class="vehicle-details-balance-card" aria-label="رصيد المركبة الحالي">
+        <div class="vehicle-details-balance-copy">
+          <span class="vehicle-details-balance-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>
+          </span>
+          <div>
+            <p>رصيد المركبة الحالي</p>
+            <div class="vehicle-details-balance-value ${_balanceClass(financials.balance)}"><bdi>${_fmt(financials.balance)}</bdi><span>ج.م</span></div>
+          </div>
+        </div>
+        <div class="vehicle-details-primary-actions">
+          <button type="button" data-action="open-balance-entry" data-entry-type="deposit" class="btn vehicle-details-action vehicle-details-action--deposit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+            <span>إيداع رصيد</span>
+          </button>
+          <button type="button" data-action="open-balance-entry" data-entry-type="withdraw" class="btn vehicle-details-action vehicle-details-action--withdraw">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14m6-6-6 6-6-6"/></svg>
+            <span>سحب رصيد</span>
+          </button>
+        </div>
+      </section>
+
+      <div class="tabs vehicle-details-tabs" role="tablist" aria-label="تفاصيل المركبة">
+        <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn vehicle-details-tab active-purple" aria-selected="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>
+          <span>الحركات المالية</span>
+        </button>
+        <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn vehicle-details-tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.7 6.3 3 3"/><path d="m5 19 8.9-8.9a4.8 4.8 0 0 0 5.5-6.2l-3.2 3.2-2.8-2.8L16.6 1a4.8 4.8 0 0 0-6.2 5.5L1.5 15.4A2.12 2.12 0 0 0 4.6 18.5l8.9-8.9"/></svg>
+          <span>الصيانة</span>
+        </button>
       </div>
 
-      <div class="tabs mb-6" role="tablist" aria-label="تفاصيل المركبة">
-        <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn active-purple" aria-selected="true">الحركات المالية</button>
-        <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn" aria-selected="false">الصيانة</button>
-      </div>
-
-      <section id="vehicleDetailsTabFinancial" role="tabpanel">
+      <section id="vehicleDetailsTabFinancial" class="vehicle-details-tab-panel" role="tabpanel">
         ${ledgerHtml}
       </section>
       ${maintenanceHtml}

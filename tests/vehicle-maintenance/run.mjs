@@ -21,6 +21,7 @@ const cents = async vehicleId => Math.round((await FinancialService.rebuildVehic
 const DB_SRC = readFileSync('./database.js', 'utf8');
 const FINANCIAL_SRC = readFileSync('./financial.js', 'utf8');
 const ENTITIES_SRC = readFileSync('./_src/entities.js', 'utf8');
+const STYLES_SRC = readFileSync('./styles.src.css', 'utf8');
 
 function extractFunction(source, name) {
   const starts = [`async function ${name}(`, `function ${name}(`];
@@ -228,19 +229,26 @@ ok(ENTITIES_SRC.includes('edit-vehicle-maintenance') && ENTITIES_SRC.includes('d
    && ENTITIES_SRC.includes("confirm('هل تريد حذف حركة الصيانة؟')")
    && ENTITIES_SRC.includes('_vehicleDetailsTab = \'maintenance\''),
   'Maintenance UI exposes edit/delete confirmation and preserves the Maintenance tab after mutation');
-ok(ENTITIES_SRC.includes('>سحب للصيانة</button>')
+ok(ENTITIES_SRC.includes('data-action="open-vehicle-maintenance"')
+   && ENTITIES_SRC.includes('<span>سحب للصيانة</span>')
    && !ENTITIES_SRC.includes('data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">صيانة</button>'),
   'Maintenance action button is labeled سحب للصيانة without changing its internal action');
 ok(!ENTITIES_SRC.includes('for="vehicleMaintenanceSearch">بحث في الصيانة</label>')
    && ENTITIES_SRC.includes('id="vehicleMaintenanceSearch"')
    && ENTITIES_SRC.includes("e.target.id === 'vehicleMaintenanceSearch'"),
   'visible بحث في الصيانة label is removed while the Maintenance search input and handler remain');
-ok(ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد</label>')
-   && !ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد <span')
+ok(ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد <span class="vehicle-maintenance-optional">اختياري</span></label>')
+   && !ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد <span class="text-red-500">*</span>')
    && ENTITIES_SRC.includes('maintenance_quantity = String(rawMaintenanceQuantity).trim() === \'\' ? null')
    && FINANCIAL_SRC.includes('hasMaintenanceQuantity')
    && FINANCIAL_SRC.includes('maintenance_quantity must be greater than zero when provided'),
   'quantity is optional when empty and retains positive-number validation only when supplied');
+ok(STYLES_SRC.includes('.vehicle-details-hero')
+   && STYLES_SRC.includes('.vehicle-details-tabs')
+   && STYLES_SRC.includes('.vehicle-details-panel')
+   && STYLES_SRC.includes('.vehicle-maintenance-modal__dialog')
+   && STYLES_SRC.includes('@media (max-width: 520px)'),
+  'Vehicle Details redesign has a scoped responsive header, tabs, panels, modal, and mobile layout');
 
 console.log('\n— local maintenance suggestion behavior —');
 const suggestionClassState = {

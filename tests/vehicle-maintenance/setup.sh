@@ -9,5 +9,6 @@ cp "$ROOT"/{database.js,financial.js,money.js,dateUtils.js} "$W/"
 cp "$ROOT"/services/*.js "$W/services/"
 cp "$ROOT/tests/write-path/idb-shim.mjs" "$W/"
 cp "$ROOT/entities.js" "$W/_src/entities.js"
+cp "$ROOT/styles.css" "$W/styles.src.css"
 cp "$(dirname "${BASH_SOURCE[0]}")/run.mjs" "$W/"
 cd "$W" && node run.mjs
