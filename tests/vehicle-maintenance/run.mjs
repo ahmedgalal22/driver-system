@@ -177,14 +177,17 @@ const ordinaryManual = await FinancialService.createManualVehicleBalanceEntry(U,
 ok(ordinaryManual.type === 'deposit' && !('maintenance_type' in ordinaryManual)
    && !('maintenance_quantity' in ordinaryManual) && (await cents(V2.id)) === -10300,
   'existing manual vehicle deposits continue unchanged when maintenance metadata is absent');
-ok(ENTITIES_SRC.includes('الحركات المالية') && ENTITIES_SRC.includes('الصيانة') && ENTITIES_SRC.includes('المركبات')
+ok(ENTITIES_SRC.includes('الحركات المالية') && ENTITIES_SRC.includes('الصيانة')
    && ENTITIES_SRC.includes('vehicleDetailsTabFinancial')
    && ENTITIES_SRC.includes('vehicleDetailsTabMaintenance')
-   && ENTITIES_SRC.includes('vehicleDetailsTabVehicles')
    && ENTITIES_SRC.includes("classList.toggle('hidden', !isFinancial)")
-   && ENTITIES_SRC.includes("classList.toggle('hidden', !isMaintenance)")
-   && ENTITIES_SRC.includes("classList.toggle('hidden', !isVehicles)"),
-  'Vehicle Details uses three real mutually exclusive Financial Movements, Maintenance, and Vehicles tabs');
+   && ENTITIES_SRC.includes("classList.toggle('hidden', !isMaintenance)"),
+  'Vehicle Details retains real mutually exclusive Financial Movements and Maintenance tabs');
+ok(!/vehicleDetailsTabBtnVehicles/.test(ENTITIES_SRC)
+   && !/<button[^>]*data-tab="vehicles"/.test(ENTITIES_SRC)
+   && ENTITIES_SRC.includes('vehicleDetailsTabVehicles')
+   && ENTITIES_SRC.includes('${relatedHtml}'),
+  'Vehicles tab is hidden from Vehicle Details while its existing panel implementation remains intact');
 ok(ENTITIES_SRC.includes("const vehicle_id = String(_selectedVehicle?.id || '');")
    && ENTITIES_SRC.includes('_getVehicleDetailsFinancials(vehicle.id)')
    && ENTITIES_SRC.includes("showOwnerDetails(viewBtn.dataset.id, 'owner', viewBtn.dataset.vehicleId || null)")
@@ -192,19 +195,93 @@ ok(ENTITIES_SRC.includes("const vehicle_id = String(_selectedVehicle?.id || '');
    && !ENTITIES_SRC.includes('vehicleMaintenanceVehicle')
    && !ENTITIES_SRC.includes('vehicleBalanceEntryVehicle'),
   'current Vehicle Details context supplies the vehicle_id automatically; neither maintenance nor manual balance forms show a vehicle selector');
-ok(ENTITIES_SRC.includes('<section id="vehicleDetailsTabVehicles" class="hidden" role="tabpanel">')
-   && ENTITIES_SRC.includes('${relatedHtml}')
-   && ENTITIES_SRC.includes('vehicleDetailsTabFinancial')
-   && ENTITIES_SRC.includes('vehicleDetailsTabMaintenance'),
-  'Vehicles content is isolated inside its own tab panel, not rendered below financial or maintenance content');
-ok(['جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت'].every(type => ENTITIES_SRC.includes(`'${type}'`))
-   && ENTITIES_SRC.includes("e.target.id === 'vehicleMaintenanceType'")
-   && ENTITIES_SRC.includes('select-maintenance-type'),
-  'all predefined maintenance suggestions are locally available on focus/input without restricting custom text');
 ok(ENTITIES_SRC.includes('edit-vehicle-maintenance') && ENTITIES_SRC.includes('delete-vehicle-maintenance')
    && ENTITIES_SRC.includes("confirm('هل تريد حذف حركة الصيانة؟')")
    && ENTITIES_SRC.includes('_vehicleDetailsTab = \'maintenance\''),
   'Maintenance UI exposes edit/delete confirmation and preserves the Maintenance tab after mutation');
+
+console.log('\n— local maintenance suggestion behavior —');
+const suggestionClassState = {
+  hidden: true,
+  add(name) { if (name === 'hidden') this.hidden = true; },
+  remove(name) { if (name === 'hidden') this.hidden = false; },
+};
+const suggestionBox = { classList: suggestionClassState, innerHTML: '' };
+const typeInput = { id: 'vehicleMaintenanceType', value: '', focusCalls: 0, focus() { this.focusCalls++; } };
+const listenerMap = new Map();
+const suggestionDocument = {
+  body: { dataset: {} },
+  getElementById(id) {
+    if (id === 'vehicleMaintenanceTypeSuggestions') return suggestionBox;
+    if (id === 'vehicleMaintenanceType') return typeInput;
+    return null;
+  },
+  addEventListener(type, listener) { listenerMap.set(type, listener); },
+};
+const renderSuggestions = new Function('document', 'MAINTENANCE_TYPE_SUGGESTIONS', `
+  ${extractFunction(ENTITIES_SRC, '_renderMaintenanceTypeSuggestions')}
+  return _renderMaintenanceTypeSuggestions;
+`)(suggestionDocument, ['جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت']);
+const attachSuggestionListeners = new Function('document', '_renderMaintenanceTypeSuggestions', '_refreshMaintenanceTable', `
+  let _bound = false;
+  ${extractFunction(ENTITIES_SRC, 'attachOwnersPageListeners')}
+  return attachOwnersPageListeners;
+`)(suggestionDocument, renderSuggestions, () => {});
+attachSuggestionListeners();
+renderSuggestions('');
+ok(!suggestionClassState.hidden && ['جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت'].every(type => suggestionBox.innerHTML.includes(type)),
+  'focusing the type field opens all six predefined suggestions');
+const suggestionTarget = {
+  closest(selector) {
+    if (selector === '#vehicleMaintenanceTypeSuggestions') return this;
+    if (selector === '[data-action="select-maintenance-type"]') return { dataset: { value: 'زيت' } };
+    return null;
+  },
+};
+await listenerMap.get('click')({ target: suggestionTarget });
+ok(typeInput.value === 'زيت' && suggestionClassState.hidden && typeInput.focusCalls === 0,
+  'selecting a suggestion fills the input and closes the dropdown without refocusing/reopening it');
+await listenerMap.get('focusin')({ target: typeInput });
+ok(!suggestionClassState.hidden,
+  'focusing the input again reopens the suggestions');
+typeInput.value = 'زي';
+await listenerMap.get('input')({ target: typeInput });
+ok(suggestionBox.innerHTML.includes('زيت') && !suggestionBox.innerHTML.includes('فلاتر'),
+  'typing filters suggestions while custom typing remains unrestricted');
+const outsideTarget = { closest: () => null };
+await listenerMap.get('click')({ target: outsideTarget });
+ok(suggestionClassState.hidden,
+  'clicking outside the type input and suggestions closes the dropdown');
+
+console.log('\n— local maintenance search —');
+const filterMaintenanceEntries = new Function('_dateLabel', '_fmt', '_maintenanceSearchQuery', `
+  ${extractFunction(ENTITIES_SRC, '_maintenanceSearchHaystack')}
+  ${extractFunction(ENTITIES_SRC, '_filterMaintenanceEntries')}
+  return _filterMaintenanceEntries;
+`)(value => String(value || '').split('T')[0] || '-', value => Number(value || 0).toFixed(2), '');
+const searchEntries = [
+  { date: '2026-09-01', maintenance_type: 'زيت', maintenance_quantity: 4, amount: 800, note: 'تغيير زيت المحرك' },
+  { date: '2026-09-12', maintenance_type: 'كاوتش', maintenance_quantity: 2, amount: 1250, note: 'إطار أمامي' },
+];
+const snapshot = JSON.stringify(searchEntries);
+ok(filterMaintenanceEntries(searchEntries, '2026-09-01').length === 1,
+  'Maintenance search matches displayed date values');
+ok(filterMaintenanceEntries(searchEntries, 'زي').length === 1
+   && filterMaintenanceEntries(searchEntries, '4').length === 1
+   && filterMaintenanceEntries(searchEntries, '800').length === 1,
+  'Maintenance search supports partial type, quantity, and amount matches');
+ok(filterMaintenanceEntries(searchEntries, 'أمامي').length === 1
+   && filterMaintenanceEntries(searchEntries, 'كاوتش').length === 1
+   && filterMaintenanceEntries(searchEntries, 'تعديل').length === 0,
+  'Maintenance search matches note/type data but never treats action labels as data');
+ok(filterMaintenanceEntries(searchEntries, '').length === 2 && JSON.stringify(searchEntries) === snapshot
+   && ENTITIES_SRC.includes("e.target.id === 'vehicleMaintenanceSearch'")
+   && ENTITIES_SRC.includes('_refreshMaintenanceTable();'),
+  'empty local search restores all rows and filters rendered data without modifying stored records or balances');
+
+ok(['جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت'].every(type => ENTITIES_SRC.includes(`'${type}'`))
+   && ENTITIES_SRC.includes('select-maintenance-type'),
+  'all predefined maintenance suggestions remain available and custom values stay supported');
 
 console.log(failures === 0
   ? '\n✅ ALL VEHICLE-MAINTENANCE ASSERTIONS PASSED'

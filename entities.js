@@ -1448,6 +1448,7 @@ const MAINTENANCE_TYPE_SUGGESTIONS = Object.freeze([
 ]);
 let _vehicleDetailsTab = 'financial';
 let _maintenanceEntriesCache = [];
+let _maintenanceSearchQuery = '';
 let _editingMaintenanceReferenceId = null;
 
 function _escapeMaintenanceText(value) {
@@ -1469,20 +1470,20 @@ function _isActiveMaintenanceEntry(entry) {
 }
 
 function _setVehicleDetailsTab(tab) {
-  _vehicleDetailsTab = ['financial', 'maintenance', 'vehicles'].includes(tab) ? tab : 'financial';
+  _vehicleDetailsTab = tab === 'maintenance' ? 'maintenance' : 'financial';
   const financialPanel = document.getElementById('vehicleDetailsTabFinancial');
   const maintenancePanel = document.getElementById('vehicleDetailsTabMaintenance');
   const vehiclesPanel = document.getElementById('vehicleDetailsTabVehicles');
   const financialButton = document.getElementById('vehicleDetailsTabBtnFinancial');
   const maintenanceButton = document.getElementById('vehicleDetailsTabBtnMaintenance');
-  const vehiclesButton = document.getElementById('vehicleDetailsTabBtnVehicles');
   const isFinancial = _vehicleDetailsTab === 'financial';
   const isMaintenance = _vehicleDetailsTab === 'maintenance';
-  const isVehicles = _vehicleDetailsTab === 'vehicles';
 
   if (financialPanel) financialPanel.classList.toggle('hidden', !isFinancial);
   if (maintenancePanel) maintenancePanel.classList.toggle('hidden', !isMaintenance);
-  if (vehiclesPanel) vehiclesPanel.classList.toggle('hidden', !isVehicles);
+  // Keep the underlying Vehicles panel intact but hidden from this page's
+  // visible tab surface. Vehicle Management itself remains unchanged.
+  if (vehiclesPanel) vehiclesPanel.classList.add('hidden');
   if (financialButton) {
     financialButton.classList.toggle('active-purple', isFinancial);
     financialButton.setAttribute('aria-selected', String(isFinancial));
@@ -1491,39 +1492,68 @@ function _setVehicleDetailsTab(tab) {
     maintenanceButton.classList.toggle('active-purple', isMaintenance);
     maintenanceButton.setAttribute('aria-selected', String(isMaintenance));
   }
-  if (vehiclesButton) {
-    vehiclesButton.classList.toggle('active-purple', isVehicles);
-    vehiclesButton.setAttribute('aria-selected', String(isVehicles));
+}
+
+function _maintenanceSearchHaystack(entry) {
+  return [
+    _dateLabel(entry?.date || entry?.applied_at),
+    entry?.maintenance_type,
+    entry?.maintenance_quantity,
+    _fmt(entry?.amount),
+    entry?.amount,
+    entry?.note,
+  ].map(value => String(value ?? '').toLowerCase()).join(' ');
+}
+
+function _filterMaintenanceEntries(entries, query = _maintenanceSearchQuery) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  if (!normalizedQuery) return [...(entries || [])];
+  return (entries || []).filter(entry => _maintenanceSearchHaystack(entry).includes(normalizedQuery));
+}
+
+function _renderMaintenanceRows(entries) {
+  if (!entries.length) {
+    return `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة مطابقة</td></tr>`;
   }
+  return entries.map(entry => `
+    <tr>
+      <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
+      <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
+      <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
+      <td class="font-semibold">${_fmt(entry.amount)}</td>
+      <td>${_escapeMaintenanceText(entry.note || '—')}</td>
+      <td class="text-center">
+        <div class="flex gap-1 justify-center">
+          <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
+          <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function _refreshMaintenanceTable() {
+  const body = document.getElementById('vehicleMaintenanceBody');
+  if (!body) return;
+  body.innerHTML = _renderMaintenanceRows(_filterMaintenanceEntries(_maintenanceEntriesCache));
 }
 
 async function _renderMaintenanceTab(ledger = []) {
   const activeMaintenance = (ledger || []).filter(_isActiveMaintenanceEntry);
   _maintenanceEntriesCache = activeMaintenance;
-
-  const tableRows = activeMaintenance.length
-    ? activeMaintenance.map(entry => `
-        <tr>
-          <td>${_escapeMaintenanceText(_dateLabel(entry.date || entry.applied_at))}</td>
-          <td>${_escapeMaintenanceText(entry.maintenance_type)}</td>
-          <td>${_escapeMaintenanceText(entry.maintenance_quantity)}</td>
-          <td class="font-semibold">${_fmt(entry.amount)}</td>
-          <td>${_escapeMaintenanceText(entry.note || '—')}</td>
-          <td class="text-center">
-            <div class="flex gap-1 justify-center">
-              <button type="button" data-action="edit-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
-              <button type="button" data-action="delete-vehicle-maintenance" data-ref-id="${_escapeMaintenanceText(entry.reference_id)}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
-            </div>
-          </td>
-        </tr>
-      `).join('')
-    : `<tr><td colspan="6" class="text-muted text-center p-6">لا توجد حركات صيانة</td></tr>`;
+  const tableRows = _renderMaintenanceRows(_filterMaintenanceEntries(activeMaintenance));
 
   return `
     <section class="mb-8" role="tabpanel" id="vehicleDetailsTabMaintenance">
-      <div class="flex items-center justify-between gap-3 mb-4">
-        <h3 class="text-lg font-bold mb-0">الصيانة</h3>
+      <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h3 class="text-lg font-bold mb-0">الصيانة</h3>
+        </div>
         <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">صيانة</button>
+      </div>
+      <div class="form-group mb-4" style="max-width:320px;">
+        <label class="label mb-1 text-muted text-xs" for="vehicleMaintenanceSearch">بحث في الصيانة</label>
+        <input id="vehicleMaintenanceSearch" type="search" class="input input-sm" value="${_escapeMaintenanceText(_maintenanceSearchQuery)}" placeholder="ابحث بالتاريخ أو النوع أو العدد أو المبلغ أو الملاحظة">
       </div>
       <div class="table-wrapper">
         <table class="table">
@@ -1960,7 +1990,6 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
       <div class="tabs mb-6" role="tablist" aria-label="تفاصيل المركبة">
         <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn active-purple" aria-selected="true">الحركات المالية</button>
         <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn" aria-selected="false">الصيانة</button>
-        <button type="button" role="tab" id="vehicleDetailsTabBtnVehicles" data-action="vehicle-details-tab" data-tab="vehicles" class="tab-btn" aria-selected="false">المركبات</button>
       </div>
 
       <section id="vehicleDetailsTabFinancial" role="tabpanel">
@@ -2054,6 +2083,13 @@ function attachOwnersPageListeners() {
   document.body.dataset.ownersListenersBound = '1';
 
   document.addEventListener('click', async (e) => {
+    const suggestionBox = document.getElementById('vehicleMaintenanceTypeSuggestions');
+    const clickedMaintenanceInput = e.target.closest('#vehicleMaintenanceType');
+    const clickedSuggestion = e.target.closest('#vehicleMaintenanceTypeSuggestions');
+    if (suggestionBox && !clickedMaintenanceInput && !clickedSuggestion) {
+      suggestionBox.classList.add('hidden');
+    }
+
     const vehicleDetailsTab = e.target.closest('[data-action="vehicle-details-tab"]');
     if (vehicleDetailsTab) {
       _setVehicleDetailsTab(vehicleDetailsTab.dataset.tab);
@@ -2073,7 +2109,6 @@ function attachOwnersPageListeners() {
       const typeInput = document.getElementById('vehicleMaintenanceType');
       if (typeInput) typeInput.value = selectMaintenanceType.dataset.value || '';
       document.getElementById('vehicleMaintenanceTypeSuggestions')?.classList.add('hidden');
-      typeInput?.focus();
       return;
     }
     if (e.target.closest('[data-action="save-vehicle-maintenance"]')) {
@@ -2474,6 +2509,11 @@ function attachOwnersPageListeners() {
   document.addEventListener('input', (e) => {
     if (e.target.id === 'vehicleMaintenanceType') {
       _renderMaintenanceTypeSuggestions(e.target.value);
+      return;
+    }
+    if (e.target.id === 'vehicleMaintenanceSearch') {
+      _maintenanceSearchQuery = e.target.value || '';
+      _refreshMaintenanceTable();
     }
   });
 
