@@ -3399,3 +3399,95 @@ input[type="number"] {
   .vehicle-details-page { max-width: none; padding: 0; border: 0; }
   .vehicle-details-table-wrap { margin: 0; border: 0; }
 }
+
+/* ── Vehicle Details: restrained financial/operations color refinement ── */
+/* This block changes colors only; it intentionally does not alter layout,
+   dimensions, typography, interaction hooks, or component behavior. */
+.vehicle-details-page {
+  background: #f5f7fa;
+  border-color: #dbe4ed;
+  box-shadow: 0 14px 32px rgba(30, 41, 59, 0.055);
+}
+
+.vehicle-details-hero {
+  background: #eef3f8;
+  border-color: #d8e2ec;
+}
+
+.vehicle-details-balance-card {
+  background: #fbfdff;
+  border-color: #dce6ef;
+  box-shadow: 0 8px 20px rgba(30, 41, 59, 0.04);
+}
+
+.vehicle-details-tabs {
+  background: #eaf0f5;
+  border-color: #d7e1ea;
+}
+.vehicle-details-tab { color: #5f6f82; }
+.vehicle-details-tab:hover {
+  color: #315a78;
+  background: #dde9f2;
+}
+.vehicle-details-tab.active-purple {
+  color: #1f4f73;
+  background: #f9fcff;
+  border-color: #cbddea;
+  box-shadow: 0 2px 6px rgba(30, 74, 110, 0.09);
+}
+
+.vehicle-details-panel {
+  background: #fbfdfe;
+  border-color: #dbe4ec;
+  box-shadow: 0 7px 20px rgba(30, 41, 59, 0.035);
+}
+.vehicle-details-panel-header { background: #f5f8fb; border-bottom-color: #dfe7ee; }
+.vehicle-details-panel-header--financial { background: #edf3f9; }
+.vehicle-details-filter-bar {
+  background: #f2f6fa;
+  border-color: #dce5ed;
+}
+.vehicle-details-search-input {
+  background: #f8fbfc;
+  border-color: #cfdee4;
+}
+.vehicle-details-search-input:focus { background: #ffffff; border-color: #8aaebb; }
+
+.vehicle-details-table-wrap { border-color: #d5e0e8; }
+.vehicle-details-table--financial thead tr { background: #3d5f7a; }
+.vehicle-details-table--financial thead th {
+  color: #f8fbff;
+  border-bottom-color: #3d5f7a;
+}
+.vehicle-details-table--financial tbody td {
+  background: #fdfefe;
+  border-bottom-color: #e2e9ef;
+}
+.vehicle-details-table--financial tbody tr:nth-child(even) td { background: #f4f8fb; }
+.vehicle-details-table--financial tbody tr:hover td { background: #eaf2f8; }
+.vehicle-details-table--financial .vehicle-details-amount-cell { color: #1f5d8b; }
+
+.vehicle-details-table--maintenance thead tr { background: #3f7779; }
+.vehicle-details-table--maintenance thead th {
+  color: #f7ffff;
+  border-bottom-color: #3f7779;
+}
+.vehicle-details-table--maintenance tbody td {
+  background: #fcfefe;
+  border-bottom-color: #dfebeb;
+}
+.vehicle-details-table--maintenance tbody tr:nth-child(even) td { background: #f2f8f8; }
+.vehicle-details-table--maintenance tbody tr:hover td { background: #e6f2f1; }
+.vehicle-details-table--maintenance .vehicle-details-amount-cell { color: #176568; }
+.vehicle-details-table--maintenance .vehicle-details-icon-action--edit {
+  color: #1c6f73;
+  background: #edf8f7;
+  border-color: #cce7e4;
+}
+.vehicle-details-table--maintenance .vehicle-details-icon-action--edit:hover {
+  color: #135a5d;
+  background: #dcefed;
+}
+
+.vehicle-details-empty-state { color: #7890a2; background: #f8fbfc !important; }
+.vehicle-details-empty-state__icon { color: #b5c5d1; }
