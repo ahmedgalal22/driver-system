@@ -2030,11 +2030,18 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
           </span>
           <div>
             <p class="vehicle-details-eyebrow">تفاصيل مركبة</p>
-            <h2 class="ent-details-name vehicle-details-name">${vehicle.plate || client.name}</h2>
             <p class="vehicle-details-caption">سجل مالي وصيانة للمركبة الحالية</p>
           </div>
         </div>
-        <div class="vehicle-details-hero-spacer" aria-hidden="true"></div>
+        <div class="vehicle-details-hero-spacer vehicle-details-vehicle-chip" aria-label="رقم المركبة الحالية">
+          <span class="vehicle-details-vehicle-chip__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="11" rx="2"/><path d="M6 7 8 4h8l2 3M7 18v2m10-2v2M7 12h.01M17 12h.01"/></svg>
+          </span>
+          <span class="vehicle-details-vehicle-chip__content">
+            <span class="vehicle-details-vehicle-chip__label">رقم المركبة</span>
+            <bdi class="vehicle-details-vehicle-chip__value">${vehicle.plate || client.name}</bdi>
+          </span>
+        </div>
       </header>
 
       <section class="vehicle-details-balance-card" aria-label="رصيد المركبة الحالي">

@@ -249,6 +249,13 @@ ok(STYLES_SRC.includes('.vehicle-details-hero')
    && STYLES_SRC.includes('.vehicle-maintenance-modal__dialog')
    && STYLES_SRC.includes('@media (max-width: 520px)'),
   'Vehicle Details redesign has a scoped responsive header, tabs, panels, modal, and mobile layout');
+ok(ENTITIES_SRC.includes('data-action="back-to-customers" class="btn ent-btn-back vehicle-details-back"')
+   && ENTITIES_SRC.includes('>تفاصيل مركبة</p>')
+   && ENTITIES_SRC.includes('>سجل مالي وصيانة للمركبة الحالية</p>')
+   && ENTITIES_SRC.includes('vehicle-details-vehicle-chip__value">${vehicle.plate || client.name}</bdi>')
+   && STYLES_SRC.includes('grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);')
+   && STYLES_SRC.includes('.vehicle-details-vehicle-chip'),
+  'Vehicle Details keeps its Back button and centered title while presenting the existing vehicle number in the left-side identity chip');
 
 console.log('\n— local maintenance suggestion behavior —');
 const suggestionClassState = {
