@@ -1549,11 +1549,10 @@ async function _renderMaintenanceTab(ledger = []) {
         <div>
           <h3 class="text-lg font-bold mb-0">الصيانة</h3>
         </div>
-        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">صيانة</button>
+        <button type="button" data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">سحب للصيانة</button>
       </div>
       <div class="form-group mb-4" style="max-width:320px;">
-        <label class="label mb-1 text-muted text-xs" for="vehicleMaintenanceSearch">بحث في الصيانة</label>
-        <input id="vehicleMaintenanceSearch" type="search" class="input input-sm" value="${_escapeMaintenanceText(_maintenanceSearchQuery)}" placeholder="ابحث بالتاريخ أو النوع أو العدد أو المبلغ أو الملاحظة">
+        <input id="vehicleMaintenanceSearch" type="search" class="input input-sm" aria-label="بحث" value="${_escapeMaintenanceText(_maintenanceSearchQuery)}" placeholder="ابحث بالتاريخ أو النوع أو العدد أو المبلغ أو الملاحظة">
       </div>
       <div class="table-wrapper">
         <table class="table">
@@ -1606,7 +1605,7 @@ function _ensureVehicleMaintenanceModal() {
             <div id="vehicleMaintenanceTypeSuggestions" class="hidden" style="position:absolute;z-index:60;top:100%;right:0;left:0;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 8px 18px rgba(0,0,0,.12);max-height:180px;overflow:auto;"></div>
           </div>
           <div>
-            <label class="label mb-1" for="vehicleMaintenanceQuantity">العدد <span class="text-red-500">*</span></label>
+            <label class="label mb-1" for="vehicleMaintenanceQuantity">العدد</label>
             <input id="vehicleMaintenanceQuantity" type="number" min="0" step="any" class="input input-sm" placeholder="0">
           </div>
           <div>
@@ -1663,17 +1662,20 @@ async function _saveVehicleMaintenance() {
   const vehicle_id = String(_selectedVehicle?.id || '');
   const date = document.getElementById('vehicleMaintenanceDate')?.value || '';
   const maintenance_type = document.getElementById('vehicleMaintenanceType')?.value?.trim() || '';
-  const maintenance_quantity = Number(document.getElementById('vehicleMaintenanceQuantity')?.value);
+  const rawMaintenanceQuantity = document.getElementById('vehicleMaintenanceQuantity')?.value ?? '';
+  const maintenance_quantity = String(rawMaintenanceQuantity).trim() === '' ? null : Number(rawMaintenanceQuantity);
   const amount = parseFloat(document.getElementById('vehicleMaintenanceAmount')?.value) || 0;
   const note = document.getElementById('vehicleMaintenanceNote')?.value?.trim() || '';
   const msg = document.getElementById('vehicleMaintenanceMsg');
 
-  if (!vehicle_id || !date || !maintenance_type || !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 || amount <= 0) {
+  if (!vehicle_id || !date || !maintenance_type
+    || (maintenance_quantity !== null && (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0))
+    || amount <= 0) {
     if (msg) {
       msg.textContent = !vehicle_id ? '❌ لم يتم تحديد المركبة الحالية'
         : !date ? '❌ التاريخ مطلوب'
         : !maintenance_type ? '❌ نوع الصيانة مطلوب'
-        : !Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0 ? '❌ العدد يجب أن يكون أكبر من صفر'
+        : maintenance_quantity !== null && (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0) ? '❌ العدد يجب أن يكون أكبر من صفر عند إدخاله'
         : '❌ المبلغ يجب أن يكون أكبر من صفر';
       msg.classList.add('is-visible');
     }

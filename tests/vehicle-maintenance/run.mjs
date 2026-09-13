@@ -123,6 +123,35 @@ ok(vehicleMovements.some(entry => entry.reference_id === maintenance.reference_i
 ok(vehicleMovements.filter(isActiveMaintenance).some(entry => entry.reference_id === maintenance.reference_id),
   'maintenance qualifies for the separate active Maintenance tab projection');
 
+console.log('\n— optional informational quantity —');
+const emptyQuantityMaintenance = await FinancialService.createManualVehicleBalanceEntry(U, {
+  vehicle_id: V1.id,
+  entry_type: 'withdraw',
+  maintenance_type: 'فلاتر',
+  maintenance_quantity: null,
+  amount: 25,
+  date: '2026-08-29',
+  note: '',
+});
+const emptyQuantityRaw = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', emptyQuantityMaintenance.reference_id))[0];
+ok(emptyQuantityRaw.maintenance_quantity === null && emptyQuantityRaw.amount === 2500 && (await cents(V1.id)) === 12500,
+  'empty quantity is accepted and persisted as null while amount remains the total withdrawal');
+const emptyQuantityEdited = await FinancialService.updateVehicleMaintenanceEntry(U, emptyQuantityMaintenance.reference_id, {
+  vehicle_id: V1.id,
+  maintenance_type: 'فلاتر',
+  maintenance_quantity: null,
+  amount: 30,
+  date: '2026-08-30',
+  note: '',
+});
+const emptyQuantityEditRaw = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', emptyQuantityEdited.reference_id))[0];
+ok(emptyQuantityEditRaw.maintenance_quantity === null && emptyQuantityEditRaw.amount === 3000
+   && (await cents(V1.id)) === 12000,
+  'editing a maintenance entry accepts an empty quantity without changing total-amount semantics');
+await FinancialService.deleteManualVehicleBalanceEntry(U, emptyQuantityEdited.reference_id);
+ok((await cents(V1.id)) === 15000,
+  'reversing the optional-quantity maintenance restores only its total withdrawal');
+
 console.log('\n— maintenance reversal/delete audit behavior —');
 await FinancialService.deleteManualVehicleBalanceEntry(U, maintenance.reference_id);
 const maintenanceAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', maintenance.reference_id))[0];
@@ -199,6 +228,19 @@ ok(ENTITIES_SRC.includes('edit-vehicle-maintenance') && ENTITIES_SRC.includes('d
    && ENTITIES_SRC.includes("confirm('هل تريد حذف حركة الصيانة؟')")
    && ENTITIES_SRC.includes('_vehicleDetailsTab = \'maintenance\''),
   'Maintenance UI exposes edit/delete confirmation and preserves the Maintenance tab after mutation');
+ok(ENTITIES_SRC.includes('>سحب للصيانة</button>')
+   && !ENTITIES_SRC.includes('data-action="open-vehicle-maintenance" class="btn btn-primary btn-sm">صيانة</button>'),
+  'Maintenance action button is labeled سحب للصيانة without changing its internal action');
+ok(!ENTITIES_SRC.includes('for="vehicleMaintenanceSearch">بحث في الصيانة</label>')
+   && ENTITIES_SRC.includes('id="vehicleMaintenanceSearch"')
+   && ENTITIES_SRC.includes("e.target.id === 'vehicleMaintenanceSearch'"),
+  'visible بحث في الصيانة label is removed while the Maintenance search input and handler remain');
+ok(ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد</label>')
+   && !ENTITIES_SRC.includes('for="vehicleMaintenanceQuantity">العدد <span')
+   && ENTITIES_SRC.includes('maintenance_quantity = String(rawMaintenanceQuantity).trim() === \'\' ? null')
+   && FINANCIAL_SRC.includes('hasMaintenanceQuantity')
+   && FINANCIAL_SRC.includes('maintenance_quantity must be greater than zero when provided'),
+  'quantity is optional when empty and retains positive-number validation only when supplied');
 
 console.log('\n— local maintenance suggestion behavior —');
 const suggestionClassState = {

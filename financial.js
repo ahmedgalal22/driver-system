@@ -797,7 +797,11 @@ async function _prepareManualVehicleBalancePayload(username, data) {
   const note = typeof data.note === 'string' ? data.note.trim() : '';
   const maintenance_type = typeof data.maintenance_type === 'string' ? data.maintenance_type.trim() : '';
   const hasMaintenance = maintenance_type.length > 0;
-  const maintenance_quantity = hasMaintenance ? Number(data.maintenance_quantity) : null;
+  const rawMaintenanceQuantity = data.maintenance_quantity;
+  const hasMaintenanceQuantity = rawMaintenanceQuantity !== null
+    && rawMaintenanceQuantity !== undefined
+    && String(rawMaintenanceQuantity).trim() !== '';
+  const maintenance_quantity = hasMaintenance && hasMaintenanceQuantity ? Number(rawMaintenanceQuantity) : null;
 
   if (!vehicle_id) throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle_id is required.');
   if (!entry_type) throw new Error('[FinancialService:createManualVehicleBalanceEntry] entry_type must be deposit or withdraw.');
@@ -813,8 +817,8 @@ async function _prepareManualVehicleBalancePayload(username, data) {
     if (entry_type !== 'withdraw') {
       throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance entries must be withdrawals.');
     }
-    if (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0) {
-      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance_quantity must be greater than zero.');
+    if (hasMaintenanceQuantity && (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0)) {
+      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance_quantity must be greater than zero when provided.');
     }
   }
 
