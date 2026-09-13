@@ -858,7 +858,7 @@ body {
 .sidebar {
   width:      var(--sidebar-active-width);
   flex-shrink: 0;
-  background: #123b4a;
+  background: linear-gradient(to bottom, #4d3396, #0d9488);
   min-height: 100%;
   color:      #fff;
   transition: width 0.2s ease, transform 0.2s ease;
