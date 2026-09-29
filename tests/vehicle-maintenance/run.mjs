@@ -257,6 +257,22 @@ ok(ENTITIES_SRC.includes('data-action="back-to-customers" class="btn ent-btn-bac
    && STYLES_SRC.includes('.vehicle-details-vehicle-chip'),
   'Vehicle Details keeps its Back button and centered title while presenting the existing vehicle number in the left-side identity chip');
 
+console.log('\n— financial movements presentation contract —');
+const financialHeaderStart = ENTITIES_SRC.indexOf('vehicle-details-panel-header--financial');
+const financialHeaderEnd = ENTITIES_SRC.indexOf('</header>', financialHeaderStart);
+const periodControlIndex = ENTITIES_SRC.indexOf('vehicle-details-filter-bar--inline', financialHeaderStart);
+ok(financialHeaderStart >= 0 && periodControlIndex > financialHeaderStart && periodControlIndex < financialHeaderEnd
+   && ENTITIES_SRC.includes('id="clientFromDate"')
+   && ENTITIES_SRC.includes('id="clientToDate"')
+   && ENTITIES_SRC.includes('data-action="client-apply-filter"')
+   && ENTITIES_SRC.includes('data-action="client-clear-filter"'),
+  'existing period controls remain intact and render beside the Financial Movements header');
+ok(ENTITIES_SRC.includes('vehicle-details-financial-row--${e.type === \'deposit\' ? \'deposit\' : \'withdraw\'}')
+   && STYLES_SRC.includes('.vehicle-details-table--financial th,')
+   && STYLES_SRC.includes('.vehicle-details-financial-row--deposit td')
+   && STYLES_SRC.includes('.vehicle-details-financial-row--withdraw td'),
+  'Financial Movements table retains its data while exposing scoped grid and semantic deposit/withdraw color hooks');
+
 console.log('\n— local maintenance suggestion behavior —');
 const suggestionClassState = {
   hidden: true,

@@ -1744,25 +1744,25 @@ function _renderLedger(client, ledger = []) {
             <p>سجل الحركات المرتبطة بالمركبة الحالية</p>
           </div>
         </div>
+        <div class="filter-row vehicle-details-filter-bar vehicle-details-filter-bar--inline" aria-label="تحديد الفترة">
+          <div class="form-group mb-0">
+            <label class="label" for="clientFromDate">من</label>
+            <input id="clientFromDate" type="date" class="input">
+          </div>
+          <div class="form-group mb-0">
+            <label class="label" for="clientToDate">إلى</label>
+            <input id="clientToDate" type="date" class="input">
+          </div>
+          <div class="vehicle-details-filter-actions">
+            <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-secondary-action">
+              تطبيق
+            </button>
+            <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-ghost-action">
+              مسح التحديد
+            </button>
+          </div>
+        </div>
       </header>
-      <div class="filter-row vehicle-details-filter-bar">
-        <div class="form-group mb-0">
-          <label class="label" for="clientFromDate">من</label>
-          <input id="clientFromDate" type="date" class="input">
-        </div>
-        <div class="form-group mb-0">
-          <label class="label" for="clientToDate">إلى</label>
-          <input id="clientToDate" type="date" class="input">
-        </div>
-        <div class="vehicle-details-filter-actions">
-          <button type="button" data-action="client-apply-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-secondary-action">
-            تطبيق
-          </button>
-          <button type="button" data-action="client-clear-filter" data-id="${client.id}" data-type="${client.type}" class="btn vehicle-details-ghost-action">
-            مسح التحديد
-          </button>
-        </div>
-      </div>
       <div class="table-wrapper vehicle-details-table-wrap">
         <table class="table vehicle-details-table vehicle-details-table--financial">
           <thead>
@@ -1775,7 +1775,7 @@ function _renderLedger(client, ledger = []) {
           </thead>
           <tbody id="clientLedgerBody">
             ${ledger.length ? ledger.map(e => `
-              <tr>
+              <tr class="vehicle-details-financial-row vehicle-details-financial-row--${e.type === 'deposit' ? 'deposit' : 'withdraw'}">
                 <td class="vehicle-details-date-cell">${_dateLabel(e.date || e.applied_at)}</td>
                 <td class="vehicle-details-amount-cell">${_fmt(e.amount)}</td>
                 <td class="vehicle-details-strong-cell">${e.vehicle_plate || '-'}</td>

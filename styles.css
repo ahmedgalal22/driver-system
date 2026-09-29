@@ -3548,3 +3548,95 @@ input[type="number"] {
 
 .vehicle-details-empty-state { color: #7890a2; background: #f8fbfc !important; }
 .vehicle-details-empty-state__icon { color: #b5c5d1; }
+
+/* ── Vehicle financial movements: period control + table clarity ── */
+/* Scoped visual/layout refinement; IDs, actions, data, and filtering behavior
+   remain exactly the same. */
+.vehicle-details-panel-header--financial {
+  flex-wrap: wrap;
+}
+.vehicle-details-filter-bar--inline {
+  flex-wrap: nowrap;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  background: #eef4f9;
+  border-color: #ccdbe7;
+  border-radius: 11px;
+}
+.vehicle-details-filter-bar--inline .form-group {
+  min-width: 116px;
+}
+.vehicle-details-filter-bar--inline .input {
+  min-height: 34px;
+  color: #334e68;
+  border-color: #bdcddd;
+  background: #ffffff;
+}
+.vehicle-details-filter-bar--inline .label {
+  color: #55718a;
+}
+.vehicle-details-filter-bar--inline .vehicle-details-filter-actions {
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  margin-inline-start: 0;
+}
+.vehicle-details-filter-bar--inline .btn {
+  min-height: 34px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.72rem;
+}
+
+.vehicle-details-table--financial {
+  border-collapse: collapse;
+  background: #f8fbfd;
+}
+.vehicle-details-table--financial th,
+.vehicle-details-table--financial td {
+  border: 1px solid #cbd8e3;
+}
+.vehicle-details-table--financial thead th {
+  border-color: #52718c;
+  background: #3d5f7a;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--deposit td {
+  color: #315547;
+  background: #f2faf5;
+  border-color: #c9dfd1;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--withdraw td {
+  color: #66483d;
+  background: #fff8f4;
+  border-color: #ead5ca;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--deposit:hover td {
+  background: #e4f3e9;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--withdraw:hover td {
+  background: #fcece4;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--deposit .vehicle-details-amount-cell {
+  color: #18734b;
+}
+.vehicle-details-table--financial .vehicle-details-financial-row--withdraw .vehicle-details-amount-cell {
+  color: #b45309;
+}
+
+@media (max-width: 720px) {
+  .vehicle-details-panel-header--financial {
+    align-items: stretch;
+  }
+  .vehicle-details-filter-bar--inline {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .vehicle-details-filter-bar--inline .form-group {
+    flex: 1 1 132px;
+  }
+  .vehicle-details-filter-bar--inline .vehicle-details-filter-actions {
+    width: 100%;
+  }
+  .vehicle-details-filter-bar--inline .vehicle-details-filter-actions .btn {
+    flex: 1;
+  }
+}
