@@ -180,7 +180,7 @@ function _normalize(rawData) {
 // The frozen persisted ReceiptRow contract (FinancialService._buildReceiptRowEntities)
 // stores exactly:
 //   { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate,
-//     driver_price(cents), loading, destination, office,
+//     driver_price(cents), driver_settlement_price(cents), loading, destination, office,
 //     advance(cents), net(cents), sarf(cents), kartano, date, driver_name,
 //     weight, weight2, deficit, weightTotal, type,
 //     officeAmount(cents), discount(cents), add(cents), row_order }
@@ -217,6 +217,11 @@ function _persistedRowToUiShape(row, driverName = '') {
     kartano     : row.kartano ?? '',
     date        : row.date    ?? '',
     driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)
+    // Hidden form-carried value: preserves the Driver Details settlement price
+    // if the receipt itself is opened and re-saved. It is not receipt نولون.
+    driver_settlement_price: row.driver_settlement_price === null || row.driver_settlement_price === undefined
+      ? null
+      : Money.toDecimal(row.driver_settlement_price),
     data        : row.driver_name || driverName || '', // persisted display denorm; driver_id map = fallback
     car         : row.vehicle_plate || '',
     weight      : row.weight  ?? '',

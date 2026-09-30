@@ -144,6 +144,10 @@
           <div class="ent-details-header">
             <button type="button" data-action="back-to-drivers" class="ent-btn-back">← رجوع</button>
             <h2 id="driverDetailsName" class="ent-details-name">—</h2>
+            <div class="ent-header-actions" aria-label="حركات رصيد السائق">
+              <button type="button" data-action="open-driver-balance-entry" data-entry-type="deposit" class="ent-btn-add" style="background:linear-gradient(135deg,#16a34a,#15803d);">💰 إيداع</button>
+              <button type="button" data-action="open-driver-balance-entry" data-entry-type="withdraw" class="ent-btn-add" style="background:linear-gradient(135deg,#dc2626,#b91c1c);">💸 سحب</button>
+            </div>
             <span class="ent-details-type">سائق</span>
           </div>
 
@@ -152,15 +156,6 @@
               <p class="text-muted text-xs mb-2">رصيد السائق</p>
               <div id="driverDetailsBalance" class="text-3xl font-bold mb-2">0.00</div>
               <p class="text-xs text-muted mb-4">رقم الهاتف: <span id="driverDetailsPhone">—</span></p>
-              <div class="flex gap-2 flex-wrap">
-                <button type="button" data-action="open-driver-salfa" class="btn btn-primary btn-sm">سلفة</button>
-                <button type="button" data-action="open-driver-salfa-recovery" class="btn btn-success btn-sm">استرداد سلفة</button>
-              </div>
-            </div>
-            <div class="card">
-              <p class="text-muted text-xs mb-2">إجمالي السلف (Salfa)</p>
-              <div id="driverDetailsSalfa" class="text-3xl font-bold text-gray-700 mb-2">0.00</div>
-              <p class="text-xs text-muted">المجموع التراكمي للسلف</p>
             </div>
           </div>
 
@@ -172,9 +167,12 @@
 
           <!-- Receipts / Kartas panel -->
           <div id="driverTabKartas" class="mb-8" role="tabpanel">
-            <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
               <h3 class="text-lg font-bold">الكارتات</h3>
-              <input id="kartaSearchInput" type="text" class="input input-sm" placeholder="🔍 ابحث في الكارتات..." style="max-width:280px;">
+              <div class="flex items-center gap-2 flex-wrap">
+                <input id="kartaSearchInput" type="text" class="input input-sm" placeholder="🔍 ابحث في الكارتات..." style="max-width:280px;">
+                <button type="button" id="settleUnsettledKartasBtn" data-action="settle-unsettled-kartas" class="btn btn-primary btn-sm hidden">تسوية عام</button>
+              </div>
             </div>
 
             <!-- Summary Cards -->
@@ -182,11 +180,11 @@
               <!-- Populated dynamically by JS -->
             </div>
 
-            <!-- Kartas status filter (Phase 8 — UI-only, in-memory over the loaded kartas) -->
-            <div class="tabs mb-4" role="group" aria-label="تصفية الكارتات حسب الحالة">
-              <button type="button" data-action="karta-status-filter" data-filter="all" class="tab-btn active-purple" aria-pressed="true">الكل</button>
+            <!-- Driver Karta settlement state tabs. The default is unsettled rows. -->
+            <div class="tabs mb-4" role="group" aria-label="تصفية الكارتات حسب التسوية">
+              <button type="button" data-action="karta-status-filter" data-filter="unsettled" class="tab-btn active-purple" aria-pressed="true">لم يتم تسويته</button>
               <button type="button" data-action="karta-status-filter" data-filter="settled" class="tab-btn" aria-pressed="false">تمت تسويته</button>
-              <button type="button" data-action="karta-status-filter" data-filter="unsettled" class="tab-btn" aria-pressed="false">لم تتم تسويته</button>
+              <button type="button" data-action="karta-status-filter" data-filter="all" class="tab-btn" aria-pressed="false">الكل</button>
             </div>
 
             <!-- Kartas Table -->
@@ -202,6 +200,7 @@
                     <th>العهدة</th>
                     <th>السعر</th>
                     <th>الحالة</th>
+                    <th id="kartaActionsHeader" class="hidden">إجراءات</th>
                   </tr>
                 </thead>
                 <tbody id="kartaTableBody">
@@ -254,137 +253,60 @@
           </section>
         </div>
 
-        <!-- Karta Settlement Modal -->
-        <div id="kartaSettlementModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
-          <div style="background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);width:100%;max-width:32rem;overflow:hidden;">
+        <!-- Settled Karta Price Modal: persists only receipt_rows.driver_settlement_price. -->
+        <div id="kartaSettlementPriceModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
+          <div style="background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);width:100%;max-width:30rem;overflow:hidden;">
             <div style="background:linear-gradient(135deg,#7c3aed,#5b21b6);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
-              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;" id="kartaSettlementTitle">تسوية كارتة</h3>
-              <button type="button" data-action="close-karta-settlement" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
+              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;">تعديل سعر التسوية</h3>
+              <button type="button" data-action="close-karta-settlement-price" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
             </div>
             <div style="padding:24px;">
               <div class="grid gap-4">
                 <div>
-                  <label class="label mb-1">السعر (المبلغ المستحق للسائق) <span class="text-red-500">*</span></label>
-                  <input id="kartaSettlementAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
-                </div>
-                <div>
-                  <label class="label mb-1">المركبة المحمَّل عليها <span class="text-red-500">*</span></label>
-                  <select id="kartaSettlementVehicle" class="input input-sm"></select>
-                </div>
-                <div>
-                  <label class="label mb-1">التاريخ <span class="text-red-500">*</span></label>
-                  <input id="kartaSettlementDate" type="date" class="input input-sm">
-                </div>
-                <div>
-                  <label class="label mb-1">ملاحظة</label>
-                  <input id="kartaSettlementNote" type="text" class="input input-sm" placeholder="اختياري">
+                  <label class="label mb-1" for="kartaSettlementPriceInput">السعر</label>
+                  <input id="kartaSettlementPriceInput" type="number" step="0.01" min="0" inputmode="decimal" class="input input-sm" placeholder="0.00">
                 </div>
               </div>
               <div class="flex gap-2 mt-6 justify-end">
-                <button type="button" data-action="close-karta-settlement" class="btn btn-secondary btn-sm">إلغاء</button>
-                <button type="button" data-action="save-karta-settlement" id="kartaSettlementSaveBtn" class="btn btn-primary btn-sm">💾 حفظ التسوية</button>
+                <button type="button" data-action="close-karta-settlement-price" class="btn btn-secondary btn-sm">إلغاء</button>
+                <button type="button" data-action="save-karta-settlement-price" class="btn btn-primary btn-sm">💾 حفظ السعر</button>
               </div>
-              <div id="kartaSettlementMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+              <div id="kartaSettlementPriceMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
             </div>
           </div>
         </div>
 
-        <!-- Driver Deposit Modal -->
-        <div id="driverDepositModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
+        <!-- Direct Driver Balance Entry Modal -->
+        <div id="driverBalanceEntryModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
           <div style="background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);width:100%;max-width:30rem;overflow:hidden;">
             <div style="background:linear-gradient(135deg,#16a34a,#15803d);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
-              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;" id="driverDepositModalTitle">💰 إيداع رصيد للسائق</h3>
-              <button type="button" data-action="close-driver-deposit" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
+              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;" id="driverBalanceEntryModalTitle">💰 إيداع رصيد للسائق</h3>
+              <button type="button" data-action="close-driver-balance-entry" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
             </div>
             <div style="padding:24px;">
               <div class="grid gap-4">
                 <div>
-                  <label class="label mb-1" for="driverDepositVehicle">المركبة المصدر <span class="text-red-500">*</span></label>
-                  <select id="driverDepositVehicle" class="input input-sm"></select>
+                  <label class="label mb-1" for="driverBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
+                  <input id="driverBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
                 </div>
                 <div>
-                  <label class="label mb-1" for="driverDepositAmount">المبلغ <span class="text-red-500">*</span></label>
-                  <input id="driverDepositAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
+                  <label class="label mb-1" for="driverBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
+                  <input id="driverBalanceEntryDate" type="date" class="input input-sm">
                 </div>
                 <div>
-                  <label class="label mb-1" for="driverDepositDate">التاريخ</label>
-                  <input id="driverDepositDate" type="date" class="input input-sm">
-                </div>
-                <div>
-                  <label class="label mb-1" for="driverDepositNote">ملاحظة</label>
-                  <input id="driverDepositNote" type="text" class="input input-sm" placeholder="اختياري">
+                  <label class="label mb-1" for="driverBalanceEntryNote">ملاحظة</label>
+                  <input id="driverBalanceEntryNote" type="text" class="input input-sm" placeholder="اختياري">
                 </div>
               </div>
               <div class="flex gap-2 mt-6 justify-end">
-                <button type="button" data-action="close-driver-deposit" class="btn btn-secondary btn-sm">إلغاء</button>
-                <button type="button" data-action="save-driver-deposit" class="btn btn-primary btn-sm">💾 حفظ</button>
+                <button type="button" data-action="close-driver-balance-entry" class="btn btn-secondary btn-sm">إلغاء</button>
+                <button type="button" data-action="save-driver-balance-entry" class="btn btn-primary btn-sm">💾 حفظ</button>
               </div>
-              <div id="driverDepositMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+              <div id="driverBalanceEntryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
             </div>
           </div>
         </div>
 
-        <!-- Driver Salfa Modal -->
-        <div id="driverSalfaModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
-          <div style="background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);width:100%;max-width:30rem;overflow:hidden;">
-            <div style="background:linear-gradient(135deg,#2563eb,#1d4ed8);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
-              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;" id="driverSalfaModalTitle">💸 سلفة سائق</h3>
-              <button type="button" data-action="close-driver-salfa" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
-            </div>
-            <div style="padding:24px;">
-              <div class="grid gap-4">
-                <div>
-                  <label class="label mb-1" for="driverSalfaAmount">المبلغ <span class="text-red-500">*</span></label>
-                  <input id="driverSalfaAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
-                </div>
-                <div>
-                  <label class="label mb-1" for="driverSalfaDate">التاريخ</label>
-                  <input id="driverSalfaDate" type="date" class="input input-sm">
-                </div>
-                <div>
-                  <label class="label mb-1" for="driverSalfaNote">ملاحظة</label>
-                  <input id="driverSalfaNote" type="text" class="input input-sm" placeholder="اختياري">
-                </div>
-              </div>
-              <div class="flex gap-2 mt-6 justify-end">
-                <button type="button" data-action="close-driver-salfa" class="btn btn-secondary btn-sm">إلغاء</button>
-                <button type="button" data-action="save-driver-salfa" class="btn btn-primary btn-sm">💾 حفظ</button>
-              </div>
-              <div id="driverSalfaMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Driver Salfa Recovery Modal -->
-        <div id="driverSalfaRecoveryModal" class="hidden fixed inset-0 flex items-center justify-center z-50 p-4" style="background:rgba(0,0,0,0.4);backdrop-filter:blur(2px);">
-          <div style="background:#fff;border-radius:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);width:100%;max-width:30rem;overflow:hidden;">
-            <div style="background:linear-gradient(135deg,#16a34a,#15803d);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
-              <h3 style="color:#fff;font-size:1.25rem;font-weight:700;margin:0;">↩️ استرداد سلفة</h3>
-              <button type="button" data-action="close-driver-salfa-recovery" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer;font-size:1.125rem;">✕</button>
-            </div>
-            <div style="padding:24px;">
-              <div class="grid gap-4">
-                <div>
-                  <label class="label mb-1" for="driverSalfaRecoveryAmount">المبلغ <span class="text-red-500">*</span></label>
-                  <input id="driverSalfaRecoveryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
-                </div>
-                <div>
-                  <label class="label mb-1" for="driverSalfaRecoveryDate">التاريخ <span class="text-red-500">*</span></label>
-                  <input id="driverSalfaRecoveryDate" type="date" class="input input-sm">
-                </div>
-                <div>
-                  <label class="label mb-1" for="driverSalfaRecoveryNote">السبب / ملاحظة</label>
-                  <input id="driverSalfaRecoveryNote" type="text" class="input input-sm" placeholder="استرداد سلفة">
-                </div>
-              </div>
-              <div class="flex gap-2 mt-6 justify-end">
-                <button type="button" data-action="close-driver-salfa-recovery" class="btn btn-secondary btn-sm">إلغاء</button>
-                <button type="button" data-action="save-driver-salfa-recovery" class="btn btn-primary btn-sm">💾 حفظ</button>
-              </div>
-              <div id="driverSalfaRecoveryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
-            </div>
-          </div>
-        </div>
       </section>
       <section id="officesPage" class="page hidden"></section>
       <section id="officeDetailsPage" class="page hidden"></section>

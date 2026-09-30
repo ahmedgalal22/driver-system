@@ -248,13 +248,11 @@ function _ledgerNote(entry) {
   const type = entry.type || '';
   const note = entry.note || '';
 
-  // Salfa
-  if (refType === 'salfa') {
-    return note || 'سلفة';
+  if (refType === 'manual_driver_balance') {
+    if (note) return note;
+    return type === 'withdraw' ? 'سحب يدوي من رصيد السائق' : 'إيداع يدوي لرصيد السائق';
   }
-  if (refType === 'salfa_recovery') {
-    return note || 'استرداد سلفة';
-  }
+
   // Structured maintenance withdrawals remain normal manual vehicle
   // movements, while their note in the Financial Movements tab identifies the
   // maintenance type without changing any ledger calculation.
@@ -705,49 +703,47 @@ async function loadOwners() {
   }
 }
 
-let _editingDriverRefId = null;
+let _editingDriverBalanceReferenceId = null;
+let _editingDriverBalanceEntryType = 'deposit';
 
-async function _openDriverDepositModal(txEntry = null) {
-  _editingDriverRefId = txEntry ? txEntry.reference_id : null;
-  const modal = document.getElementById('driverDepositModal');
-  const vehicleSelect = document.getElementById('driverDepositVehicle');
-  const amountEl = document.getElementById('driverDepositAmount');
-  const dateEl = document.getElementById('driverDepositDate');
-  const noteEl = document.getElementById('driverDepositNote');
-  const msgEl = document.getElementById('driverDepositMsg');
+function _manualDriverEntryLabel(entryType) {
+  return entryType === 'withdraw' ? 'سحب من رصيد السائق' : 'إيداع رصيد للسائق';
+}
 
+async function _openDriverBalanceEntryModal(entryType, txEntry = null) {
+  const normalizedType = entryType === 'withdraw' ? 'withdraw' : 'deposit';
+  _editingDriverBalanceReferenceId = txEntry ? txEntry.reference_id : null;
+  _editingDriverBalanceEntryType = txEntry?.type === 'withdraw' ? 'withdraw' : normalizedType;
+
+  const modal = document.getElementById('driverBalanceEntryModal');
+  const titleEl = document.getElementById('driverBalanceEntryModalTitle');
+  const amountEl = document.getElementById('driverBalanceEntryAmount');
+  const dateEl = document.getElementById('driverBalanceEntryDate');
+  const noteEl = document.getElementById('driverBalanceEntryNote');
+  const msgEl = document.getElementById('driverBalanceEntryMsg');
+
+  if (titleEl) titleEl.textContent = `💰 ${_manualDriverEntryLabel(_editingDriverBalanceEntryType)}`;
   if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
   if (dateEl) dateEl.value = txEntry?.date || DateUtils.todayLocal();
-  if (amountEl) amountEl.value = txEntry ? Money.toDecimal(Math.abs(Number(txEntry.amount) || 0)) : '';
+  if (amountEl) amountEl.value = txEntry ? Math.abs(Number(txEntry.amount) || 0) : '';
   if (noteEl) noteEl.value = txEntry?.note || '';
-
-  const vehicles = await ClientRepository.getAllVehicles();
-  if (vehicleSelect) {
-    vehicleSelect.innerHTML = '<option value="">اختر المركبة المصدر...</option>' + vehicles.filter(v => v.deleted_at === null).map(v => `
-      <option value="${v.id}" ${txEntry && String(txEntry.vehicle_id) === String(v.id) ? 'selected' : ''}>${v.plate} ${v.owner_name ? '(' + v.owner_name + ')' : ''}</option>
-    `).join('');
-  }
 
   modal?.classList.remove('hidden');
 }
 
-function _closeDriverDepositModal() {
-  document.getElementById('driverDepositModal')?.classList.add('hidden');
-  _editingDriverRefId = null;
+function _closeDriverBalanceEntryModal() {
+  document.getElementById('driverBalanceEntryModal')?.classList.add('hidden');
+  _editingDriverBalanceReferenceId = null;
+  _editingDriverBalanceEntryType = 'deposit';
 }
 
-async function _saveDriverDeposit() {
-  const msgEl = document.getElementById('driverDepositMsg');
-  const vehicleId = document.getElementById('driverDepositVehicle')?.value;
-  const amount = parseFloat(document.getElementById('driverDepositAmount')?.value) || 0;
-  const date = document.getElementById('driverDepositDate')?.value;
-  const note = document.getElementById('driverDepositNote')?.value || '';
+async function _saveDriverBalanceEntry() {
+  const msgEl = document.getElementById('driverBalanceEntryMsg');
+  const amount = Number(document.getElementById('driverBalanceEntryAmount')?.value);
+  const date = document.getElementById('driverBalanceEntryDate')?.value;
+  const note = document.getElementById('driverBalanceEntryNote')?.value || '';
 
-  if (!vehicleId) {
-    if (msgEl) { msgEl.textContent = '❌ المركبة المصدر مطلوبة'; msgEl.classList.add('is-visible'); }
-    return;
-  }
-  if (amount <= 0) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     if (msgEl) { msgEl.textContent = '❌ المبلغ يجب أن يكون أكبر من صفر'; msgEl.classList.add('is-visible'); }
     return;
   }
@@ -756,141 +752,32 @@ async function _saveDriverDeposit() {
     return;
   }
 
-  const username = _currentUsername();
-  try {
-    if (_editingDriverRefId) {
-      await FinancialService.updateDriverDeposit(username, _editingDriverRefId, {
-        driver_id: _getCurrentDriverId(),
-        vehicle_id: vehicleId,
-        amount,
-        date,
-        note,
-      });
-    } else {
-      await FinancialService.createDriverDeposit(username, {
-        driver_id: _getCurrentDriverId(),
-        vehicle_id: vehicleId,
-        amount,
-        date,
-        note,
-      });
-    }
-
-    _closeDriverDepositModal();
-    const did = _getCurrentDriverId();
-    if (did) await showDriverDetails(did);
-  } catch (err) {
-    if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ الإيداع'; msgEl.classList.add('is-visible'); }
-  }
-}
-
-async function _openDriverSalfaModal(txEntry = null) {
-  _editingDriverRefId = txEntry ? txEntry.reference_id : null;
-  const modal = document.getElementById('driverSalfaModal');
-  const amountEl = document.getElementById('driverSalfaAmount');
-  const dateEl = document.getElementById('driverSalfaDate');
-  const noteEl = document.getElementById('driverSalfaNote');
-  const msgEl = document.getElementById('driverSalfaMsg');
-
-  if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
-  if (dateEl) dateEl.value = txEntry?.date || DateUtils.todayLocal();
-  if (amountEl) amountEl.value = txEntry ? Money.toDecimal(Math.abs(Number(txEntry.amount) || 0)) : '';
-  if (noteEl) noteEl.value = txEntry?.note || '';
-
-  modal?.classList.remove('hidden');
-}
-
-function _closeDriverSalfaModal() {
-  document.getElementById('driverSalfaModal')?.classList.add('hidden');
-  _editingDriverRefId = null;
-}
-
-async function _saveDriverSalfa() {
-  const msgEl = document.getElementById('driverSalfaMsg');
-  const amount = parseFloat(document.getElementById('driverSalfaAmount')?.value) || 0;
-  const date = document.getElementById('driverSalfaDate')?.value;
-  const note = document.getElementById('driverSalfaNote')?.value || '';
-
-  if (amount <= 0) {
-    if (msgEl) { msgEl.textContent = '❌ المبلغ يجب أن يكون أكبر من صفر'; msgEl.classList.add('is-visible'); }
-    return;
-  }
-  if (!date) {
-    if (msgEl) { msgEl.textContent = '❌ التاريخ مطلوب'; msgEl.classList.add('is-visible'); }
+  const driverId = _getCurrentDriverId();
+  if (!driverId) {
+    if (msgEl) { msgEl.textContent = '❌ السائق مطلوب'; msgEl.classList.add('is-visible'); }
     return;
   }
 
   const username = _currentUsername();
+  const data = {
+    driver_id: driverId,
+    entry_type: _editingDriverBalanceEntryType,
+    amount,
+    date,
+    note,
+  };
+
   try {
-    if (_editingDriverRefId) {
-      await FinancialService.updateDriverSalfa(username, _editingDriverRefId, {
-        driver_id: _getCurrentDriverId(),
-        amount,
-        date,
-        note,
-      });
+    if (_editingDriverBalanceReferenceId) {
+      await FinancialService.updateManualDriverBalanceEntry(username, _editingDriverBalanceReferenceId, data);
     } else {
-      await FinancialService.createDriverSalfa(username, {
-        driver_id: _getCurrentDriverId(),
-        amount,
-        date,
-        note,
-      });
+      await FinancialService.createManualDriverBalanceEntry(username, data);
     }
 
-    _closeDriverSalfaModal();
-    const did = _getCurrentDriverId();
-    if (did) await showDriverDetails(did);
+    _closeDriverBalanceEntryModal();
+    await showDriverDetails(driverId);
   } catch (err) {
-    if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ السلفة'; msgEl.classList.add('is-visible'); }
-  }
-}
-
-function _openDriverSalfaRecoveryModal() {
-  const modal = document.getElementById('driverSalfaRecoveryModal');
-  const amountEl = document.getElementById('driverSalfaRecoveryAmount');
-  const dateEl = document.getElementById('driverSalfaRecoveryDate');
-  const noteEl = document.getElementById('driverSalfaRecoveryNote');
-  const msgEl = document.getElementById('driverSalfaRecoveryMsg');
-
-  if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
-  if (amountEl) amountEl.value = '';
-  if (dateEl) dateEl.value = DateUtils.todayLocal();
-  if (noteEl) noteEl.value = 'استرداد سلفة';
-  modal?.classList.remove('hidden');
-}
-
-function _closeDriverSalfaRecoveryModal() {
-  document.getElementById('driverSalfaRecoveryModal')?.classList.add('hidden');
-}
-
-async function _saveDriverSalfaRecovery() {
-  const msgEl = document.getElementById('driverSalfaRecoveryMsg');
-  const amount = parseFloat(document.getElementById('driverSalfaRecoveryAmount')?.value) || 0;
-  const date = document.getElementById('driverSalfaRecoveryDate')?.value || '';
-  const note = document.getElementById('driverSalfaRecoveryNote')?.value?.trim() || 'استرداد سلفة';
-
-  if (amount <= 0 || !date) {
-    if (msgEl) {
-      msgEl.textContent = amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
-        : '❌ التاريخ مطلوب';
-      msgEl.classList.add('is-visible');
-    }
-    return;
-  }
-
-  try {
-    await FinancialService.createDriverSalfaRecovery(_currentUsername(), {
-      driver_id: _getCurrentDriverId(),
-      amount,
-      date,
-      note,
-    });
-    _closeDriverSalfaRecoveryModal();
-    const did = _getCurrentDriverId();
-    if (did) await showDriverDetails(did);
-  } catch (err) {
-    if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ استرداد السلفة'; msgEl.classList.add('is-visible'); }
+    if (msgEl) { msgEl.textContent = err.message || `❌ فشل حفظ ${_manualDriverEntryLabel(_editingDriverBalanceEntryType)}`; msgEl.classList.add('is-visible'); }
   }
 }
 
@@ -927,14 +814,18 @@ function _renderDriverLedgerTable(entries) {
 
   tbody.innerHTML = entries.map((entry) => {
     const dateStr = _dateLabel(entry.date || entry.applied_at || entry.created_at);
-    const typeStr = _ledgerType(entry.type);
+    const typeStr = entry.reference_type === 'manual_driver_balance'
+      ? (entry.type === 'withdraw' ? 'سحب' : 'إيداع')
+      : _ledgerType(entry.type);
     const refStr = entry.vehicle_plate || entry.reference_number || entry.reference_id || '—';
     const amtStr = _fmt(entry.amount);
     const balStr = _fmt(entry.running_balance);
     const descStr = _ledgerNote(entry);
 
-    const canEdit = entry.reference_id && (entry.reference_type === 'driver_deposit' || entry.reference_type === 'salfa');
-    const canDelete = canEdit || (entry.reference_id && entry.reference_type === 'salfa_recovery');
+    const isManualDriverMovement = entry.reference_type === 'manual_driver_balance'
+      && entry.effect === 'manual_driver_balance';
+    const canEdit = entry.reference_id && isManualDriverMovement;
+    const canDelete = canEdit;
     const actionsStr = canDelete ? `
       <div class="flex gap-1 justify-center">
         ${canEdit ? `<button type="button" data-action="edit-driver-tx" data-ref-id="${entry.reference_id}" class="btn-icon" title="تعديل" style="background:#dbeafe;color:#2563eb;width:24px;height:24px;border:none;border-radius:4px;cursor:pointer;">✏️</button>` : ''}
@@ -970,29 +861,6 @@ async function showDriverDetails(id) {
   const ledger = await FinancialService.getDriverLedger(id);
   _driverLedgerCache = ledger || [];
 
-  let totalSalfaCents = 0;
-  for (const e of _driverLedgerCache) {
-    if (e.reference_type === 'salfa' || e.type === 'salfa' || e.effect === 'salfa') {
-      totalSalfaCents += Math.abs(Money.toCents(e.amount));
-    }
-    if (e.reference_type === 'salfa_recovery' || e.effect === 'salfa_recovery') {
-      totalSalfaCents -= Math.abs(Money.toCents(e.amount));
-    }
-  }
-
-  const nameEl = document.getElementById('driverDetailsName');
-  const balanceEl = document.getElementById('driverDetailsBalance');
-  const phoneEl = document.getElementById('driverDetailsPhone');
-  const salfaEl = document.getElementById('driverDetailsSalfa');
-
-  if (nameEl) nameEl.textContent = driver.name || '—';
-  if (balanceEl) {
-    balanceEl.textContent = _fmt(balanceData.balance);
-    balanceEl.className = 'text-3xl font-bold mb-2 ' + _balanceClass(balanceData.balance);
-  }
-  if (phoneEl) phoneEl.textContent = driver.phone || '—';
-  if (salfaEl) salfaEl.textContent = Money.fmt(Money.toDecimal(totalSalfaCents));
-
   _renderDriverLedgerTable(_driverLedgerCache);
 
   const fromEl = document.getElementById('driverFromDate');
@@ -1017,7 +885,7 @@ async function showDriverDetails(id) {
   }
 
   // Apply the active tab view (Phase 6) — preserved across re-entry and
-  // post-mutation refreshes (deposit/salfa/karta settlement/tx delete).
+  // post-mutation refreshes (manual driver movement, Karta settlement, transaction delete).
   _setDriverDetailsTab(_driverDetailsTab);
 
   // Load Kartas tab (Phase 7A)
@@ -1063,46 +931,37 @@ async function _loadDriverKartasTab(driverId) {
   const summaryContainer = document.getElementById('kartaSummaryCards');
   const tbody = document.getElementById('kartaTableBody');
   const searchInput = document.getElementById('kartaSearchInput');
-
   if (!summaryContainer || !tbody) return;
 
   try {
     const [kartas, summary] = await Promise.all([
       FinancialService.getDriverKartas(driverId),
-      FinancialService.getDriverKartasSummary(driverId)
+      FinancialService.getDriverKartasSummary(driverId),
     ]);
-    _currentKartas = kartas; // stashed for the settlement modal (row vehicle preselect)
+    _currentKartas = kartas;
 
-    // Summary cards
     summaryContainer.innerHTML = `
       <div class="card p-4"><div class="text-xs text-muted">إجمالي الكارتات</div><div class="text-2xl font-bold">${summary.total_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">غير مدفوعة</div><div class="text-2xl font-bold text-red-600">${summary.unpaid_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">مدفوعة بالكامل</div><div class="text-2xl font-bold text-green-600">${summary.paid_kartas}</div></div>
+      <div class="card p-4"><div class="text-xs text-muted">لم يتم تسويته</div><div class="text-2xl font-bold text-red-600">${summary.unsettled_kartas}</div></div>
+      <div class="card p-4"><div class="text-xs text-muted">تمت تسويته</div><div class="text-2xl font-bold text-green-600">${summary.settled_kartas}</div></div>
       <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div id="kartaFilteredTotalPrice" class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
     `;
 
-    // Table rows — rendered through the Phase 8 in-memory status+search filter
-    // so the user's current filter selection and search text stay applied on
-    // every refresh (settlement create/edit, re-entry).
     _applyKartaFilters(tbody, driverId);
-
-    // Client-side search (composes with the status filter; in-memory only)
     if (searchInput && !searchInput.dataset.bound) {
       searchInput.dataset.bound = '1';
-      searchInput.addEventListener('input', () => _applyKartaFilters(tbody, driverId));
+      searchInput.addEventListener('input', () => _applyKartaFilters(tbody, _getCurrentDriverId()));
     }
   } catch (err) {
     console.error('[entities] Failed to load kartas tab', err);
-    tbody.innerHTML = `<tr><td colspan="8" class="text-red-600 text-center p-6">فشل تحميل الكارتات</td></tr>`;
+    tbody.innerHTML = '<tr><td colspan="8" class="text-red-600 text-center p-6">فشل تحميل الكارتات</td></tr>';
   }
 }
 
-let _currentKartaRowId = null;
-let _kartaSettlementMode = 'create'; // 'create' (تسوية) | 'edit' (تعديل التسوية)
-let _currentKartas = []; // last kartas dataset loaded for the open Driver Details page
-let _kartaStatusFilter = 'all'; // Phase 8: 'all' (paid+partial+unpaid) | 'settled' (status !== 'unpaid') | 'unsettled' (status === 'unpaid') — preserved across tab refreshes and settlement create/edit
+let _currentKartas = [];
+let _kartaStatusFilter = 'unsettled'; // Required default: لم يتم تسويته.
+let _editingKartaSettlementPriceRowId = null;
 
-/** Sync the status-filter buttons' active styling to the current filter state. */
 function _syncKartaFilterButtons() {
   document.querySelectorAll('[data-action="karta-status-filter"]').forEach(btn => {
     const active = btn.dataset.filter === _kartaStatusFilter;
@@ -1111,9 +970,68 @@ function _syncKartaFilterButtons() {
   });
 }
 
+function _syncKartaTableColumns() {
+  const actionsHeader = document.getElementById('kartaActionsHeader');
+  if (actionsHeader) actionsHeader.classList.toggle('hidden', _kartaStatusFilter !== 'settled');
+}
+
+function _eligibleUnsettledKartasForBatch() {
+  return _currentKartas.filter(karta => {
+    if (karta.status !== 'unsettled') return false;
+    const decimal = Number(karta.driver_settlement_price);
+    return Number.isFinite(decimal) && Money.toCents(decimal) > 0;
+  });
+}
+
+function _syncKartaBatchSettlementButton() {
+  const button = document.getElementById('settleUnsettledKartasBtn');
+  if (!button) return;
+  const eligible = _eligibleUnsettledKartasForBatch();
+  const visible = _kartaStatusFilter === 'unsettled' && eligible.length > 0;
+  button.classList.toggle('hidden', !visible);
+  button.textContent = `تسوية عام (${eligible.length})`;
+}
+
+async function _settleUnsettledKartasBatch() {
+  const driverId = _getCurrentDriverId();
+  const eligible = _eligibleUnsettledKartasForBatch();
+  if (!driverId || eligible.length === 0) return;
+
+  const totalCents = eligible.reduce(
+    (sum, karta) => sum + Money.toCents(karta.driver_settlement_price),
+    0
+  );
+  const affectedVehicles = new Set(eligible.map(karta => String(karta.vehicle_id || ''))).size;
+  const confirmed = confirm(
+    `عدد الكارتات: ${eligible.length}\n`
+    + `إجمالي التسوية: ${_fmt(Money.toDecimal(totalCents))}\n`
+    + `السيارات المتأثرة: ${affectedVehicles}\n\n`
+    + 'هل تريد تنفيذ التسوية؟'
+  );
+  if (!confirmed) return;
+
+  try {
+    const result = await FinancialService.createKartaSettlementBatch(
+      _currentUsername(),
+      driverId,
+      eligible.map(karta => karta.row_id)
+    );
+    if (result.settled_count > 0) {
+      alert(`✅ تمت تسوية ${result.settled_count} كارتة بإجمالي ${_fmt(result.total)}`);
+    } else {
+      alert('لا توجد كارتات مؤهلة للتسوية.');
+    }
+  } catch (err) {
+    alert(err.message || '❌ فشل تنفيذ التسوية العامة');
+  } finally {
+    // Always re-query the authoritative state after either commit or failure.
+    await _loadDriverKartasTab(driverId);
+  }
+}
+
 function _sumKartaPrices(kartas) {
   const cents = (kartas || []).reduce(
-    (sum, karta) => sum + Money.toCents(karta?.price ?? 0),
+    (sum, karta) => sum + Money.toCents(karta?.driver_settlement_price ?? 0),
     0
   );
   return Money.toDecimal(cents);
@@ -1124,179 +1042,134 @@ function _renderFilteredKartaPriceTotal(kartas) {
   if (totalEl) totalEl.textContent = _fmt(_sumKartaPrices(kartas));
 }
 
+function _kartaStatusLabel(status) {
+  return status === 'settled' ? 'تمت تسويته' : 'لم يتم تسويته';
+}
+
 /**
- * Phase 8 — status filter + search text, composed ENTIRELY in memory over
- * _currentKartas (no FinancialService call, no IndexedDB query, no writes).
- * Reading the search input live keeps both status AND search text applied
- * automatically after every tab refresh (create/edit settlement, re-entry).
+ * Driver Details Karta filtering is an in-memory view of the active driver's
+ * persisted rows. Settlement status itself is provided by FinancialService
+ * from active driver_karta_payment ledger records.
  */
 function _applyKartaFilters(tbody, driverId) {
   const target = tbody || document.getElementById('kartaTableBody');
   if (!target) return;
-  const q = (document.getElementById('kartaSearchInput')?.value || '').trim().toLowerCase();
-  const filtered = _currentKartas.filter(k => {
-    if (_kartaStatusFilter === 'settled' && k.status === 'unpaid') return false; // settled = status !== 'unpaid' (future-proof: partial or any new settled-ish status appears automatically)
-    if (_kartaStatusFilter === 'unsettled' && k.status !== 'unpaid') return false; // unsettled = status === 'unpaid' only
-    if (q && !Object.values(k).some(v => String(v || '').toLowerCase().includes(q))) return false;
+
+  const query = (document.getElementById('kartaSearchInput')?.value || '').trim().toLowerCase();
+  const filtered = _currentKartas.filter(karta => {
+    if (_kartaStatusFilter !== 'all' && karta.status !== _kartaStatusFilter) return false;
+    if (query && !Object.values(karta).some(value => String(value ?? '').toLowerCase().includes(query))) return false;
     return true;
   });
+
   _renderKartaTable(filtered, target, driverId);
   _renderFilteredKartaPriceTotal(filtered);
   _syncKartaFilterButtons();
+  _syncKartaTableColumns();
+  _syncKartaBatchSettlementButton();
 }
 
-async function _openKartaSettlementModal(rowId, mode = 'create') {
-  _currentKartaRowId = rowId;
-  _kartaSettlementMode = mode === 'edit' ? 'edit' : 'create';
-  const modal = document.getElementById('kartaSettlementModal');
-  const amountEl = document.getElementById('kartaSettlementAmount');
-  const vehicleEl = document.getElementById('kartaSettlementVehicle');
-  const dateEl = document.getElementById('kartaSettlementDate');
-  const noteEl = document.getElementById('kartaSettlementNote');
-  const msgEl = document.getElementById('kartaSettlementMsg');
-  const titleEl = document.getElementById('kartaSettlementTitle');
-  const saveBtnEl = document.getElementById('kartaSettlementSaveBtn');
+async function _saveInlineKartaSettlementPrice(input) {
+  const rowId = String(input?.dataset.rowId || '').trim();
+  if (!rowId) return;
 
-  // Same dialog, two modes: create (تسوية) vs edit (تعديل التسوية).
-  if (titleEl) titleEl.textContent = _kartaSettlementMode === 'edit' ? 'تعديل التسوية' : 'تسوية كارتة';
-  if (saveBtnEl) saveBtnEl.textContent = _kartaSettlementMode === 'edit' ? '💾 حفظ التعديل' : '💾 حفظ التسوية';
-
-  // The user selects the vehicle to charge (workflow step 3). Options = EVERY
-  // active registered vehicle (business rule: no username scoping — vehicles
-  // created through the receipt flow carry no username key); preselect the
-  // karta row's own vehicle.
-  if (vehicleEl) {
-    const vehicles = (await ClientRepository.getAllVehicles())
-      .filter(v => v && v.deleted_at == null);
-    vehicleEl.innerHTML = '<option value="">— اختر المركبة —</option>'
-      + vehicles.map(v => `<option value="${v.id}">${String(v.plate || '').replace(/</g, '&lt;')}</option>`).join('');
-    const k = _currentKartas.find(k => String(k.row_id) === String(rowId));
-    if (k?.vehicle_id && [...vehicleEl.options].some(o => o.value === String(k.vehicle_id))) {
-      vehicleEl.value = String(k.vehicle_id);
-    }
-  }
-
-  if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
-  if (amountEl) amountEl.value = '';
-  if (dateEl) dateEl.value = DateUtils.todayLocal();
-  if (noteEl) noteEl.value = '';
-
-  if (_kartaSettlementMode === 'edit') {
-    // Prefill from the CURRENT active settlement (the same logical settlement
-    // being edited) — price, charged vehicle, date, note.
-    const history = await FinancialService.getKartaSettlementHistory(rowId);
-    const active = (history || []).filter(e => e.is_reversed === false);
-    const cur = active[active.length - 1];
-    if (!cur) {
-      if (msgEl) { msgEl.textContent = '❌ لا توجد تسوية نشطة لهذه الكارتة'; msgEl.classList.add('is-visible'); }
-      modal?.classList.remove('hidden');
-      return;
-    }
-    if (amountEl) amountEl.value = typeof cur.price === 'number' ? cur.price : Math.abs(Number(cur.amount) || 0);
-    if (vehicleEl && cur.vehicle_id && [...vehicleEl.options].some(o => o.value === String(cur.vehicle_id))) {
-      vehicleEl.value = String(cur.vehicle_id);
-    }
-    if (dateEl && cur.date) dateEl.value = cur.date;
-    if (noteEl) noteEl.value = cur.note || '';
-  }
-
-  modal?.classList.remove('hidden');
-}
-
-function _closeKartaSettlementModal() {
-  document.getElementById('kartaSettlementModal')?.classList.add('hidden');
-  _currentKartaRowId = null;
-  _kartaSettlementMode = 'create';
-}
-
-async function _saveKartaSettlement() {
-  const msgEl = document.getElementById('kartaSettlementMsg');
-  const amount = parseFloat(document.getElementById('kartaSettlementAmount')?.value) || 0;
-  const chargeVehicleId = document.getElementById('kartaSettlementVehicle')?.value || '';
-  const date = document.getElementById('kartaSettlementDate')?.value;
-  const note = document.getElementById('kartaSettlementNote')?.value || '';
-
-  if (!_currentKartaRowId) return;
-  if (amount <= 0) {
-    if (msgEl) { msgEl.textContent = '❌ السعر يجب أن يكون أكبر من صفر'; msgEl.classList.add('is-visible'); }
-    return;
-  }
-  if (!chargeVehicleId) {
-    if (msgEl) { msgEl.textContent = '❌ يجب اختيار المركبة المحمَّل عليها'; msgEl.classList.add('is-visible'); }
-    return;
-  }
-  if (!date) {
-    if (msgEl) { msgEl.textContent = '❌ التاريخ مطلوب'; msgEl.classList.add('is-visible'); }
-    return;
-  }
-
-  const username = _currentUsername();
-  const mode = _kartaSettlementMode;
+  input.disabled = true;
   try {
-    const payload = {
-      row_id: _currentKartaRowId,
-      amount, // enters the settlement AND becomes the karta's settlement price (السعر)
-      vehicle_id: chargeVehicleId,
-      date,
-      note: note || undefined
-    };
-    if (mode === 'edit') {
-      // Updates the EXISTING settlement (same logical settlement, one active) —
-      // never creates a second one.
-      await FinancialService.updateKartaSettlement(username, payload);
-    } else {
-      await FinancialService.createKartaSettlement(username, payload);
-    }
-
-    _closeKartaSettlementModal();
-
+    await FinancialService.updateDriverKartaSettlementPrice(_currentUsername(), rowId, input.value);
     const driverId = _getCurrentDriverId();
-    if (driverId) {
-      if (mode === 'edit') {
-        // Full refresh, no manual reload: driver balance, driver ledger,
-        // settlement history, kartas table + summary cards (active tab kept);
-        // then emit owners:changed so any open vehicle/owner balance view
-        // re-derives from the updated ledger.
-        await showDriverDetails(driverId);
-        window.dispatchEvent(new CustomEvent('owners:changed'));
-      } else {
-        await _loadDriverKartasTab(driverId);
-      }
-    }
+    if (driverId) await _loadDriverKartasTab(driverId);
   } catch (err) {
-    if (msgEl) { msgEl.textContent = err.message || '❌ فشل حفظ التسوية'; msgEl.classList.add('is-visible'); }
+    alert(err.message || '❌ فشل حفظ السعر');
+    input.disabled = false;
   }
 }
 
-function _renderKartaTable(kartas, tbody, driverId) {
+function _bindUnsettledKartaPriceInputs(tbody) {
+  tbody.querySelectorAll('[data-action="save-inline-karta-settlement-price"]').forEach(input => {
+    input.addEventListener('change', () => _saveInlineKartaSettlementPrice(input));
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        input.blur();
+      }
+    });
+  });
+}
+
+function _renderKartaTable(kartas, tbody) {
+  const colspan = _kartaStatusFilter === 'settled' ? 9 : 8;
   if (!Array.isArray(kartas) || kartas.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-muted text-center p-6">لا توجد كارتات</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="text-muted text-center p-6">لا توجد كارتات</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = kartas.map(k => {
-    // Unpaid → create (تسوية). Paid/Partial → edit the existing settlement
-    // (تعديل التسوية) — the settlement stays one logical settlement.
-    const settleBtn = k.status === 'unpaid'
-      ? `<button type="button" data-action="open-karta-settlement" data-row-id="${k.row_id}" class="btn btn-primary btn-sm">تسوية</button>`
-      : `<button type="button" data-action="edit-karta-settlement" data-row-id="${k.row_id}" class="btn btn-primary btn-sm">تعديل التسوية</button>`;
+  tbody.innerHTML = kartas.map(karta => {
+    const persistedPrice = karta.driver_settlement_price;
+    const displayPrice = persistedPrice === null || persistedPrice === undefined ? '—' : _fmt(persistedPrice);
+    const statusClass = karta.status === 'settled' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+    const priceCell = _kartaStatusFilter === 'unsettled'
+      ? `<input type="number" step="0.01" min="0" inputmode="decimal" class="input input-sm" style="min-width:100px;" data-action="save-inline-karta-settlement-price" data-row-id="${karta.row_id}" value="${persistedPrice ?? ''}" placeholder="اختياري" aria-label="سعر تسوية الكارتة">`
+      : `<span class="font-semibold">${displayPrice}</span>`;
+    const actionsCell = _kartaStatusFilter === 'settled'
+      ? `<td class="text-center"><button type="button" data-action="edit-karta-settlement-price" data-row-id="${karta.row_id}" class="btn btn-primary btn-sm">تعديل السعر</button></td>`
+      : '';
 
     return `
-      <tr data-row-id="${k.row_id}">
-        <td>${_dateLabel(k.date)}</td>
-        <td>${k.vehicle_plate || '—'}</td>
-        <td>${k.company || '—'}</td>
-        <td>${k.loading || '—'}</td>
-        <td>${k.destination || '—'}</td>
-        <td>${_fmt(k.advance)}</td>
-        <td class="font-semibold">${k.price == null ? '—' : _fmt(k.price)}</td>
-        <td>
-          <span class="px-2 py-0.5 rounded text-xs font-medium ${k.status === 'paid' ? 'bg-green-100 text-green-700' : k.status === 'partial' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}">${k.status}</span>
-          ${settleBtn}
-        </td>
+      <tr data-row-id="${karta.row_id}">
+        <td>${_dateLabel(karta.date)}</td>
+        <td>${karta.vehicle_plate || '—'}</td>
+        <td>${karta.company || '—'}</td>
+        <td>${karta.loading || '—'}</td>
+        <td>${karta.destination || '—'}</td>
+        <td>${_fmt(karta.advance)}</td>
+        <td>${priceCell}</td>
+        <td><span class="px-2 py-0.5 rounded text-xs font-medium ${statusClass}">${_kartaStatusLabel(karta.status)}</span></td>
+        ${actionsCell}
       </tr>
     `;
   }).join('');
+
+  if (_kartaStatusFilter === 'unsettled') _bindUnsettledKartaPriceInputs(tbody);
+}
+
+function _openKartaSettlementPriceModal(rowId) {
+  const karta = _currentKartas.find(item => String(item.row_id) === String(rowId));
+  if (!karta || karta.status !== 'settled') return;
+
+  _editingKartaSettlementPriceRowId = String(rowId);
+  const modal = document.getElementById('kartaSettlementPriceModal');
+  const priceEl = document.getElementById('kartaSettlementPriceInput');
+  const msgEl = document.getElementById('kartaSettlementPriceMsg');
+  if (priceEl) priceEl.value = karta.driver_settlement_price ?? '';
+  if (msgEl) { msgEl.textContent = ''; msgEl.classList.remove('is-visible'); }
+  modal?.classList.remove('hidden');
+}
+
+function _closeKartaSettlementPriceModal() {
+  document.getElementById('kartaSettlementPriceModal')?.classList.add('hidden');
+  _editingKartaSettlementPriceRowId = null;
+}
+
+async function _saveKartaSettlementPriceModal() {
+  if (!_editingKartaSettlementPriceRowId) return;
+
+  const priceEl = document.getElementById('kartaSettlementPriceInput');
+  const msgEl = document.getElementById('kartaSettlementPriceMsg');
+  try {
+    await FinancialService.updateDriverKartaSettlementPrice(
+      _currentUsername(),
+      _editingKartaSettlementPriceRowId,
+      priceEl?.value ?? ''
+    );
+    _closeKartaSettlementPriceModal();
+    const driverId = _getCurrentDriverId();
+    if (driverId) await _loadDriverKartasTab(driverId);
+  } catch (err) {
+    if (msgEl) {
+      msgEl.textContent = err.message || '❌ فشل حفظ السعر';
+      msgEl.classList.add('is-visible');
+    }
+  }
 }
 
 function _openDriverModal(driver = null) {
@@ -2246,96 +2119,63 @@ function attachOwnersPageListeners() {
       return;
     }
 
-    // Karta settlement modal (تسوية) — enter السعر, pick the vehicle to charge
-    const openKartaStl = e.target.closest('[data-action="open-karta-settlement"]');
-    if (openKartaStl) {
-      await _openKartaSettlementModal(openKartaStl.dataset.rowId, 'create');
-      return;
-    }
-    // Edit an existing settlement (تعديل التسوية) — same modal, prefill mode
-    const editKartaStl = e.target.closest('[data-action="edit-karta-settlement"]');
-    if (editKartaStl) {
-      await _openKartaSettlementModal(editKartaStl.dataset.rowId, 'edit');
-      return;
-    }
-    if (e.target.closest('[data-action="close-karta-settlement"]')) {
-      _closeKartaSettlementModal();
-      return;
-    }
-    if (e.target.closest('[data-action="save-karta-settlement"]')) {
-      await _saveKartaSettlement();
+    if (e.target.closest('[data-action="settle-unsettled-kartas"]')) {
+      await _settleUnsettledKartasBatch();
       return;
     }
 
-    // Driver deposit modal remains reachable only when editing an existing
-    // driver-deposit transaction; the Driver Details create action is removed.
-    if (e.target.closest('[data-action="close-driver-deposit"]')) {
-      _closeDriverDepositModal();
+    // Settled Karta price edit: this updates only receipt_rows.driver_settlement_price.
+    const editKartaPrice = e.target.closest('[data-action="edit-karta-settlement-price"]');
+    if (editKartaPrice) {
+      _openKartaSettlementPriceModal(editKartaPrice.dataset.rowId);
       return;
     }
-    if (e.target.closest('[data-action="save-driver-deposit"]')) {
-      await _saveDriverDeposit();
+    if (e.target.closest('[data-action="close-karta-settlement-price"]')) {
+      _closeKartaSettlementPriceModal();
       return;
     }
-
-    // Open driver salfa modal
-    if (e.target.closest('[data-action="open-driver-salfa"]')) {
-      await _openDriverSalfaModal(null);
-      return;
-    }
-    if (e.target.closest('[data-action="close-driver-salfa"]')) {
-      _closeDriverSalfaModal();
-      return;
-    }
-    if (e.target.closest('[data-action="save-driver-salfa"]')) {
-      await _saveDriverSalfa();
+    if (e.target.closest('[data-action="save-karta-settlement-price"]')) {
+      await _saveKartaSettlementPriceModal();
       return;
     }
 
-    // Recover driver salfa (repayment) — separate ledger namespace.
-    if (e.target.closest('[data-action="open-driver-salfa-recovery"]')) {
-      _openDriverSalfaRecoveryModal();
+    // Direct driver Deposit / Withdrawal modal.
+    const openDriverBalanceEntry = e.target.closest('[data-action="open-driver-balance-entry"]');
+    if (openDriverBalanceEntry) {
+      await _openDriverBalanceEntryModal(openDriverBalanceEntry.dataset.entryType);
       return;
     }
-    if (e.target.closest('[data-action="close-driver-salfa-recovery"]')) {
-      _closeDriverSalfaRecoveryModal();
+    if (e.target.closest('[data-action="close-driver-balance-entry"]')) {
+      _closeDriverBalanceEntryModal();
       return;
     }
-    if (e.target.closest('[data-action="save-driver-salfa-recovery"]')) {
-      await _saveDriverSalfaRecovery();
+    if (e.target.closest('[data-action="save-driver-balance-entry"]')) {
+      await _saveDriverBalanceEntry();
       return;
     }
 
-    // Edit driver transaction
+    // Edit a direct driver movement through the same amount/date/note modal.
     const editTxBtn = e.target.closest('[data-action="edit-driver-tx"]');
     if (editTxBtn) {
       const refId = editTxBtn.dataset.refId;
       const txEntry = _driverLedgerCache.find(entry => entry.reference_id === refId);
-      if (txEntry) {
-        if (txEntry.reference_type === 'driver_deposit') {
-          await _openDriverDepositModal(txEntry);
-        } else if (txEntry.reference_type === 'salfa') {
-          await _openDriverSalfaModal(txEntry);
-        }
+      if (txEntry?.reference_type === 'manual_driver_balance'
+        && txEntry.effect === 'manual_driver_balance') {
+        await _openDriverBalanceEntryModal(txEntry.type, txEntry);
       }
       return;
     }
 
-    // Delete driver transaction (audit-preserving reversal, never hard delete).
+    // Delete a direct driver movement by audit-preserving reversal, never hard delete.
     const delTxBtn = e.target.closest('[data-action="delete-driver-tx"]');
     if (delTxBtn) {
       const refId = delTxBtn.dataset.refId;
       const txEntry = _driverLedgerCache.find(entry => entry.reference_id === refId);
-      if (!txEntry || !confirm('هل تريد حذف هذه الحركة؟')) return;
+      if (!txEntry || txEntry.reference_type !== 'manual_driver_balance'
+        || txEntry.effect !== 'manual_driver_balance' || !confirm('هل تريد حذف هذه الحركة؟')) return;
       try {
         const username = _currentUsername();
-        if (txEntry.reference_type === 'salfa') {
-          await FinancialService.deleteDriverSalfa(username, refId);
-        } else if (txEntry.reference_type === 'salfa_recovery') {
-          await FinancialService.deleteDriverSalfaRecovery(username, refId);
-        } else {
-          await FinancialService.deleteDriverDeposit(username, refId);
-        }
+        await FinancialService.deleteManualDriverBalanceEntry(username, refId);
         const driverId = _getCurrentDriverId();
         if (driverId) await showDriverDetails(driverId);
       } catch (err) {

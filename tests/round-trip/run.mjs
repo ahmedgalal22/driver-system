@@ -172,7 +172,7 @@ for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', AL
     `REMOVED-CONTRACT (Treasury phase): ${label} carries ZERO Treasury references (store key / change event / repository / page init)`);
 }
 ok(FINANCIAL_SRC.includes("LEDGER   : 'vehicle_ledger'"),
-  'KEEP-CONTRACT: financial.js driver/salfa financials still write exclusively to vehicle_ledger');
+  'KEEP-CONTRACT: retained driver and settlement financials still write exclusively to vehicle_ledger');
 
 // ══ Vehicle Identity phase — اسم المركبة permanently removed; number-keyed ══
 const ENTITIES_SRC = readFileSync('./_src/entities.js', 'utf8');

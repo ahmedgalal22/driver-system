@@ -94,6 +94,12 @@ class FakeTx {
     this.db = db; this.storeNames = storeNames; this.mode = mode;
     this._pending = 0; this._settled = false; this._errored = false;
     this.oncomplete = null; this.onerror = null; this.onabort = null; this.error = null;
+    // IndexedDB abort restores every participating store. Keep a transaction
+    // snapshot so write-failure tests exercise the same all-or-nothing rule.
+    this._snapshots = new Map(storeNames.map(name => {
+      const store = db.stores.get(name);
+      return [name, { records: structuredClone(store.records), auto: store.auto }];
+    }));
   }
   objectStore(name) {
     const s = this.db.stores.get(name);
@@ -117,6 +123,11 @@ class FakeTx {
   _fail(err) { if (!this._errored) { this._errored = true; this.error = err; } }
   abort() {
     if (this._settled) return;
+    for (const [name, snapshot] of this._snapshots) {
+      const store = this.db.stores.get(name);
+      store.records = structuredClone(snapshot.records);
+      store.auto = snapshot.auto;
+    }
     this._settled = true;
     queueMicrotask(() => { this.onabort && this.onabort({ target: this }); });
   }

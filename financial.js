@@ -50,10 +50,10 @@ const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
 const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
 const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';
 const MANUAL_OFFICE_EFFECT = 'manual_office_balance';
+const MANUAL_DRIVER_REF_TYPE = 'manual_driver_balance';
+const MANUAL_DRIVER_EFFECT = 'manual_driver_balance';
 const RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE = 'receipt_row_company_charge';
 const RECEIPT_ROW_COMPANY_CHARGE_EFFECT = 'receipt_row_company_charge';
-const SALFA_RECOVERY_REF_TYPE = 'salfa_recovery';
-const SALFA_RECOVERY_EFFECT = 'salfa_recovery';
 
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
@@ -133,6 +133,46 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
   };
 }
 
+/**
+ * Normalize the optional Driver Details settlement price. It is deliberately
+ * independent from receipt_rows.driver_price (نولون): null means no intended
+ * settlement amount has been entered; zero remains an explicit valid value.
+ */
+function _normalizeDriverSettlementPrice(value, label = 'driver_settlement_price') {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    return null;
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new Error(`[FinancialService] ${label} must be a numeric value, blank, or null.`);
+  }
+
+  const decimal = Number(value);
+  const cents = Money.toCents(decimal);
+  if (!Number.isFinite(decimal) || !Number.isFinite(cents) || !Number.isInteger(cents)) {
+    throw new Error(`[FinancialService] ${label} must be a finite numeric value.`);
+  }
+  if (cents < 0) {
+    throw new Error(`[FinancialService] ${label} must not be negative.`);
+  }
+  return cents;
+}
+
+/** Validate a stored (already-cents) Driver Karta settlement price. */
+function _readDriverSettlementPriceCents(value, label = 'driver_settlement_price') {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number') {
+    throw new Error(`[FinancialService] persisted ${label} must be numeric integer cents.`);
+  }
+  const cents = value;
+  if (!Number.isFinite(cents) || !Number.isInteger(cents)) {
+    throw new Error(`[FinancialService] persisted ${label} must be finite integer cents.`);
+  }
+  if (cents < 0) {
+    throw new Error(`[FinancialService] persisted ${label} must not be negative.`);
+  }
+  return cents;
+}
+
 function _buildReceiptRowEntities(validatedRows, receiptId) {
   return validatedRows.map(row => ({
     row_id: row.row_id,
@@ -141,6 +181,7 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     vehicle_id: row.vehicle_id,
     vehicle_plate: row.vehicle_plate || null,
     driver_price: Money.toCents(row.driver_price ?? 0),
+    driver_settlement_price: _normalizeDriverSettlementPrice(row.driver_settlement_price),
     loading: row.loading || null,
     destination: row.destination || null,
     office: row.office || null,
@@ -1045,334 +1086,125 @@ async function _fetchLedgerEntries(id, label) {
 
 // ─── DRIVER FINANCIAL OPERATIONS ──────────────────────────────────────────────
 
-async function createDriverDeposit(username, data) {
-  if (!username) throw new Error('[FinancialService:createDriverDeposit] username is required.');
-  if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createDriverDeposit] data must be a plain object.');
-  }
-
-  const driver_id = String(data.driver_id || '').trim();
-  const vehicle_id = String(data.vehicle_id || '').trim();
-  const amount = Money.toCents(data.amount);
-  const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : 'إيداع رصيد من المركبة';
-
-  if (!driver_id) throw new Error('[FinancialService:createDriverDeposit] driver_id is required.');
-  if (!vehicle_id) throw new Error('[FinancialService:createDriverDeposit] vehicle_id is required.');
-  if (amount <= 0) throw new Error('[FinancialService:createDriverDeposit] amount must be greater than zero.');
-  if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createDriverDeposit] date must be a valid ISO date string.');
-  }
-
-  const referenceId = _uuid();
-  const now = DateUtils.nowLocal();
-
-  return DB.transaction(async (tx) => {
-    const driver = await ClientRepository.getDriverById(driver_id, { tx });
-    if (!driver || driver.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverDeposit] driver not found.');
-    }
-    const vehicle = await ClientRepository.getVehicleById(vehicle_id, { tx });
-    if (!vehicle || vehicle.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverDeposit] vehicle not found.');
-    }
-
-    const ops = [
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: String(vehicle.owner_id || ''),
-          owner_name: vehicle.owner_name || null,
-          client_id: String(vehicle.owner_id || ''),
-          client_type: 'owner',
-          vehicle_id: vehicle.id,
-          vehicle_plate: vehicle.plate,
-          type: 'withdraw',
-          amount,
-          reference_type: 'driver_deposit',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: `إيداع للسائق ${driver.name} من المركبة ${vehicle.plate}`,
-        },
-      },
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: driver_id,
-          owner_name: driver.name || null,
-          client_id: driver_id,
-          client_type: 'driver',
-          client_name: driver.name || null,
-          vehicle_id: vehicle.id,
-          vehicle_plate: vehicle.plate,
-          type: 'deposit',
-          amount,
-          reference_type: 'driver_deposit',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: note,
-        },
-      },
-    ];
-
-    const results = await tx.runOps(ops);
-    return results.map(Money.decimalizeRecord);
-  }, { username, stores: [STORE.LEDGER, 'drivers', 'vehicles'] });
-}
-
-async function createDriverSalfa(username, data) {
-  if (!username) throw new Error('[FinancialService:createDriverSalfa] username is required.');
-  if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createDriverSalfa] data must be a plain object.');
-  }
-
-  const driver_id = String(data.driver_id || '').trim();
-  const amount = Money.toCents(data.amount);
-  const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : 'سلفة سائق';
-
-  if (!driver_id) throw new Error('[FinancialService:createDriverSalfa] driver_id is required.');
-  if (amount <= 0) throw new Error('[FinancialService:createDriverSalfa] amount must be greater than zero.');
-  if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createDriverSalfa] date must be a valid ISO date string.');
-  }
-
-  const referenceId = _uuid();
-  const now = DateUtils.nowLocal();
-
-  return DB.transaction(async (tx) => {
-    const driver = await ClientRepository.getDriverById(driver_id, { tx });
-    if (!driver || driver.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverSalfa] driver not found.');
-    }
-
-    const ops = [
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: driver_id,
-          owner_name: driver.name || null,
-          client_id: driver_id,
-          client_type: 'driver',
-          client_name: driver.name || null,
-          vehicle_id: null,
-          vehicle_plate: null,
-          type: 'withdraw',
-          effect: 'salfa',
-          amount,
-          reference_type: 'salfa',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note,
-        },
-      },
-    ];
-
-    const results = await tx.runOps(ops);
-    return Money.decimalizeRecord(results[0]);
-  }, { username, stores: [STORE.LEDGER, 'drivers'] });
-}
-
 /**
- * Record repayment of a driver's existing salfa. This is the exact ledger
- * opposite of createDriverSalfa: the driver receives a deposit, so their
- * derived balance moves back toward zero without rewriting the original salfa.
+ * Validate and shape one direct Driver Balance movement. These movements are
+ * intentionally driver-only: no vehicle, office, capital-book, receipt, or Karta
+ * posting is created alongside this ledger row.
  */
-async function createDriverSalfaRecovery(username, data) {
-  if (!username) throw new Error('[FinancialService:createDriverSalfaRecovery] username is required.');
+async function _prepareManualDriverBalancePayload(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualDriverBalanceEntry] username is required.');
   if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createDriverSalfaRecovery] data must be a plain object.');
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] data must be a plain object.');
   }
 
   const driver_id = String(data.driver_id || '').trim();
-  const amount = Money.toCents(data.amount);
+  const entry_type = data.entry_type === 'deposit'
+    ? 'deposit'
+    : data.entry_type === 'withdraw'
+      ? 'withdraw'
+      : '';
+  const rawAmount = Number(data.amount);
+  const amount = Money.toCents(rawAmount);
   const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' && data.note.trim()
-    ? data.note.trim()
-    : 'استرداد سلفة';
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
 
-  if (!driver_id) throw new Error('[FinancialService:createDriverSalfaRecovery] driver_id is required.');
-  if (amount <= 0) throw new Error('[FinancialService:createDriverSalfaRecovery] amount must be greater than zero.');
+  if (!driver_id) throw new Error('[FinancialService:createManualDriverBalanceEntry] driver_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualDriverBalanceEntry] entry_type must be deposit or withdraw.');
+  if (!Number.isFinite(rawAmount) || !Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) {
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] amount must be a finite value greater than zero.');
+  }
   if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createDriverSalfaRecovery] date must be a valid ISO date string.');
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] date must be a valid ISO date string.');
   }
 
   const driver = await ClientRepository.getDriverById(driver_id);
   if (!driver || driver.deleted_at !== null) {
-    throw new Error('[FinancialService:createDriverSalfaRecovery] driver not found.');
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] driver not found.');
   }
 
-  const referenceId = _uuid();
-  const now = DateUtils.nowLocal();
+  return {
+    username,
+    owner_id: String(driver.id),
+    owner_name: driver.name || null,
+    client_id: String(driver.id),
+    client_type: 'driver',
+    client_name: driver.name || null,
+    vehicle_id: null,
+    vehicle_plate: null,
+    type: entry_type,
+    effect: MANUAL_DRIVER_EFFECT,
+    amount,
+    reference_type: MANUAL_DRIVER_REF_TYPE,
+    reference_id: _uuid(),
+    date,
+    applied_at: DateUtils.nowLocal(),
+    is_reversed: false,
+    note: note || null,
+  };
+}
+
+async function _getActiveManualDriverBalanceEntries(reference_id) {
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:manualDriverBalance] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  return entries.filter(entry =>
+    entry.reference_type === MANUAL_DRIVER_REF_TYPE
+    && entry.effect === MANUAL_DRIVER_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+/**
+ * Create exactly one direct driver balance movement. A deposit raises the
+ * driver's balance and a withdrawal lowers it; neither posts to a vehicle.
+ */
+async function createManualDriverBalanceEntry(username, data) {
+  const payload = await _prepareManualDriverBalancePayload(username, data);
   const [saved] = await DB.transaction([{
     op: 'add',
     store: STORE.LEDGER,
-    payload: {
-      username,
-      owner_id: driver_id,
-      owner_name: driver.name || null,
-      client_id: driver_id,
-      client_type: 'driver',
-      client_name: driver.name || null,
-      vehicle_id: null,
-      vehicle_plate: null,
-      type: 'deposit',
-      effect: SALFA_RECOVERY_EFFECT,
-      amount,
-      reference_type: SALFA_RECOVERY_REF_TYPE,
-      reference_id: referenceId,
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note,
-    },
+    payload,
   }], { username });
 
   return Money.decimalizeRecord(saved);
 }
 
-async function updateDriverDeposit(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateDriverDeposit] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:updateDriverDeposit] reference_id is required.');
+/**
+ * Edit a direct driver movement through the established audit convention:
+ * reverse its active row, then atomically add a replacement row.
+ */
+async function updateManualDriverBalanceEntry(username, reference_id, data) {
+  if (!username) throw new Error('[FinancialService:updateManualDriverBalanceEntry] username is required.');
+  const active = await _getActiveManualDriverBalanceEntries(reference_id);
+  if (active.length === 0) {
+    throw new Error('[FinancialService:updateManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
+  }
 
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:updateDriverDeposit] Transaction reference not found.');
-    }
+  const previous = active[0];
+  const payload = await _prepareManualDriverBalancePayload(username, {
+    ...data,
+    driver_id: data?.driver_id || previous.owner_id,
+  });
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const results = await DB.transaction([
+    ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { op: 'add', store: STORE.LEDGER, payload },
+  ], { username });
 
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    await tx.runOps(reverseOps);
-
-    const first = activeEntries[0];
-    return createDriverDeposit(username, {
-      driver_id: data.driver_id || first.owner_id,
-      vehicle_id: data.vehicle_id || first.vehicle_id,
-      amount: data.amount,
-      date: data.date,
-      note: data.note,
-    });
-  }, { username, stores: [STORE.LEDGER, 'drivers', 'vehicles'] });
-}
-
-async function deleteDriverDeposit(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteDriverDeposit] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:deleteDriverDeposit] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:deleteDriverDeposit] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    return tx.runOps(reverseOps);
-  }, { username, stores: [STORE.LEDGER] });
-}
-
-async function updateDriverSalfa(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateDriverSalfa] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:updateDriverSalfa] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:updateDriverSalfa] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    await tx.runOps(reverseOps);
-
-    const first = activeEntries[0];
-    return createDriverSalfa(username, {
-      driver_id: data.driver_id || first.owner_id,
-      amount: data.amount,
-      date: data.date,
-      note: data.note,
-    });
-  }, { username, stores: [STORE.LEDGER, 'drivers'] });
-}
-
-async function deleteDriverSalfa(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteDriverSalfa] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:deleteDriverSalfa] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:deleteDriverSalfa] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    return tx.runOps(reverseOps);
-  }, { username, stores: [STORE.LEDGER] });
+  return Money.decimalizeRecord(results[results.length - 1]);
 }
 
 /**
- * Reverse one manual salfa recovery without removing its financial audit row.
+ * Reverse one direct driver movement while retaining its audit history.
  */
-async function deleteDriverSalfaRecovery(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteDriverSalfaRecovery] username is required.');
-  const referenceKey = String(reference_id || '').trim();
-  if (!referenceKey) throw new Error('[FinancialService:deleteDriverSalfaRecovery] reference_id is required.');
-
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
-  const active = entries.filter(entry =>
-    entry.reference_type === SALFA_RECOVERY_REF_TYPE
-    && entry.effect === SALFA_RECOVERY_EFFECT
-    && entry.is_reversed === false
-    && entry.deleted_at === null
-  );
+async function deleteManualDriverBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualDriverBalanceEntry] username is required.');
+  const active = await _getActiveManualDriverBalanceEntries(reference_id);
   if (active.length === 0) {
-    throw new Error('[FinancialService:deleteDriverSalfaRecovery] salfa recovery not found or already reversed.');
+    throw new Error('[FinancialService:deleteManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
   }
 
   const now = DateUtils.nowLocal();
@@ -1440,7 +1272,7 @@ const KARTA_REF_TYPE = 'receipt_row';
 const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
 // Vehicle-balance leg of a karta settlement — follows the existing ledger
 // architecture (rebuildVehicleBalance reads type deposit/withdraw by_vehicle;
-// origin classification via `effect`, exactly like 'salfa').
+// origin classification via the settlement effect tag).
 const KARTA_CHARGE_EFFECT = 'karta_settlement_charge';
 
 // The receipt row persists the driver's display-name snapshot specifically for
@@ -1459,56 +1291,31 @@ async function _getActiveKartaSettlements() {
   return all.filter(e => e.type === KARTA_SETTLEMENT_TYPE);
 }
 
+/**
+ * Return the Driver Details Karta projection. Settlement status is derived
+ * exclusively from active driver_karta_payment legs; the persisted
+ * driver_settlement_price is intentionally separate from those ledger prices
+ * and from receipt_rows.driver_price (نولون).
+ */
 async function getDriverKartas(driverId) {
   if (!driverId) throw new Error('[FinancialService:getDriverKartas] driverId is required');
 
-  // Get projection data from the dedicated read repository
   const projectionData = await DriverKartaReadRepository.getDriverKartasData(driverId);
-
-  // Load active settlements from vehicle_ledger
   const settlements = await _getActiveKartaSettlements();
-  const settlementMap = new Map();
+  const settledRowIds = new Set();
 
-  for (const s of settlements) {
-    if (s.owner_id !== driverId) continue;
-    const rid = s.reference_id;
-    if (!settlementMap.has(rid)) settlementMap.set(rid, []);
-    settlementMap.get(rid).push(s);
+  for (const settlement of settlements) {
+    if (settlement.owner_id === driverId && settlement.reference_id) {
+      settledRowIds.add(String(settlement.reference_id));
+    }
   }
 
   const result = [];
-
   for (const { row, receipt } of projectionData) {
     if (!row || !row.row_id || row.driver_id !== driverId) continue;
 
-    // BUSINESS RULE: the receipt's driver_price (نولون) is IRRELEVANT on this
-    // screen — never used as the payable base, never displayed, never a
-    // filter. The driver's payable amount (السعر) is the settlement price
-    // entered manually in Driver Details; kartas appear regardless of نولون.
-    const rowSettlements = settlementMap.get(row.row_id) || [];
-    let settled = 0;
-    let lastDate = null;
-    let priceCents = null;   // settlement price (cents) from the LATEST active settlement
-    let latestSettledAt = -Infinity;
-
-    for (const s of rowSettlements) {
-      settled += Math.abs(Number(s.amount) || 0); // ledger amounts are persisted cents
-      if (!lastDate || new Date(s.date) > new Date(lastDate)) lastDate = s.date;
-      const enteredAt = new Date(s.applied_at || s.date || 0).getTime() || 0;
-      if (typeof s.price === 'number' && enteredAt >= latestSettledAt) {
-        latestSettledAt = enteredAt;
-        priceCents = s.price;
-      }
-    }
-
-    // Payments / remaining / status are anchored ONLY to the settlement price.
-    const remaining = priceCents === null ? null : Math.max(0, priceCents - settled);
-    let status = 'unpaid';
-    if (priceCents !== null && settled > 0) {
-      if (remaining > 0) status = 'partial';
-      else status = 'paid';
-    }
-
+    const settlementPriceCents = _readDriverSettlementPriceCents(row.driver_settlement_price);
+    const settled = settledRowIds.has(String(row.row_id));
     result.push({
       row_id: row.row_id,
       receipt_id: row.receipt_id,
@@ -1518,10 +1325,11 @@ async function getDriverKartas(driverId) {
       company: row.office || null,
       loading: row.loading || null,
       destination: row.destination || null,
-      advance: Money.toDecimal(row.advance ?? 0), // persisted cents → decimal, single conversion
-      price: priceCents === null ? null : Money.toDecimal(priceCents), // settlement price only — NEVER نولون
-      status,
-      last_settlement_date: lastDate,
+      advance: Money.toDecimal(row.advance ?? 0),
+      driver_settlement_price: settlementPriceCents === null
+        ? null
+        : Money.toDecimal(settlementPriceCents),
+      status: settled ? 'settled' : 'unsettled',
     });
   }
 
@@ -1530,25 +1338,231 @@ async function getDriverKartas(driverId) {
 
 async function getDriverKartasSummary(driverId) {
   const kartas = await getDriverKartas(driverId);
-  let total_kartas = 0, unpaid_kartas = 0, paid_kartas = 0;
+  let total_kartas = 0;
+  let unsettled_kartas = 0;
+  let settled_kartas = 0;
   let total_price = 0;
 
-  for (const k of kartas) {
+  for (const karta of kartas) {
     total_kartas++;
-    if (k.status === 'unpaid') unpaid_kartas++;
-    else if (k.status === 'paid') paid_kartas++;
-
-    // Summed over the settlement price ONLY (نولون never enters this summary);
-    // kartas with no settlement yet contribute 0.
-    total_price += Money.toCents(k.price ?? 0);
+    if (karta.status === 'settled') settled_kartas++;
+    else unsettled_kartas++;
+    total_price += Money.toCents(karta.driver_settlement_price ?? 0);
   }
 
   return {
     total_kartas,
-    unpaid_kartas,
-    paid_kartas,
+    unsettled_kartas,
+    settled_kartas,
     total_price: Money.toDecimal(total_price),
   };
+}
+
+/**
+ * Patch only the persisted Driver Details settlement price of one receipt row.
+ * This write never creates or changes vehicle_ledger records.
+ */
+async function updateDriverKartaSettlementPrice(username, rowId, value) {
+  if (!username) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] username is required.');
+  const rowKey = String(rowId ?? '').trim();
+  if (!rowKey) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] row_id is required.');
+
+  const row = await ReceiptRepository.getRowById(rowKey);
+  if (!row || row.deleted_at !== null) {
+    throw new Error('[FinancialService:updateDriverKartaSettlementPrice] receipt row not found.');
+  }
+  if (!row.driver_id) {
+    throw new Error('[FinancialService:updateDriverKartaSettlementPrice] receipt row must belong to a driver.');
+  }
+
+  const driver_settlement_price = _normalizeDriverSettlementPrice(value);
+  const [saved] = await DB.transaction([{
+    op: 'update',
+    store: 'receipt_rows',
+    id: rowKey,
+    patch: { driver_settlement_price },
+  }], { username });
+
+  const decimalized = Money.decimalizeRecord(saved);
+  return {
+    ...decimalized,
+    driver_settlement_price: driver_settlement_price === null
+      ? null
+      : Money.toDecimal(driver_settlement_price),
+  };
+}
+
+/**
+ * Settle multiple Driver Karta rows in ONE transaction. Each Karta preserves
+ * its own receipt-row reference and vehicle withdrawal; batch_id only groups
+ * the audit records created together.
+ */
+async function createKartaSettlementBatch(username, driverId, rowIds) {
+  if (!username) throw new Error('[FinancialService:createKartaSettlementBatch] username is required.');
+  const driverKey = String(driverId ?? '').trim();
+  if (!driverKey) throw new Error('[FinancialService:createKartaSettlementBatch] driver_id is required.');
+  if (!Array.isArray(rowIds) || rowIds.length === 0) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] row_ids must contain at least one row.');
+  }
+
+  const normalizedRowIds = rowIds.map(rowId => String(rowId ?? '').trim());
+  if (normalizedRowIds.some(rowId => !rowId)) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] every row_id is required.');
+  }
+  if (new Set(normalizedRowIds).size !== normalizedRowIds.length) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] duplicate row_id in batch input.');
+  }
+
+  return DB.transaction(async (tx) => {
+    // Schedule every authoritative read inside the same transaction before
+    // validation or writes, so the active-settlement state is checked at the
+    // exact transaction boundary that commits the new batch.
+    const [rows, vehicles, drivers, ledger] = await Promise.all([
+      tx.getAll('receipt_rows'),
+      tx.getAll('vehicles'),
+      tx.getAll('drivers'),
+      tx.findByFields(STORE.LEDGER, { is_reversed: false }),
+    ]);
+
+    const driver = drivers.find(record => String(record.id) === driverKey);
+    if (!driver) {
+      throw new Error('[FinancialService:createKartaSettlementBatch] driver not found.');
+    }
+
+    const rowsById = new Map(rows.map(row => [String(row.row_id), row]));
+    const vehiclesById = new Map(vehicles.map(vehicle => [String(vehicle.id), vehicle]));
+    const activeByReference = new Map();
+    for (const entry of ledger) {
+      if (entry.reference_type !== KARTA_REF_TYPE || !entry.reference_id) continue;
+      const key = String(entry.reference_id);
+      if (!activeByReference.has(key)) activeByReference.set(key, []);
+      activeByReference.get(key).push(entry);
+    }
+
+    const eligible = [];
+    const skippedRowIds = [];
+    for (const rowId of normalizedRowIds) {
+      const row = rowsById.get(rowId);
+      if (!row) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} not found.`);
+      }
+      if (String(row.driver_id || '') !== driverKey) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} does not belong to the selected driver.`);
+      }
+
+      const priceCents = _readDriverSettlementPriceCents(row.driver_settlement_price);
+      if (priceCents === null || priceCents === 0) {
+        skippedRowIds.push(rowId);
+        continue;
+      }
+
+      const activeEntries = activeByReference.get(rowId) || [];
+      const activePayment = activeEntries.find(entry => entry.type === KARTA_SETTLEMENT_TYPE);
+      const activeCharge = activeEntries.find(entry => entry.effect === KARTA_CHARGE_EFFECT);
+      if (activePayment) {
+        // The row became settled after the UI loaded or was supplied directly.
+        // Never duplicate either existing settlement leg.
+        skippedRowIds.push(rowId);
+        continue;
+      }
+      if (activeCharge) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} has an active vehicle settlement charge without an active driver settlement.`);
+      }
+
+      const vehicleId = String(row.vehicle_id || '').trim();
+      if (!vehicleId) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} requires an active vehicle.`);
+      }
+      const vehicle = vehiclesById.get(vehicleId);
+      if (!vehicle) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] vehicle for Karta row ${rowId} not found or inactive.`);
+      }
+
+      eligible.push({ row, rowId, vehicle, priceCents });
+    }
+
+    if (eligible.length === 0) {
+      return {
+        success: true,
+        batch_id: null,
+        settled_row_ids: [],
+        skipped_row_ids: skippedRowIds,
+        settled_count: 0,
+        total: 0,
+        affected_vehicle_count: 0,
+      };
+    }
+
+    const batch_id = _uuid();
+    const now = DateUtils.nowLocal();
+    const date = DateUtils.todayLocal();
+    const ops = [];
+    for (const { row, rowId, vehicle, priceCents } of eligible) {
+      // Driver-side Karta settlement leg: intentionally retains the existing
+      // driver_karta_payment semantics, so Driver Balance stays unchanged.
+      ops.push({
+        op: 'add',
+        store: STORE.LEDGER,
+        payload: {
+          username,
+          owner_id: driverKey,
+          owner_name: null,
+          client_id: null,
+          client_type: 'driver',
+          type: KARTA_SETTLEMENT_TYPE,
+          amount: -priceCents,
+          price: priceCents,
+          vehicle_id: vehicle.id,
+          reference_type: KARTA_REF_TYPE,
+          reference_id: rowId,
+          batch_id,
+          date,
+          applied_at: now,
+          is_reversed: false,
+          note: 'تسوية عامة للكارتات',
+        },
+      });
+
+      // Vehicle-side charge: one withdrawal per Karta, never an aggregate
+      // charged to a different vehicle.
+      ops.push({
+        op: 'add',
+        store: STORE.LEDGER,
+        payload: {
+          username,
+          owner_id: String(vehicle.owner_id || ''),
+          owner_name: vehicle.owner_name || null,
+          client_id: String(vehicle.owner_id || ''),
+          client_type: 'owner',
+          client_name: vehicle.owner_name || null,
+          vehicle_id: vehicle.id,
+          vehicle_plate: vehicle.plate || null,
+          type: 'withdraw',
+          effect: KARTA_CHARGE_EFFECT,
+          amount: priceCents,
+          reference_type: KARTA_REF_TYPE,
+          reference_id: rowId,
+          batch_id,
+          date,
+          applied_at: now,
+          is_reversed: false,
+          note: _kartaVehicleSettlementNote(row),
+        },
+      });
+    }
+
+    await tx.runOps(ops);
+    const totalCents = eligible.reduce((sum, item) => sum + item.priceCents, 0);
+    return {
+      success: true,
+      batch_id,
+      settled_row_ids: eligible.map(item => item.rowId),
+      skipped_row_ids: skippedRowIds,
+      settled_count: eligible.length,
+      total: Money.toDecimal(totalCents),
+      affected_vehicle_count: new Set(eligible.map(item => String(item.vehicle.id))).size,
+    };
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'drivers'] });
 }
 
 async function getKartaSettlementHistory(rowId) {
@@ -1604,7 +1618,7 @@ async function createKartaSettlement(username, data) {
   //   1. driver settlement payment (driver is paid: type driver_karta_payment)
   //   2. vehicle charge (the selected vehicle's balance is reduced by the
   //      settlement price: type 'withdraw' + effect tag, the exact convention
-  //      used by createDriverDeposit's vehicle leg and 'salfa')
+  //      used by the existing vehicle-withdraw convention)
   // Both legs share reference_type/reference_id → they reverse together.
   await DB.transaction(async (tx) => {
     // Leg 1 — driver settlement payment
@@ -1874,16 +1888,13 @@ export const FinancialService = Object.freeze({
   deleteManualOfficeBalanceEntry,
   getDriverBalance,
   getDriverLedger,
-  createDriverDeposit,
-  updateDriverDeposit,
-  deleteDriverDeposit,
-  createDriverSalfa,
-  updateDriverSalfa,
-  deleteDriverSalfa,
-  createDriverSalfaRecovery,
-  deleteDriverSalfaRecovery,
+  createManualDriverBalanceEntry,
+  updateManualDriverBalanceEntry,
+  deleteManualDriverBalanceEntry,
   getDriverKartas,
   getDriverKartasSummary,
+  updateDriverKartaSettlementPrice,
+  createKartaSettlementBatch,
   getKartaSettlementHistory,
   createKartaSettlement,
   updateKartaSettlement,
