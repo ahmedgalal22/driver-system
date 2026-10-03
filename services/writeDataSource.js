@@ -53,5 +53,20 @@ export const WriteDataSource = {
     const ops = commands.map(_toDbOp);
 
     return DBProvider.transaction(ops, meta);
+  },
+
+  /**
+   * Execute the existing PersistenceCommand contract inside a transaction
+   * already opened by a FinancialService lifecycle guard. This avoids a
+   * check-then-write gap while preserving the same aggregate/store mapping.
+   */
+  async executeWithinTransaction(tx, commands) {
+    if (!tx || typeof tx.runOps !== 'function') {
+      throw new Error('[WriteDataSource] transaction context with runOps is required.');
+    }
+    if (!Array.isArray(commands) || commands.length === 0) {
+      return [];
+    }
+    return tx.runOps(commands.map(_toDbOp));
   }
 };

@@ -56,13 +56,17 @@ await FinancialService.createReceipt(U, {
 const before = await FinancialService.rebuildVehicleBalance(VEHICLE.id);
 ok(before.balance === 0, 'vehicle balance starts at zero before Karta Settlement');
 
-await FinancialService.createKartaSettlement(U, {
+const createdSettlement = await FinancialService.createKartaSettlement(U, {
   row_id: kartaRow.row_id,
+  driver_id: DRIVER.id,
   vehicle_id: VEHICLE.id,
   amount: 50,
   date: '2026-08-10',
   note: 'ملاحظة تسوية السائق',
 });
+
+ok(createdSettlement.settlement_reference_id === kartaRow.row_id && createdSettlement.row_id === kartaRow.row_id,
+  'single settlement returns the persisted receipt-row settlement identity');
 
 const entries = await DB.getByIndex('vehicle_ledger', 'by_reference_id', kartaRow.row_id);
 const active = entries.filter(entry => entry.is_reversed === false);

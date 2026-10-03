@@ -76,7 +76,7 @@ await FinancialService.createReceipt(U, {
 });
 await FinancialService.setReceiptRowPaymentStatus(U, rowId, 'paid');
 await FinancialService.createKartaSettlement(U, {
-  row_id: rowId, vehicle_id: V1.id, amount: 50, date: '2026-08-29', note: 'تسوية اختبار',
+  row_id: rowId, driver_id: DRIVER_ID, vehicle_id: V1.id, amount: 50, date: '2026-08-29', note: 'تسوية اختبار',
 });
 const officeBefore = await FinancialService.getOfficeBalance(OFFICE.id);
 const driverBefore = await FinancialService.getDriverBalance(DRIVER_ID);

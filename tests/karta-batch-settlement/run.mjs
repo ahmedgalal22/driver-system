@@ -128,7 +128,7 @@ const ALREADY = mkRow({ vehicle: VC, price: 50, kartano: 'ALREADY' });
 const FRESH = mkRow({ vehicle: VC, price: 500, kartano: 'FRESH' });
 await createRows([ALREADY, FRESH]);
 await FinancialService.createKartaSettlement(U, {
-  row_id: ALREADY.row_id, vehicle_id: VC.id, amount: 50, date: '2026-09-30', note: 'تسوية فردية قائمة',
+  row_id: ALREADY.row_id, driver_id: DRIVER_A.id, vehicle_id: VC.id, amount: 50, date: '2026-09-30', note: 'تسوية فردية قائمة',
 });
 const alreadyLegsBefore = await activeByRow(ALREADY.row_id);
 const mixed = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [ALREADY.row_id, FRESH.row_id]);

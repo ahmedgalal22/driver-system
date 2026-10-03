@@ -191,6 +191,7 @@ await FinancialService.createReceipt(U, {
 });
 await FinancialService.createKartaSettlement(U, {
   row_id: kartaRow.row_id,
+  driver_id: DRIVER.id,
   vehicle_id: VEHICLE.id,
   amount: 10,
   date: '2026-09-25',

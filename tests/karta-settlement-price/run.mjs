@@ -165,6 +165,7 @@ ok((await FinancialService.rebuildVehicleBalance(V1.id)).balance === 0
 console.log('\n— settlement status derives from existing active ledger effects —');
 await FinancialService.createKartaSettlement(U, {
   row_id: ROW_A_SETTLED.row_id,
+  driver_id: DRIVER_A.id,
   vehicle_id: V1.id,
   amount: 50,
   date: '2026-09-30',

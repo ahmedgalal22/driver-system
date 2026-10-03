@@ -463,6 +463,41 @@ function _receiptRowCompanyChargeReverseCommands(entries, username) {
   );
 }
 
+/**
+ * Block a receipt lifecycle mutation when any current receipt row has active
+ * Karta settlement evidence. A complete pair and every partial/duplicate state
+ * block equally: receipt rows must never be replaced or deleted underneath an
+ * active financial settlement.
+ */
+async function _assertReceiptRowsHaveNoActiveKartaSettlement(tx, rows, operation) {
+  const blockers = [];
+  for (const row of rows || []) {
+    const rowId = String(row?.row_id || '').trim();
+    if (!rowId) continue;
+    const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowId);
+    const pair = _analyzeKartaSettlementPair(entries, rowId);
+    if (pair.state !== 'none') blockers.push({ rowId, state: pair.state });
+  }
+
+  if (blockers.length > 0) {
+    const affected = blockers.map(blocker => `${blocker.rowId} (${blocker.state})`).join(', ');
+    const action = operation === 'deleteReceipt' ? 'deleted' : 'edited';
+    throw new Error(
+      `[FinancialService:${operation}] receipt row(s) ${affected} cannot be ${action} while Karta settlement is active. `
+      + 'Reverse the Karta settlement first.'
+    );
+  }
+}
+
+function _assertReceiptRowSetMatches(expectedRows, currentRows, operation) {
+  const expected = new Set((expectedRows || []).map(row => String(row.row_id || '')));
+  const current = new Set((currentRows || []).map(row => String(row.row_id || '')));
+  const same = expected.size === current.size && [...expected].every(rowId => current.has(rowId));
+  if (!same) {
+    throw new Error(`[FinancialService:${operation}] receipt rows changed before mutation; reload and retry.`);
+  }
+}
+
 // ─── LOAD PRICE ROUTE DISCOVERY ──────────────────────────────────────────────
 // Reference/master-data only. It neither posts financial entries nor changes a
 // user-managed price. Duplicate rows in one receipt collapse to one route key.
@@ -658,8 +693,15 @@ async function updateReceipt(username, id, data) {
     ...paymentAddCommands,
   ];
 
-  // Execute through WriteDataSource
-  const results = await WriteDataSource.execute(allCommands, { username });
+  // The active-Karta guard and the full receipt mutation share one IDB
+  // transaction. Once the guard observes no active settlement for these rows,
+  // no concurrent Karta settlement can survive against a completed replacement.
+  const results = await DB.transaction(async (tx) => {
+    const currentRows = await _getExistingReceiptRows(id, tx);
+    _assertReceiptRowSetMatches(existingReceiptRows, currentRows, 'updateReceipt');
+    await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'updateReceipt');
+    return WriteDataSource.executeWithinTransaction(tx, allCommands);
+  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices'] });
 
   const receipt = Money.decimalizeRecord(results[0]); // First command is the header update
 
@@ -716,8 +758,15 @@ async function deleteReceipt(username, id) {
     ...companyChargeReverseCommands,
   ];
 
-  // Execute through WriteDataSource
-  await WriteDataSource.execute(allCommands, { username });
+  // Read active Karta state and execute row/header mutation in the same IDB
+  // transaction so delete cannot leave an active settlement referencing a
+  // soft-deleted receipt row.
+  await DB.transaction(async (tx) => {
+    const currentRows = await _getExistingReceiptRows(id, tx);
+    _assertReceiptRowSetMatches(existingRows, currentRows, 'deleteReceipt');
+    await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'deleteReceipt');
+    await WriteDataSource.executeWithinTransaction(tx, allCommands);
+  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER] });
 
   return { id, deleted: true };
 }
@@ -1283,6 +1332,180 @@ function _kartaVehicleSettlementNote(kartaRow) {
   return driverName ? `تسوية كارتة (${driverName})` : 'تسوية كارتة';
 }
 
+function _normalizeKartaSettlementAmount(value, label) {
+  const decimal = Number(value);
+  const cents = Money.toCents(decimal);
+  if (!Number.isFinite(decimal) || !Number.isFinite(cents) || !Number.isInteger(cents) || cents <= 0) {
+    throw new Error(`[FinancialService:${label}] amount must be a finite value greater than zero.`);
+  }
+  return cents;
+}
+
+function _activeKartaSettlementLegs(entries, rowId) {
+  const rowKey = String(rowId || '').trim();
+  return (entries || []).filter(entry =>
+    entry.reference_type === KARTA_REF_TYPE
+    && String(entry.reference_id || '') === rowKey
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+    && (entry.type === KARTA_SETTLEMENT_TYPE || entry.effect === KARTA_CHARGE_EFFECT)
+  );
+}
+
+function _analyzeKartaSettlementPair(entries, rowId) {
+  const activeLegs = _activeKartaSettlementLegs(entries, rowId);
+  const driverLegs = activeLegs.filter(entry => entry.type === KARTA_SETTLEMENT_TYPE);
+  const vehicleLegs = activeLegs.filter(entry => entry.effect === KARTA_CHARGE_EFFECT);
+
+  let state = 'none';
+  if (driverLegs.length === 1 && vehicleLegs.length === 1 && activeLegs.length === 2) state = 'complete';
+  else if (driverLegs.length || vehicleLegs.length) {
+    state = driverLegs.length <= 1 && vehicleLegs.length <= 1 ? 'partial' : 'duplicate';
+  }
+
+  return { state, activeLegs, driverLegs, vehicleLegs };
+}
+
+function _assertCompleteKartaSettlementPair(context, operation) {
+  const { pair, row, rowId, driverId, vehicleId } = context;
+  if (pair.state !== 'complete') {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowId} has ${pair.state} active settlement state; expected one complete pair.`);
+  }
+
+  const driverLeg = pair.driverLegs[0];
+  const vehicleLeg = pair.vehicleLegs[0];
+  const driverAmount = Number(driverLeg.amount);
+  const vehicleAmount = Number(vehicleLeg.amount);
+  if (String(driverLeg.owner_id || '') !== driverId
+    || String(driverLeg.vehicle_id || '') !== vehicleId
+    || String(vehicleLeg.vehicle_id || '') !== vehicleId
+    || driverLeg.reference_id !== row.row_id
+    || vehicleLeg.reference_id !== row.row_id
+    || !Number.isFinite(driverAmount)
+    || !Number.isFinite(vehicleAmount)
+    || driverAmount >= 0
+    || vehicleAmount <= 0
+    || Math.abs(driverAmount) !== vehicleAmount) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowId} has inconsistent active settlement legs.`);
+  }
+}
+
+function _assertNoActiveKartaSettlementPair(context, operation) {
+  if (context.pair.state === 'none') return;
+  if (context.pair.state === 'complete') {
+    throw new Error(`[FinancialService:${operation}] Karta row ${context.rowId} already has an active settlement.`);
+  }
+  throw new Error(`[FinancialService:${operation}] Karta row ${context.rowId} has ${context.pair.state} active settlement state.`);
+}
+
+function _buildKartaSettlementLegPayloads({
+  username,
+  row,
+  driverId,
+  vehicle,
+  amount,
+  date,
+  note,
+  batch_id = undefined,
+  edited_from = undefined,
+  applied_at = undefined,
+}) {
+  const now = applied_at || DateUtils.nowLocal();
+  const shared = {
+    ...(batch_id !== undefined ? { batch_id } : {}),
+    ...(edited_from !== undefined ? { edited_from } : {}),
+  };
+
+  return [
+    {
+      username,
+      owner_id: driverId,
+      owner_name: null,
+      client_id: null,
+      client_type: 'driver',
+      type: KARTA_SETTLEMENT_TYPE,
+      amount: -amount,
+      price: amount,
+      vehicle_id: vehicle.id,
+      reference_type: KARTA_REF_TYPE,
+      reference_id: row.row_id,
+      ...shared,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+    {
+      username,
+      owner_id: String(vehicle.owner_id || ''),
+      owner_name: vehicle.owner_name || null,
+      client_id: String(vehicle.owner_id || ''),
+      client_type: 'owner',
+      client_name: vehicle.owner_name || null,
+      vehicle_id: vehicle.id,
+      vehicle_plate: vehicle.plate || null,
+      type: 'withdraw',
+      effect: KARTA_CHARGE_EFFECT,
+      amount,
+      reference_type: KARTA_REF_TYPE,
+      reference_id: row.row_id,
+      ...shared,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note: _kartaVehicleSettlementNote(row),
+    },
+  ];
+}
+
+async function _loadKartaSettlementContext(tx, { rowId, driverId, operation, requireActiveEntities = true }) {
+  const rowKey = String(rowId || '').trim();
+  if (!rowKey) throw new Error(`[FinancialService:${operation}] row_id is required.`);
+
+  const row = await ReceiptRepository.getRowById(rowKey, { tx });
+  if (!row) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} not found or deleted.`);
+  }
+
+  const rowDriverId = String(row.driver_id || '').trim();
+  if (!rowDriverId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} has no driver.`);
+  }
+  const expectedDriverId = String(driverId || '').trim();
+  if (expectedDriverId && expectedDriverId !== rowDriverId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} does not belong to the selected driver.`);
+  }
+
+  const rowVehicleId = String(row.vehicle_id || '').trim();
+  if (!rowVehicleId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} has no vehicle.`);
+  }
+
+  let driver = null;
+  let vehicle = null;
+  if (requireActiveEntities) {
+    driver = await ClientRepository.getDriverById(rowDriverId, { tx });
+    if (!driver || driver.deleted_at !== null) {
+      throw new Error(`[FinancialService:${operation}] driver for Karta row ${rowKey} not found or inactive.`);
+    }
+    vehicle = await ClientRepository.getVehicleById(rowVehicleId, { tx });
+    if (!vehicle || vehicle.deleted_at !== null) {
+      throw new Error(`[FinancialService:${operation}] vehicle for Karta row ${rowKey} not found or inactive.`);
+    }
+  }
+
+  const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowKey);
+  return {
+    rowId: rowKey,
+    row,
+    driverId: rowDriverId,
+    vehicleId: rowVehicleId,
+    driver,
+    vehicle,
+    pair: _analyzeKartaSettlementPair(entries, rowKey),
+  };
+}
+
 async function _getActiveKartaSettlements() {
   const all = await DB.findByFields(STORE.LEDGER, {
     reference_type: KARTA_REF_TYPE,
@@ -1497,58 +1720,22 @@ async function createKartaSettlementBatch(username, driverId, rowIds) {
     const now = DateUtils.nowLocal();
     const date = DateUtils.todayLocal();
     const ops = [];
-    for (const { row, rowId, vehicle, priceCents } of eligible) {
-      // Driver-side Karta settlement leg: intentionally retains the existing
-      // driver_karta_payment semantics, so Driver Balance stays unchanged.
-      ops.push({
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: driverKey,
-          owner_name: null,
-          client_id: null,
-          client_type: 'driver',
-          type: KARTA_SETTLEMENT_TYPE,
-          amount: -priceCents,
-          price: priceCents,
-          vehicle_id: vehicle.id,
-          reference_type: KARTA_REF_TYPE,
-          reference_id: rowId,
-          batch_id,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: 'تسوية عامة للكارتات',
-        },
+    for (const { row, vehicle, priceCents } of eligible) {
+      const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
+        username,
+        row,
+        driverId: driverKey,
+        vehicle,
+        amount: priceCents,
+        date,
+        note: 'تسوية عامة للكارتات',
+        batch_id,
+        applied_at: now,
       });
-
-      // Vehicle-side charge: one withdrawal per Karta, never an aggregate
-      // charged to a different vehicle.
-      ops.push({
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: String(vehicle.owner_id || ''),
-          owner_name: vehicle.owner_name || null,
-          client_id: String(vehicle.owner_id || ''),
-          client_type: 'owner',
-          client_name: vehicle.owner_name || null,
-          vehicle_id: vehicle.id,
-          vehicle_plate: vehicle.plate || null,
-          type: 'withdraw',
-          effect: KARTA_CHARGE_EFFECT,
-          amount: priceCents,
-          reference_type: KARTA_REF_TYPE,
-          reference_id: rowId,
-          batch_id,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: _kartaVehicleSettlementNote(row),
-        },
-      });
+      ops.push(
+        { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+        { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+      );
     }
 
     await tx.runOps(ops);
@@ -1578,237 +1765,139 @@ async function getKartaSettlementHistory(rowId) {
 }
 
 async function createKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required');
-  if (!data?.row_id || typeof data.amount !== 'number' || !data?.vehicle_id) {
-    throw new Error('[FinancialService:createKartaSettlement] row_id, amount and vehicle_id are required');
+  if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createKartaSettlement] data must be a plain object.');
   }
 
-  const rowId = data.row_id;
-  const amount = Money.toCents(data.amount);
-  if (amount <= 0) throw new Error('[FinancialService:createKartaSettlement] amount must be positive');
-  const chargeVehicleId = String(data.vehicle_id).trim();
-  if (!chargeVehicleId) throw new Error('[FinancialService:createKartaSettlement] vehicle_id (the vehicle to charge) is required');
-
-  const referenceId = _uuid();
-  const now = DateUtils.nowLocal();
+  const rowId = String(data.row_id || '').trim();
+  const selectedDriverId = String(data.driver_id || '').trim();
+  if (!rowId) throw new Error('[FinancialService:createKartaSettlement] row_id is required.');
+  if (!selectedDriverId) throw new Error('[FinancialService:createKartaSettlement] driver_id is required.');
+  const amount = _normalizeKartaSettlementAmount(data.amount, 'createKartaSettlement');
   const date = data.date || DateUtils.todayLocal();
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createKartaSettlement] date must be a valid ISO date string.');
+  }
   const note = data.note || 'تسوية كارتة سائق';
 
-  // Attribute the settlement to the karta's driver via the permanent id key
-  // (row.driver_id) — getDriverKartas matches settlements to drivers by it.
-  // No name-based matching anywhere in this chain.
-  const kartaRow = await ReceiptRepository.getRowById(String(rowId));
-  const settlementDriverId = kartaRow?.driver_id ?? null;
-  const vehicleMovementNote = _kartaVehicleSettlementNote(kartaRow);
-
-  // The vehicle-to-charge must exist — validated BEFORE the atomic write
-  // transaction (guards evaluated inside DB.transaction callbacks race with
-  // transaction auto-commit in database.js; write-path failures inside the tx
-  // are what abort it reliably).
-  const chargeVehicle = await ClientRepository.getVehicleById(chargeVehicleId);
-  if (!chargeVehicle || chargeVehicle.deleted_at !== null) {
-    throw new Error('[FinancialService:createKartaSettlement] vehicle to charge not found.');
-  }
-
-  // BUSINESS RULE: the manually entered amount is the SETTLEMENT PRICE — the
-  // driver's payable amount for this karta (never the receipt نولون). The
-  // settlement is a REAL financial transaction integrated into the existing
-  // vehicle-balance architecture (vehicle_ledger, by_vehicle index,
-  // rebuildVehicleBalance): ONE atomic transaction posts BOTH legs —
-  //   1. driver settlement payment (driver is paid: type driver_karta_payment)
-  //   2. vehicle charge (the selected vehicle's balance is reduced by the
-  //      settlement price: type 'withdraw' + effect tag, the exact convention
-  //      used by the existing vehicle-withdraw convention)
-  // Both legs share reference_type/reference_id → they reverse together.
   await DB.transaction(async (tx) => {
-    // Leg 1 — driver settlement payment
-    await tx.add(STORE.LEDGER, {
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      driverId: selectedDriverId,
+      operation: 'createKartaSettlement',
+    });
+    if (data.vehicle_id !== undefined && String(data.vehicle_id || '').trim() !== context.vehicleId) {
+      throw new Error('[FinancialService:createKartaSettlement] caller vehicle_id does not match the Karta row vehicle.');
+    }
+    _assertNoActiveKartaSettlementPair(context, 'createKartaSettlement');
+
+    const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
       username,
-      owner_id: settlementDriverId,
-      owner_name: null,
-      client_id: null,
-      client_type: 'driver',
-      type: KARTA_SETTLEMENT_TYPE,
-      amount: -amount,
-      price: amount, // settlement price (cents) — the payable base
-      vehicle_id: chargeVehicle.id, // the vehicle charged by this settlement
-      reference_type: KARTA_REF_TYPE,
-      reference_id: rowId,
+      row: context.row,
+      driverId: context.driverId,
+      vehicle: context.vehicle,
+      amount,
       date,
-      applied_at: now,
-      is_reversed: false,
       note,
     });
-
-    // Leg 2 — vehicle balance reduction (settlement price charged to the vehicle)
-    await tx.add(STORE.LEDGER, {
-      username,
-      owner_id: String(chargeVehicle.owner_id || ''),
-      owner_name: chargeVehicle.owner_name || null,
-      client_id: String(chargeVehicle.owner_id || ''),
-      client_type: 'owner',
-      client_name: chargeVehicle.owner_name || null,
-      vehicle_id: chargeVehicle.id,
-      vehicle_plate: chargeVehicle.plate || null,
-      type: 'withdraw',
-      effect: KARTA_CHARGE_EFFECT,
-      amount, // settlement price (cents, positive — withdraw convention)
-      reference_type: KARTA_REF_TYPE,
-      reference_id: rowId,
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: vehicleMovementNote,
-    });
-  }, { username, stores: [STORE.LEDGER] });
+    await tx.runOps([
+      { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+      { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+    ]);
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
-    settlement_reference_id: referenceId,
+    settlement_reference_id: rowId,
     row_id: rowId,
   };
 }
 
 /**
- * Edit the EXISTING settlement of a karta — "settlement edited", never a second
- * settlement. The logical settlement identity (reference_type='receipt_row',
- * reference_id=rowId) is preserved: the old legs reverse into audit history
- * and the replacement legs post for THE SAME reference with an edited_from
- * link to the superseded payment leg. ONE atomic transaction covers both
- * halves, so exactly one ACTIVE settlement exists per karta at every instant.
+ * Replace one complete active Karta settlement with a corrected pair. The row
+ * driver and vehicle remain authoritative; old legs are audit-reversed.
  */
 async function updateKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:updateKartaSettlement] username is required');
-  if (!data?.row_id || typeof data.amount !== 'number' || !data?.vehicle_id) {
-    throw new Error('[FinancialService:updateKartaSettlement] row_id, amount and vehicle_id are required');
+  if (!username) throw new Error('[FinancialService:updateKartaSettlement] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:updateKartaSettlement] data must be a plain object.');
   }
 
-  const rowId = data.row_id;
-  const amount = Money.toCents(data.amount);
-  if (amount <= 0) throw new Error('[FinancialService:updateKartaSettlement] amount must be positive');
-  const chargeVehicleId = String(data.vehicle_id).trim();
-  if (!chargeVehicleId) throw new Error('[FinancialService:updateKartaSettlement] vehicle_id (the vehicle to charge) is required');
-
-  const now = DateUtils.nowLocal();
+  const rowId = String(data.row_id || '').trim();
+  const selectedDriverId = String(data.driver_id || '').trim();
+  if (!rowId) throw new Error('[FinancialService:updateKartaSettlement] row_id is required.');
+  if (!selectedDriverId) throw new Error('[FinancialService:updateKartaSettlement] driver_id is required.');
+  const amount = _normalizeKartaSettlementAmount(data.amount, 'updateKartaSettlement');
   const date = data.date || DateUtils.todayLocal();
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:updateKartaSettlement] date must be a valid ISO date string.');
+  }
   const note = data.note || 'تسوية كارتة سائق';
 
-  // ── Pre-transaction reads/validation (house atomicity convention — guards
-  // inside DB.transaction callbacks race with tx auto-commit in database.js) ──
-  const kartaRow = await ReceiptRepository.getRowById(String(rowId));
-  if (!kartaRow) throw new Error('[FinancialService:updateKartaSettlement] karta row not found');
-  const settlementDriverId = kartaRow?.driver_id ?? null;
-  const vehicleMovementNote = _kartaVehicleSettlementNote(kartaRow);
+  await DB.transaction(async (tx) => {
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      driverId: selectedDriverId,
+      operation: 'updateKartaSettlement',
+    });
+    if (data.vehicle_id !== undefined && String(data.vehicle_id || '').trim() !== context.vehicleId) {
+      throw new Error('[FinancialService:updateKartaSettlement] caller vehicle_id does not match the Karta row vehicle.');
+    }
+    _assertCompleteKartaSettlementPair(context, 'updateKartaSettlement');
 
-  const existing = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', rowId);
-  const activeLegs = existing.filter(e =>
-    e.reference_type === KARTA_REF_TYPE &&
-    (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
-    e.is_reversed === false
-  );
-  const prevPaymentLeg = activeLegs.find(e => e.type === KARTA_SETTLEMENT_TYPE);
-  if (!prevPaymentLeg) {
-    throw new Error('[FinancialService:updateKartaSettlement] no active settlement for this karta (nothing to edit)');
-  }
-
-  const chargeVehicle = await ClientRepository.getVehicleById(chargeVehicleId);
-  if (!chargeVehicle || chargeVehicle.deleted_at !== null) {
-    throw new Error('[FinancialService:updateKartaSettlement] vehicle to charge not found.');
-  }
-
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-
-  // ONE atomic BATCH transaction (array-ops API → transactionBatch): every op
-  // is scheduled synchronously inside a single IDB transaction, so there is no
-  // pending==0 window between sequential awaits (the DB.transaction callback
-  // race). Either ALL ops commit or the whole edit rolls back.
-  const leg1 = {
-    username,
-    owner_id: settlementDriverId,
-    owner_name: null,
-    client_id: null,
-    client_type: 'driver',
-    type: KARTA_SETTLEMENT_TYPE,
-    amount: -amount,
-    price: amount, // settlement price (cents) — the payable base
-    vehicle_id: chargeVehicle.id, // the vehicle charged by this settlement
-    reference_type: KARTA_REF_TYPE,
-    reference_id: rowId,
-    edited_from: prevPaymentLeg.id, // audit: supersedes the previous version
-    date,
-    applied_at: now,
-    is_reversed: false,
-    note,
-  };
-  const leg2 = {
-    username,
-    owner_id: String(chargeVehicle.owner_id || ''),
-    owner_name: chargeVehicle.owner_name || null,
-    client_id: String(chargeVehicle.owner_id || ''),
-    client_type: 'owner',
-    client_name: chargeVehicle.owner_name || null,
-    vehicle_id: chargeVehicle.id,
-    vehicle_plate: chargeVehicle.plate || null,
-    type: 'withdraw',
-    effect: KARTA_CHARGE_EFFECT,
-    amount, // settlement price (cents, positive — withdraw convention)
-    reference_type: KARTA_REF_TYPE,
-    reference_id: rowId,
-    edited_from: prevPaymentLeg.id,
-    date,
-    applied_at: now,
-    is_reversed: false,
-    note: vehicleMovementNote,
-  };
-
-  const ops = [
-    // 1) Previous version → audit history (flag-flip reversal — the
-    //    reverseKartaSettlement convention). Balances are
-    //    derived, so the previously charged vehicle restores automatically.
-    ...activeLegs.map(leg => ({ op: 'update', store: STORE.LEDGER, id: leg.id, patch: reversePatch })),
-    // 2) Replacement legs for THE SAME logical settlement (edited version).
-    { op: 'add', store: STORE.LEDGER, payload: leg1 },
-    { op: 'add', store: STORE.LEDGER, payload: leg2 },
-  ];
-  await DB.transaction(ops, { username });
+    const reversePatch = { is_reversed: true, reversed_at: DateUtils.nowLocal(), reversed_by: username };
+    const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
+      username,
+      row: context.row,
+      driverId: context.driverId,
+      vehicle: context.vehicle,
+      amount,
+      date,
+      note,
+      edited_from: context.pair.driverLegs[0].id,
+    });
+    await tx.runOps([
+      ...context.pair.activeLegs.map(leg => ({ op: 'update', store: STORE.LEDGER, id: leg.id, patch: reversePatch })),
+      { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+      { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+    ]);
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
-    settlement_reference_id: rowId, // SAME logical settlement identity
+    settlement_reference_id: rowId,
     row_id: rowId,
     edited: true,
   };
 }
 
 async function reverseKartaSettlement(username, settlementReferenceId) {
-  if (!username) throw new Error('[FinancialService:reverseKartaSettlement] username is required');
-  if (!settlementReferenceId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required');
-
-  const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  if (!username) throw new Error('[FinancialService:reverseKartaSettlement] username is required.');
+  const rowId = String(settlementReferenceId || '').trim();
+  if (!rowId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required.');
 
   await DB.transaction(async (tx) => {
-    const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
-    // Both settlement legs reverse ATOMICALLY: the driver payment
-    // (type-based, existing) and the vehicle charge leg (effect-based).
-    const active = entries.filter(e =>
-      e.reference_type === KARTA_REF_TYPE &&
-      (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
-      e.is_reversed === false
-    );
-    if (active.length === 0) {
-      throw new Error('[FinancialService:reverseKartaSettlement] settlement not found or already reversed');
-    }
-    const ops = active.map(e => ({ op: 'update', store: STORE.LEDGER, id: e.id, patch: reversePatch }));
-    await tx.runOps(ops);
-  }, { username, stores: [STORE.LEDGER] });
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      operation: 'reverseKartaSettlement',
+      requireActiveEntities: false,
+    });
+    _assertCompleteKartaSettlementPair(context, 'reverseKartaSettlement');
 
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
-  const rowId = entries[0]?.reference_id || null;
+    const now = DateUtils.nowLocal();
+    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    await tx.runOps(context.pair.activeLegs.map(leg => ({
+      op: 'update',
+      store: STORE.LEDGER,
+      id: leg.id,
+      patch: reversePatch,
+    })));
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
 
   return {
     success: true,
-    settlement_reference_id: settlementReferenceId,
+    settlement_reference_id: rowId,
     row_id: rowId,
   };
 }
