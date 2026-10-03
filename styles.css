@@ -3640,3 +3640,233 @@ input[type="number"] {
     flex: 1;
   }
 }
+
+/* ── Vehicle Monthly Report (Phase 7B — read-only presentation) ─────────── */
+.vehicle-monthly-report-panel {
+  overflow: hidden;
+}
+.vehicle-monthly-report__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 1.15rem 1.35rem;
+  border-bottom: 1px solid #dfe7ee;
+  background: #edf3f9;
+}
+.vehicle-monthly-report__header h3,
+.vehicle-monthly-report__header p,
+.vehicle-monthly-report__breakdown h4,
+.vehicle-monthly-report__movements h4,
+.vehicle-monthly-report__notice h4 {
+  margin: 0;
+}
+.vehicle-monthly-report__header h3 {
+  color: #1f4f73;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.vehicle-monthly-report__header p {
+  margin-top: 0.3rem;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.vehicle-monthly-report__controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+.vehicle-monthly-report__month-field {
+  display: grid;
+  gap: 0.25rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.vehicle-monthly-report__month-field .input {
+  min-height: 38px;
+  min-width: 142px;
+  border-radius: 9px;
+  font-size: 0.83rem;
+}
+.vehicle-monthly-report__controls .btn {
+  min-height: 38px;
+  padding-inline: 0.8rem;
+  font-size: 0.78rem;
+}
+.vehicle-monthly-report__state {
+  display: grid;
+  place-items: center;
+  gap: 0.35rem;
+  min-height: 170px;
+  padding: 1.5rem;
+  color: #64748b;
+  font-weight: 700;
+  text-align: center;
+}
+.vehicle-monthly-report__state--error {
+  color: #b91c1c;
+  background: #fff7f7;
+}
+.vehicle-monthly-report__state--error span {
+  color: #7f1d1d;
+  font-size: 0.82rem;
+}
+.vehicle-monthly-report__summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding: 1rem 1.35rem 0.75rem;
+}
+.vehicle-monthly-report__card {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid #dce6ef;
+  border-radius: 12px;
+  background: #ffffff;
+}
+.vehicle-monthly-report__card span {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.vehicle-monthly-report__card strong {
+  color: #1e3a5f;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+.vehicle-monthly-report__card--in { border-color: #b7e2ca; background: #f4fcf7; }
+.vehicle-monthly-report__card--in strong { color: #167044; }
+.vehicle-monthly-report__card--out { border-color: #f0c4c4; background: #fff7f7; }
+.vehicle-monthly-report__card--out strong { color: #b42318; }
+.vehicle-monthly-report__card--closing { border-color: #bcd4e8; background: #f6faff; }
+.vehicle-monthly-report__equation {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  padding: 0 1.35rem 1rem;
+  color: #64748b;
+  font-size: 0.77rem;
+  font-weight: 700;
+}
+.vehicle-monthly-report__equation b { color: #315a78; font-size: 0.95rem; }
+.vehicle-monthly-report__notice {
+  margin: 0.8rem 1.35rem;
+  padding: 1rem;
+  border: 1px solid;
+  border-radius: 12px;
+}
+.vehicle-monthly-report__notice h4 { font-size: 0.9rem; font-weight: 800; }
+.vehicle-monthly-report__notice p {
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.7;
+}
+.vehicle-monthly-report__notice--warning { color: #92400e; border-color: #f1cf8b; background: #fffbeb; }
+.vehicle-monthly-report__notice--info { color: #1e5d85; border-color: #b8d6e7; background: #f0f9ff; }
+.vehicle-monthly-report__notice-grid {
+  display: flex;
+  gap: 0.65rem 1.1rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  font-size: 0.77rem;
+  font-weight: 750;
+}
+.vehicle-monthly-report__invalid-details { margin-top: 0.85rem; }
+.vehicle-monthly-report__invalid-details summary { cursor: pointer; font-size: 0.8rem; font-weight: 800; }
+.vehicle-monthly-report__breakdowns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  padding: 0.8rem 1.35rem;
+}
+.vehicle-monthly-report__breakdown {
+  overflow: hidden;
+  border: 1px solid #dce6ef;
+  border-radius: 12px;
+  background: #ffffff;
+}
+.vehicle-monthly-report__breakdown h4 {
+  padding: 0.75rem 0.9rem;
+  color: #315a78;
+  border-bottom: 1px solid #e2eaf0;
+  background: #f6f9fc;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+.vehicle-monthly-report__breakdown-list { padding: 0.35rem 0.9rem; }
+.vehicle-monthly-report__breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.58rem 0;
+  color: #475569;
+  border-bottom: 1px dashed #e7edf2;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.vehicle-monthly-report__breakdown-row:last-child { border-bottom: 0; }
+.vehicle-monthly-report__breakdown-row strong { color: #1e3a5f; }
+.vehicle-monthly-report__movements { padding: 0.8rem 1.35rem 1.35rem; }
+.vehicle-monthly-report__movements > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.65rem;
+}
+.vehicle-monthly-report__movements h4 { color: #315a78; font-size: 0.92rem; font-weight: 800; }
+.vehicle-monthly-report__reconciliation {
+  padding: 0.35rem 0.6rem;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.vehicle-monthly-report__reconciliation--ok { color: #167044; background: #ecfdf3; }
+.vehicle-monthly-report__reconciliation--warning { color: #b45309; background: #fff7ed; }
+.vehicle-monthly-report__table-wrap { margin: 0; }
+.vehicle-monthly-report__table { min-width: 1140px; }
+.vehicle-monthly-report__table thead tr { background: #3d5f7a; }
+.vehicle-monthly-report__table thead th { color: #f8fbff; border-bottom-color: #3d5f7a; white-space: nowrap; }
+.vehicle-monthly-report__table tbody td { background: #fdfefe; border-bottom-color: #e2e9ef; white-space: nowrap; }
+.vehicle-monthly-report__table tbody tr:nth-child(even) td { background: #f4f8fb; }
+.vehicle-monthly-report__amount--in { color: #167044; font-weight: 800; }
+.vehicle-monthly-report__amount--out { color: #b42318; font-weight: 800; }
+
+@media (max-width: 980px) {
+  .vehicle-monthly-report__summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .vehicle-monthly-report__header { align-items: stretch; padding: 1rem; }
+  .vehicle-monthly-report__controls { align-items: stretch; }
+  .vehicle-monthly-report__month-field { flex: 1 1 100%; }
+  .vehicle-monthly-report__month-field .input { width: 100%; }
+  .vehicle-monthly-report__controls .btn { flex: 1; }
+  .vehicle-monthly-report__summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0.85rem 1rem 0.65rem; }
+  .vehicle-monthly-report__card:last-child { grid-column: 1 / -1; }
+  .vehicle-monthly-report__equation { padding-inline: 1rem; }
+  .vehicle-monthly-report__notice,
+  .vehicle-monthly-report__breakdowns,
+  .vehicle-monthly-report__movements { margin-inline: 1rem; padding-inline: 0; }
+  .vehicle-monthly-report__notice { margin-block: 0.75rem; padding: 0.85rem; }
+  .vehicle-monthly-report__breakdowns { grid-template-columns: 1fr; }
+  .vehicle-monthly-report__breakdown-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .vehicle-monthly-report__breakdown-row strong { grid-column: 1 / -1; }
+}
+.vehicle-monthly-report-panel :is(input, button, summary):focus-visible {
+  outline: 3px solid rgba(49, 90, 120, 0.32);
+  outline-offset: 2px;
+}
+.vehicle-monthly-report__reconciliation--conditional {
+  color: #92400e;
+  background: #fffbeb;
+}

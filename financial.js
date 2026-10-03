@@ -819,6 +819,264 @@ async function getVehicleLedger(vehicle_id) {
     .map(Money.decimalizeRecord);
 }
 
+function _parseMonthlyReportMonthKey(monthKey) {
+  if (typeof monthKey !== 'string' || !/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey must be YYYY-MM.');
+  }
+  const year = Number(monthKey.slice(0, 4));
+  const month = Number(monthKey.slice(5, 7));
+  if (!Number.isInteger(year) || year < 1 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey must contain a valid calendar month.');
+  }
+  if (year === 9999 && month === 12) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey is outside the supported reporting range.');
+  }
+
+  const monthStart = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-01`;
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthStart = `${String(nextYear).padStart(4, '0')}-${String(nextMonth).padStart(2, '0')}-01`;
+  return { monthKey, monthStart, nextMonthStart };
+}
+
+function _classifyMonthlyReportBusinessDate(value, today) {
+  if (value === null || value === undefined || value === '') {
+    return { classification: 'missing_date', future: false };
+  }
+  if (typeof value !== 'string') {
+    return { classification: 'invalid_type', future: false };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { classification: 'invalid_format', future: false };
+  }
+
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
+    return { classification: 'invalid_calendar_date', future: false };
+  }
+
+  return { classification: 'valid_date', future: value > today };
+}
+
+function _monthlyReportCategory(entry) {
+  const type = entry.type;
+  const effect = entry.effect || null;
+  const referenceType = entry.reference_type || null;
+  const hasMaintenance = String(entry.maintenance_type || '').trim().length > 0;
+
+  if (type === 'deposit') {
+    if (effect === 'receipt_row_payment' && referenceType === 'receipt_row_payment') return 'receipt_row_payment';
+    if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_deposit';
+    if (referenceType === 'driver_deposit') return 'historical_driver_deposit';
+    return 'other';
+  }
+
+  if (type === 'withdraw') {
+    if (effect === 'karta_settlement_charge' && referenceType === 'receipt_row') return 'karta_settlement';
+    if (effect === 'manual_vehicle_balance' && hasMaintenance) return 'maintenance';
+    if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_withdrawal';
+    if (referenceType === 'driver_deposit') return 'historical_driver_deposit';
+    return 'other';
+  }
+
+  return 'other';
+}
+
+function _monthlyReportEntryAmountCents(entry) {
+  return Number(entry.amount) || 0;
+}
+
+function _compareMonthlyReportMovements(a, b) {
+  const dateCompare = String(a.date).localeCompare(String(b.date));
+  if (dateCompare !== 0) return dateCompare;
+  const appliedCompare = String(a.applied_at || '').localeCompare(String(b.applied_at || ''));
+  if (appliedCompare !== 0) return appliedCompare;
+  const createdCompare = (Number(a.created_at) || 0) - (Number(b.created_at) || 0);
+  if (createdCompare !== 0) return createdCompare;
+  const aId = Number(a.id);
+  const bId = Number(b.id);
+  if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+  return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+}
+
+function _newMonthlyReportBreakdown() {
+  return {
+    inflows: {
+      receiptRowPayment: { amountCents: 0, count: 0 },
+      manualVehicleDeposit: { amountCents: 0, count: 0 },
+      historicalDriverDeposit: { amountCents: 0, count: 0 },
+      other: { amountCents: 0, count: 0 },
+    },
+    outflows: {
+      kartaSettlement: { amountCents: 0, count: 0 },
+      maintenance: { amountCents: 0, count: 0 },
+      manualVehicleWithdrawal: { amountCents: 0, count: 0 },
+      historicalDriverDeposit: { amountCents: 0, count: 0 },
+      other: { amountCents: 0, count: 0 },
+    },
+  };
+}
+
+function _addMonthlyReportBreakdown(breakdown, entry, amountCents) {
+  const category = _monthlyReportCategory(entry);
+  const target = entry.type === 'deposit' ? breakdown.inflows : breakdown.outflows;
+  const key = entry.type === 'deposit'
+    ? ({ receipt_row_payment: 'receiptRowPayment', manual_vehicle_deposit: 'manualVehicleDeposit', historical_driver_deposit: 'historicalDriverDeposit' }[category] || 'other')
+    : ({ karta_settlement: 'kartaSettlement', maintenance: 'maintenance', manual_vehicle_withdrawal: 'manualVehicleWithdrawal', historical_driver_deposit: 'historicalDriverDeposit' }[category] || 'other');
+  target[key].amountCents += amountCents;
+  target[key].count += 1;
+}
+
+/**
+ * Read-only monthly Vehicle Ledger projection. All financial arithmetic uses
+ * active, vehicle-linked deposit/withdraw rows with strict business dates.
+ */
+async function getVehicleMonthlyReport(vehicleId, monthKey) {
+  const vehicleKey = String(vehicleId ?? '').trim();
+  if (!vehicleKey) throw new Error('[FinancialService:getVehicleMonthlyReport] vehicleId is required.');
+  const { monthStart, nextMonthStart } = _parseMonthlyReportMonthKey(monthKey);
+  const today = DateUtils.todayLocal();
+
+  // Existing by_vehicle index scopes the read to one vehicle; no store-wide
+  // scan and no new index are required for the initial report contract.
+  const indexedRows = await DB.getByIndex(STORE.LEDGER, 'by_vehicle', vehicleKey);
+  const activeVehicleRows = indexedRows.filter(entry =>
+    String(entry.vehicle_id || '') === vehicleKey
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  const reportRows = activeVehicleRows.filter(entry => entry.type === 'deposit' || entry.type === 'withdraw');
+  const dateRows = reportRows.map(entry => ({
+    entry,
+    dateInfo: _classifyMonthlyReportBusinessDate(entry.date, today),
+  }));
+  const validRows = dateRows.filter(item => item.dateInfo.classification === 'valid_date');
+  const invalidRows = dateRows.filter(item => item.dateInfo.classification !== 'valid_date');
+
+  let openingBalanceCents = 0;
+  let monthlyInflowsCents = 0;
+  let monthlyOutflowsCents = 0;
+  let cumulativeClosingBalanceCents = 0;
+  let inflowTransactionCount = 0;
+  let outflowTransactionCount = 0;
+  const monthlyEntries = [];
+  const breakdown = _newMonthlyReportBreakdown();
+
+  for (const { entry } of validRows) {
+    const amountCents = _monthlyReportEntryAmountCents(entry);
+    const signedCents = entry.type === 'deposit' ? amountCents : -amountCents;
+    if (entry.date < monthStart) openingBalanceCents += signedCents;
+    if (entry.date < nextMonthStart) cumulativeClosingBalanceCents += signedCents;
+    if (entry.date >= monthStart && entry.date < nextMonthStart) {
+      if (entry.type === 'deposit') {
+        monthlyInflowsCents += amountCents;
+        inflowTransactionCount++;
+      } else {
+        monthlyOutflowsCents += amountCents;
+        outflowTransactionCount++;
+      }
+      monthlyEntries.push({ entry, amountCents, category: _monthlyReportCategory(entry) });
+      _addMonthlyReportBreakdown(breakdown, entry, amountCents);
+    }
+  }
+
+  const closingBalanceCents = openingBalanceCents + monthlyInflowsCents - monthlyOutflowsCents;
+  const sortedEntries = monthlyEntries.sort((a, b) => _compareMonthlyReportMovements(a.entry, b.entry));
+  let runningBalanceCents = openingBalanceCents;
+  const movements = sortedEntries.map(({ entry, amountCents, category }) => {
+    runningBalanceCents += entry.type === 'deposit' ? amountCents : -amountCents;
+    return {
+      id: entry.id,
+      date: entry.date,
+      type: entry.type,
+      amountCents,
+      category,
+      effect: entry.effect || null,
+      referenceType: entry.reference_type || null,
+      referenceId: entry.reference_id || null,
+      batchId: entry.batch_id || null,
+      note: entry.note || null,
+      maintenanceType: entry.maintenance_type || null,
+      maintenanceQuantity: entry.maintenance_quantity ?? null,
+      appliedAt: entry.applied_at || null,
+      createdAt: entry.created_at ?? null,
+      runningBalanceCents,
+    };
+  });
+
+  const invalidDepositRows = invalidRows.filter(item => item.entry.type === 'deposit');
+  const invalidWithdrawRows = invalidRows.filter(item => item.entry.type === 'withdraw');
+  const amountOf = rows => rows.reduce((sum, item) => sum + _monthlyReportEntryAmountCents(item.entry), 0);
+  const futureRows = validRows.filter(item => item.dateInfo.future);
+  const futureDeposits = futureRows.filter(item => item.entry.type === 'deposit');
+  const futureWithdrawals = futureRows.filter(item => item.entry.type === 'withdraw');
+
+  return {
+    vehicleId: vehicleKey,
+    monthKey,
+    monthStart,
+    nextMonthStart,
+    openingBalanceCents,
+    monthlyInflowsCents,
+    monthlyOutflowsCents,
+    closingBalanceCents,
+    movementCount: movements.length,
+    inflowTransactionCount,
+    outflowTransactionCount,
+    breakdown,
+    movements,
+    integrity: {
+      hasInvalidDates: invalidRows.length > 0,
+      isFinanciallyComplete: invalidRows.length === 0,
+      invalidDateCount: invalidRows.length,
+      invalidDepositCount: invalidDepositRows.length,
+      invalidWithdrawCount: invalidWithdrawRows.length,
+      invalidDepositAmountCents: amountOf(invalidDepositRows),
+      invalidWithdrawAmountCents: amountOf(invalidWithdrawRows),
+      invalidNetEffectCents: amountOf(invalidDepositRows) - amountOf(invalidWithdrawRows),
+      invalidRows: invalidRows.map(({ entry, dateInfo }) => ({
+        id: entry.id,
+        vehicleId: entry.vehicle_id || null,
+        type: entry.type,
+        amountCents: _monthlyReportEntryAmountCents(entry),
+        date: Object.hasOwn(entry, 'date') ? entry.date : null,
+        effect: entry.effect || null,
+        referenceType: entry.reference_type || null,
+        referenceId: entry.reference_id || null,
+        classification: dateInfo.classification,
+      })),
+    },
+    future: {
+      count: futureRows.length,
+      depositCount: futureDeposits.length,
+      withdrawCount: futureWithdrawals.length,
+      depositAmountCents: amountOf(futureDeposits),
+      withdrawAmountCents: amountOf(futureWithdrawals),
+      netEffectCents: amountOf(futureDeposits) - amountOf(futureWithdrawals),
+      rows: futureRows.map(({ entry }) => ({
+        id: entry.id,
+        vehicleId: entry.vehicle_id || null,
+        type: entry.type,
+        amountCents: _monthlyReportEntryAmountCents(entry),
+        date: entry.date,
+        effect: entry.effect || null,
+        referenceType: entry.reference_type || null,
+        referenceId: entry.reference_id || null,
+      })),
+    },
+    reconciliation: {
+      cumulativeClosingBalanceCents,
+      isReconciled: cumulativeClosingBalanceCents === closingBalanceCents,
+      finalRunningBalanceCents: runningBalanceCents,
+    },
+    excludedActiveVehicleCustomTypeCount: activeVehicleRows.length - reportRows.length,
+  };
+}
+
 /**
  * Read active company movements from the existing vehicle_ledger. Company
  * balances have no dedicated ledger/store: this projection combines only the
@@ -1969,6 +2227,7 @@ export const FinancialService = Object.freeze({
   deleteReceipt,
   rebuildVehicleBalance,
   getVehicleLedger,
+  getVehicleMonthlyReport,
   getOfficeBalance,
   createManualVehicleBalanceEntry,
   updateVehicleMaintenanceEntry,

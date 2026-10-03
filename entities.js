@@ -1343,17 +1343,21 @@ function _isActiveMaintenanceEntry(entry) {
 }
 
 function _setVehicleDetailsTab(tab) {
-  _vehicleDetailsTab = tab === 'maintenance' ? 'maintenance' : 'financial';
+  _vehicleDetailsTab = ['maintenance', 'monthly'].includes(tab) ? tab : 'financial';
   const financialPanel = document.getElementById('vehicleDetailsTabFinancial');
   const maintenancePanel = document.getElementById('vehicleDetailsTabMaintenance');
+  const monthlyPanel = document.getElementById('vehicleDetailsTabMonthly');
   const vehiclesPanel = document.getElementById('vehicleDetailsTabVehicles');
   const financialButton = document.getElementById('vehicleDetailsTabBtnFinancial');
   const maintenanceButton = document.getElementById('vehicleDetailsTabBtnMaintenance');
+  const monthlyButton = document.getElementById('vehicleDetailsTabBtnMonthly');
   const isFinancial = _vehicleDetailsTab === 'financial';
   const isMaintenance = _vehicleDetailsTab === 'maintenance';
+  const isMonthly = _vehicleDetailsTab === 'monthly';
 
   if (financialPanel) financialPanel.classList.toggle('hidden', !isFinancial);
   if (maintenancePanel) maintenancePanel.classList.toggle('hidden', !isMaintenance);
+  if (monthlyPanel) monthlyPanel.classList.toggle('hidden', !isMonthly);
   // Keep the underlying Vehicles panel intact but hidden from this page's
   // visible tab surface. Vehicle Management itself remains unchanged.
   if (vehiclesPanel) vehiclesPanel.classList.add('hidden');
@@ -1364,6 +1368,314 @@ function _setVehicleDetailsTab(tab) {
   if (maintenanceButton) {
     maintenanceButton.classList.toggle('active-purple', isMaintenance);
     maintenanceButton.setAttribute('aria-selected', String(isMaintenance));
+  }
+  if (monthlyButton) {
+    monthlyButton.classList.toggle('active-purple', isMonthly);
+    monthlyButton.setAttribute('aria-selected', String(isMonthly));
+  }
+}
+
+const _vehicleMonthlyReportState = {
+  vehicleId: null,
+  monthKey: '',
+  loading: false,
+  report: null,
+  error: '',
+  requestId: 0,
+};
+
+function _currentCairoMonthKey() {
+  return DateUtils.todayLocal().slice(0, 7);
+}
+
+function _ensureVehicleMonthlyReportState(vehicleId) {
+  const key = String(vehicleId || '').trim();
+  if (_vehicleMonthlyReportState.vehicleId !== key) {
+    _vehicleMonthlyReportState.vehicleId = key;
+    _vehicleMonthlyReportState.monthKey = _currentCairoMonthKey();
+    _vehicleMonthlyReportState.loading = false;
+    _vehicleMonthlyReportState.report = null;
+    _vehicleMonthlyReportState.error = '';
+  }
+  if (!_vehicleMonthlyReportState.monthKey) {
+    _vehicleMonthlyReportState.monthKey = _currentCairoMonthKey();
+  }
+}
+
+function _monthlyReportCents(cents) {
+  return _fmt(Money.toDecimal(cents));
+}
+
+function _monthlyReportCategoryLabel(category, plural = false) {
+  const labels = {
+    receipt_row_payment: plural ? 'صرف الكارتات' : 'صرف كارتة',
+    manual_vehicle_deposit: 'إيداع يدوي',
+    historical_driver_deposit: 'Driver Deposit تاريخي',
+    karta_settlement: 'تسوية كارتة',
+    maintenance: 'صيانة',
+    manual_vehicle_withdrawal: 'سحب يدوي',
+    other: 'أخرى',
+  };
+  return labels[category] || 'أخرى';
+}
+
+function _monthlyReportTypeLabel(type) {
+  return type === 'deposit' ? 'إيداع' : type === 'withdraw' ? 'سحب' : '—';
+}
+
+function _monthlyReportReference(movement) {
+  const type = String(movement?.referenceType || '').trim();
+  const id = String(movement?.referenceId || '').trim();
+  if (!type && !id) return '—';
+  return `${type || '—'} / ${id || '—'}`;
+}
+
+function _monthlyReportMaintenanceDetails(movement) {
+  const type = String(movement?.maintenanceType || '').trim();
+  if (!type) return '—';
+  const quantity = movement?.maintenanceQuantity;
+  return quantity === null || quantity === undefined || quantity === ''
+    ? type
+    : `${type} — العدد: ${quantity}`;
+}
+
+function _renderMonthlyReportBreakdown(title, entries, labels) {
+  return `
+    <section class="vehicle-monthly-report__breakdown">
+      <h4>${title}</h4>
+      <div class="vehicle-monthly-report__breakdown-list">
+        ${Object.entries(entries || {}).map(([key, item]) => `
+          <div class="vehicle-monthly-report__breakdown-row">
+            <span>${labels[key] || 'أخرى'}</span>
+            <span>${Number(item?.count || 0)} عملية</span>
+            <strong>${_monthlyReportCents(item?.amountCents || 0)}</strong>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function _renderVehicleMonthlyReportContent(vehicle) {
+  const state = _vehicleMonthlyReportState;
+  const plate = _escapeMaintenanceText(vehicle?.plate || '—');
+  const monthKey = _escapeMaintenanceText(state.monthKey || '');
+  const header = `
+    <header class="vehicle-monthly-report__header">
+      <div>
+        <h3>التقرير الشهري</h3>
+        <p>المركبة: <bdi>${plate}</bdi></p>
+      </div>
+      <div class="vehicle-monthly-report__controls">
+        <label class="vehicle-monthly-report__month-field" for="vehicleMonthlyReportMonth">
+          <span>الشهر</span>
+          <input id="vehicleMonthlyReportMonth" type="month" class="input" value="${monthKey}">
+        </label>
+        <button type="button" data-action="load-vehicle-monthly-report" class="btn vehicle-details-action">عرض التقرير</button>
+        <button type="button" data-action="vehicle-monthly-report-current-month" class="btn vehicle-details-secondary-action">الشهر الحالي</button>
+      </div>
+    </header>
+  `;
+
+  if (state.loading) {
+    return `${header}<div class="vehicle-monthly-report__state">جاري تحميل التقرير...</div>`;
+  }
+  if (state.error) {
+    return `${header}<div class="vehicle-monthly-report__state vehicle-monthly-report__state--error" role="alert"><strong>تعذر تحميل التقرير الشهري.</strong><span>حاول مرة أخرى.</span></div>`;
+  }
+  if (!state.report) {
+    return `${header}<div class="vehicle-monthly-report__state">اختر الشهر ثم اضغط عرض التقرير.</div>`;
+  }
+
+  const report = state.report;
+  const integrity = report.integrity || {};
+  const future = report.future || {};
+  const reconciliation = report.reconciliation || {};
+  const summary = `
+    <section class="vehicle-monthly-report__summary" aria-label="ملخص التقرير الشهري">
+      <div class="vehicle-monthly-report__card"><span>الرصيد الافتتاحي</span><strong class="${_balanceClass(Money.toDecimal(report.openingBalanceCents))}">${_monthlyReportCents(report.openingBalanceCents)}</strong></div>
+      <div class="vehicle-monthly-report__card vehicle-monthly-report__card--in"><span>إجمالي الداخل</span><strong>${_monthlyReportCents(report.monthlyInflowsCents)}</strong></div>
+      <div class="vehicle-monthly-report__card vehicle-monthly-report__card--out"><span>إجمالي الخارج</span><strong>${_monthlyReportCents(report.monthlyOutflowsCents)}</strong></div>
+      <div class="vehicle-monthly-report__card vehicle-monthly-report__card--closing"><span>الرصيد الختامي</span><strong class="${_balanceClass(Money.toDecimal(report.closingBalanceCents))}">${_monthlyReportCents(report.closingBalanceCents)}</strong></div>
+      <div class="vehicle-monthly-report__card"><span>عدد الحركات</span><strong>${Number(report.movementCount || 0)}</strong></div>
+    </section>
+    <div class="vehicle-monthly-report__equation" aria-label="معادلة الرصيد الشهري">
+      <span>الرصيد الافتتاحي</span><b>+</b><span>إجمالي الداخل</span><b>−</b><span>إجمالي الخارج</span><b>=</b><span>الرصيد الختامي</span>
+    </div>
+  `;
+
+  const integrityWarning = integrity.hasInvalidDates ? `
+    <section class="vehicle-monthly-report__notice vehicle-monthly-report__notice--warning" role="alert">
+      <h4>تحذير سلامة البيانات</h4>
+      <p>توجد ${Number(integrity.invalidDateCount || 0)} حركة مالية نشطة ذات تاريخ غير صالح. هذه الحركات لم تدخل في حساب التقرير، لذلك قد يكون الرصيد الافتتاحي أو الختامي غير مكتمل.</p>
+      <div class="vehicle-monthly-report__notice-grid">
+        <span>الإيداعات المستبعدة: <bdi>${_monthlyReportCents(integrity.invalidDepositAmountCents || 0)}</bdi></span>
+        <span>المسحوبات المستبعدة: <bdi>${_monthlyReportCents(integrity.invalidWithdrawAmountCents || 0)}</bdi></span>
+        <span>صافي الأثر المستبعد: <bdi>${_monthlyReportCents(integrity.invalidNetEffectCents || 0)}</bdi></span>
+      </div>
+      <details class="vehicle-monthly-report__invalid-details">
+        <summary>تفاصيل الحركات ذات التاريخ غير الصالح</summary>
+        <div class="table-wrapper vehicle-monthly-report__table-wrap">
+          <table class="table vehicle-monthly-report__table">
+            <thead><tr><th>رقم الحركة</th><th>التاريخ المخزن</th><th>النوع</th><th>المبلغ</th><th>التصنيف</th><th>المرجع</th></tr></thead>
+            <tbody>${(integrity.invalidRows || []).map(row => `
+              <tr>
+                <td>${_escapeMaintenanceText(row.id)}</td>
+                <td>${_escapeMaintenanceText(row.date ?? '—')}</td>
+                <td>${_escapeMaintenanceText(_monthlyReportTypeLabel(row.type))}</td>
+                <td>${_monthlyReportCents(row.amountCents || 0)}</td>
+                <td>${_escapeMaintenanceText(row.classification || '—')}</td>
+                <td>${_escapeMaintenanceText(`${row.referenceType || '—'} / ${row.referenceId || '—'}`)}</td>
+              </tr>
+            `).join('')}</tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  ` : '';
+
+  const futureNotice = Number(future.count || 0) > 0 ? `
+    <section class="vehicle-monthly-report__notice vehicle-monthly-report__notice--info">
+      <h4>معلومة</h4>
+      <p>توجد ${Number(future.count)} حركة مؤرخة بتاريخ مستقبلي في سجل المركبة. تدخل الحركة في الحساب فقط إذا كانت تقع داخل الشهر المحدد، أما الحركات خارج فترة الشهر فلا تدخل في هذا التقرير.</p>
+      <div class="vehicle-monthly-report__notice-grid">
+        <span>إيداعات مستقبلية: <bdi>${_monthlyReportCents(future.depositAmountCents || 0)}</bdi></span>
+        <span>مسحوبات مستقبلية: <bdi>${_monthlyReportCents(future.withdrawAmountCents || 0)}</bdi></span>
+      </div>
+    </section>
+  ` : '';
+
+  const reconciliationNotice = reconciliation.isReconciled
+    ? integrity.isFinanciallyComplete === false
+      ? '<div class="vehicle-monthly-report__reconciliation vehicle-monthly-report__reconciliation--conditional">✓ الحركات ذات التاريخ الصالح متطابقة — التقرير غير مكتمل</div>'
+      : '<div class="vehicle-monthly-report__reconciliation vehicle-monthly-report__reconciliation--ok">✓ التقرير متطابق</div>'
+    : '<div class="vehicle-monthly-report__reconciliation vehicle-monthly-report__reconciliation--warning">⚠ يوجد اختلاف في المطابقة</div>';
+
+  const breakdown = `
+    <section class="vehicle-monthly-report__breakdowns">
+      ${_renderMonthlyReportBreakdown('تفصيل الداخل', report.breakdown?.inflows, {
+        receiptRowPayment: 'صرف الكارتات', manualVehicleDeposit: 'إيداع يدوي', historicalDriverDeposit: 'Driver Deposit تاريخي', other: 'أخرى',
+      })}
+      ${_renderMonthlyReportBreakdown('تفصيل الخارج', report.breakdown?.outflows, {
+        kartaSettlement: 'تسوية الكارتات', maintenance: 'صيانة', manualVehicleWithdrawal: 'سحب يدوي', historicalDriverDeposit: 'Driver Deposit تاريخي', other: 'أخرى',
+      })}
+    </section>
+  `;
+
+  const movementRows = (report.movements || []).map(movement => {
+    const isDeposit = movement.type === 'deposit';
+    return `
+      <tr>
+        <td>${_escapeMaintenanceText(movement.date || '—')}</td>
+        <td>${_escapeMaintenanceText(_monthlyReportCategoryLabel(movement.category))}</td>
+        <td>${_escapeMaintenanceText(_monthlyReportTypeLabel(movement.type))}</td>
+        <td>${_escapeMaintenanceText(_monthlyReportReference(movement))}</td>
+        <td>${_escapeMaintenanceText(movement.batchId || '—')}</td>
+        <td class="vehicle-monthly-report__amount--in">${isDeposit ? _monthlyReportCents(movement.amountCents) : '—'}</td>
+        <td class="vehicle-monthly-report__amount--out">${!isDeposit ? _monthlyReportCents(movement.amountCents) : '—'}</td>
+        <td class="${_balanceClass(Money.toDecimal(movement.runningBalanceCents))}">${_monthlyReportCents(movement.runningBalanceCents)}</td>
+        <td>${_escapeMaintenanceText(movement.note || '—')}</td>
+        <td>${_escapeMaintenanceText(_monthlyReportMaintenanceDetails(movement))}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const movements = `
+    <section class="vehicle-monthly-report__movements">
+      <header><h4>الحركات الشهرية</h4>${reconciliationNotice}</header>
+      <div class="table-wrapper vehicle-monthly-report__table-wrap">
+        <table class="table vehicle-monthly-report__table">
+          <thead><tr><th>التاريخ</th><th>البيان</th><th>النوع</th><th>المرجع</th><th>رقم الدفعة</th><th>المبلغ الداخل</th><th>المبلغ الخارج</th><th>الرصيد الجاري</th><th>ملاحظة</th><th>تفاصيل إضافية</th></tr></thead>
+          <tbody>${movementRows || '<tr><td colspan="10" class="vehicle-details-empty-state">لا توجد حركات مالية صالحة لهذه المركبة خلال الشهر المحدد.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  const loadedAnnouncement = `<span class="sr-only" role="status" aria-live="polite">تم تحميل التقرير الشهري للشهر ${_escapeMaintenanceText(report.monthKey || state.monthKey)}.</span>`;
+  return `${loadedAnnouncement}${header}${summary}${integrityWarning}${futureNotice}${breakdown}${movements}`;
+}
+
+function _renderVehicleMonthlyReportTab(vehicle) {
+  return `
+    <section id="vehicleDetailsTabMonthly" class="vehicle-details-panel vehicle-monthly-report-panel" role="tabpanel" aria-labelledby="vehicleDetailsTabBtnMonthly" aria-busy="${_vehicleMonthlyReportState.loading ? 'true' : 'false'}">
+      ${_renderVehicleMonthlyReportContent(vehicle)}
+    </section>
+  `;
+}
+
+function _refreshVehicleMonthlyReportPanel() {
+  const panel = document.getElementById('vehicleDetailsTabMonthly');
+  if (!panel || !_selectedVehicle) return;
+  const active = document.activeElement;
+  const restoreFocus = active && panel.contains(active)
+    ? { id: active.id || '', action: active.dataset?.action || '' }
+    : null;
+  panel.outerHTML = _renderVehicleMonthlyReportTab(_selectedVehicle);
+  _setVehicleDetailsTab(_vehicleDetailsTab);
+  if (!restoreFocus) return;
+  const replacement = document.getElementById('vehicleDetailsTabMonthly');
+  const target = restoreFocus.id
+    ? document.getElementById(restoreFocus.id)
+    : restoreFocus.action
+      ? replacement?.querySelector(`[data-action="${restoreFocus.action}"]`)
+      : null;
+  if (target && !target.disabled && !target.closest('.hidden')) {
+    target.focus({ preventScroll: true });
+  }
+}
+
+function _captureVehicleDetailsFocus(page) {
+  const active = document.activeElement;
+  if (!page || !active || !page.contains(active) || active.disabled) return null;
+  if (active.id) return { id: active.id, action: '', tab: '' };
+  const action = active.dataset?.action || '';
+  if (!action) return null;
+  return { id: '', action, tab: active.dataset?.tab || '' };
+}
+
+function _restoreVehicleDetailsFocus(snapshot) {
+  if (!snapshot) return;
+  const page = document.getElementById('ownerDetailsPage');
+  if (!page) return;
+  const target = snapshot.id
+    ? document.getElementById(snapshot.id)
+    : snapshot.action
+      ? page.querySelector(`[data-action="${snapshot.action}"]${snapshot.tab ? `[data-tab="${snapshot.tab}"]` : ''}`)
+      : null;
+  if (target && !target.disabled && !target.closest('.hidden')) {
+    target.focus({ preventScroll: true });
+  }
+}
+
+async function _loadVehicleMonthlyReport() {
+  const vehicle = _selectedVehicle;
+  if (!vehicle?.id) return;
+  _ensureVehicleMonthlyReportState(vehicle.id);
+  const state = _vehicleMonthlyReportState;
+  const requestId = ++state.requestId;
+  const vehicleId = String(vehicle.id);
+  const monthKey = state.monthKey;
+  state.loading = true;
+  state.report = null;
+  state.error = '';
+  _refreshVehicleMonthlyReportPanel();
+
+  try {
+    const report = await FinancialService.getVehicleMonthlyReport(vehicleId, monthKey);
+    if (requestId !== state.requestId || String(_selectedVehicle?.id || '') !== vehicleId) return;
+    if (!report || report.vehicleId !== vehicleId || report.monthKey !== monthKey) {
+      throw new Error('Unexpected monthly report result.');
+    }
+    state.report = report;
+  } catch (_) {
+    if (requestId !== state.requestId || String(_selectedVehicle?.id || '') !== vehicleId) return;
+    state.error = 'load_failed';
+  } finally {
+    if (requestId === state.requestId && String(_selectedVehicle?.id || '') === vehicleId) {
+      state.loading = false;
+      _refreshVehicleMonthlyReportPanel();
+    }
   }
 }
 
@@ -1421,7 +1733,7 @@ async function _renderMaintenanceTab(ledger = []) {
   const tableRows = _renderMaintenanceRows(_filterMaintenanceEntries(activeMaintenance));
 
   return `
-    <section class="vehicle-details-panel vehicle-maintenance-panel" role="tabpanel" id="vehicleDetailsTabMaintenance">
+    <section class="vehicle-details-panel vehicle-maintenance-panel" role="tabpanel" id="vehicleDetailsTabMaintenance" aria-labelledby="vehicleDetailsTabBtnMaintenance">
       <header class="vehicle-details-panel-header">
         <div class="vehicle-details-panel-title-group">
           <span class="vehicle-details-panel-icon vehicle-details-panel-icon--maintenance" aria-hidden="true">
@@ -1874,6 +2186,7 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
 
   _selectedClient = client;
   _selectedVehicle = vehicle;
+  _ensureVehicleMonthlyReportState(vehicle.id);
 
   sessionStorage.setItem(LAST_PAGE_CTX_KEY, JSON.stringify({
     page: 'ownerDetailsPage',
@@ -1885,10 +2198,12 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
   const financials = await _getVehicleDetailsFinancials(vehicle.id);
   const ledgerHtml = _renderLedger(client, financials.ledger);
   const maintenanceHtml = await _renderMaintenanceTab(financials.ledger);
+  const monthlyReportHtml = _renderVehicleMonthlyReportTab(vehicle);
   const relatedHtml = await _renderOwnerVehicles(client);
 
   const page = document.getElementById('ownerDetailsPage');
   if (!page) return;
+  const vehicleDetailsFocus = _captureVehicleDetailsFocus(page);
 
   page.innerHTML = `
     <div class="ent-details-page vehicle-details-page">
@@ -1940,20 +2255,25 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
       </section>
 
       <div class="tabs vehicle-details-tabs" role="tablist" aria-label="تفاصيل المركبة">
-        <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn vehicle-details-tab active-purple" aria-selected="true">
+        <button type="button" role="tab" id="vehicleDetailsTabBtnFinancial" data-action="vehicle-details-tab" data-tab="financial" class="tab-btn vehicle-details-tab active-purple" aria-selected="true" aria-controls="vehicleDetailsTabFinancial">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>
           <span>الحركات المالية</span>
         </button>
-        <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn vehicle-details-tab" aria-selected="false">
+        <button type="button" role="tab" id="vehicleDetailsTabBtnMaintenance" data-action="vehicle-details-tab" data-tab="maintenance" class="tab-btn vehicle-details-tab" aria-selected="false" aria-controls="vehicleDetailsTabMaintenance">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.7 6.3 3 3"/><path d="m5 19 8.9-8.9a4.8 4.8 0 0 0 5.5-6.2l-3.2 3.2-2.8-2.8L16.6 1a4.8 4.8 0 0 0-6.2 5.5L1.5 15.4A2.12 2.12 0 0 0 4.6 18.5l8.9-8.9"/></svg>
           <span>الصيانة</span>
         </button>
+        <button type="button" role="tab" id="vehicleDetailsTabBtnMonthly" data-action="vehicle-details-tab" data-tab="monthly" class="tab-btn vehicle-details-tab" aria-selected="false" aria-controls="vehicleDetailsTabMonthly">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/><path d="M8 15h.01M12 15h.01M16 15h.01"/></svg>
+          <span>التقرير الشهري</span>
+        </button>
       </div>
 
-      <section id="vehicleDetailsTabFinancial" class="vehicle-details-tab-panel" role="tabpanel">
+      <section id="vehicleDetailsTabFinancial" class="vehicle-details-tab-panel" role="tabpanel" aria-labelledby="vehicleDetailsTabBtnFinancial">
         ${ledgerHtml}
       </section>
       ${maintenanceHtml}
+      ${monthlyReportHtml}
       <section id="vehicleDetailsTabVehicles" class="hidden" role="tabpanel">
         ${relatedHtml}
       </section>
@@ -1964,6 +2284,8 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
     await window.showPage('ownerDetailsPage');
   }
   _setVehicleDetailsTab(_vehicleDetailsTab);
+  _restoreVehicleDetailsFocus(vehicleDetailsFocus);
+  if (_vehicleDetailsTab === 'monthly') await _loadVehicleMonthlyReport();
 }
 
 // ─── EXCEL HANDLERS ───────────────────────────────────────────────────────────
@@ -2050,7 +2372,19 @@ function attachOwnersPageListeners() {
 
     const vehicleDetailsTab = e.target.closest('[data-action="vehicle-details-tab"]');
     if (vehicleDetailsTab) {
-      _setVehicleDetailsTab(vehicleDetailsTab.dataset.tab);
+      const tab = vehicleDetailsTab.dataset.tab;
+      _setVehicleDetailsTab(tab);
+      if (tab === 'monthly') await _loadVehicleMonthlyReport();
+      return;
+    }
+
+    if (e.target.closest('[data-action="load-vehicle-monthly-report"]')) {
+      await _loadVehicleMonthlyReport();
+      return;
+    }
+    if (e.target.closest('[data-action="vehicle-monthly-report-current-month"]')) {
+      _vehicleMonthlyReportState.monthKey = _currentCairoMonthKey();
+      await _loadVehicleMonthlyReport();
       return;
     }
 
@@ -2428,6 +2762,13 @@ function attachOwnersPageListeners() {
   document.addEventListener('focusin', (e) => {
     if (e.target.id === 'vehicleMaintenanceType') {
       _renderMaintenanceTypeSuggestions(e.target.value);
+    }
+  });
+
+  document.addEventListener('change', async (e) => {
+    if (e.target.id === 'vehicleMonthlyReportMonth') {
+      _vehicleMonthlyReportState.monthKey = e.target.value || '';
+      await _loadVehicleMonthlyReport();
     }
   });
 
