@@ -32,6 +32,7 @@ import { canonicalizeRoutePlace, canonicalRouteKey, displayRoutePlace } from './
 import { WriteDataSource } from './services/writeDataSource.js';
 import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
+import { LedgerIntegrityDiagnosticService } from './services/ledgerIntegrityDiagnosticService.js';
 import { Money } from './money.js';
 import { DateUtils } from './dateUtils.js';
 
@@ -817,6 +818,21 @@ async function getVehicleLedger(vehicle_id) {
       return db - da;
     })
     .map(Money.decimalizeRecord);
+}
+
+// ─── PUBLIC: Ledger Integrity Diagnostics (read-only) ─────────────────────────
+// The diagnostic adapter reads through ReadDataSource and delegates all
+// classification to the persistence-agnostic ledgerIntegrityDiagnostics module.
+async function getVehicleLedgerDateIntegrityDiagnostic() {
+  return LedgerIntegrityDiagnosticService.getVehicleLedgerDateIntegrityDiagnostic();
+}
+
+async function getHistoricalDriverDepositIntegrityDiagnostic() {
+  return LedgerIntegrityDiagnosticService.getHistoricalDriverDepositIntegrityDiagnostic();
+}
+
+async function getLedgerIntegrityDiagnosticSnapshot() {
+  return LedgerIntegrityDiagnosticService.getLedgerIntegrityDiagnosticSnapshot();
 }
 
 function _parseMonthlyReportMonthKey(monthKey) {
@@ -2227,6 +2243,9 @@ export const FinancialService = Object.freeze({
   deleteReceipt,
   rebuildVehicleBalance,
   getVehicleLedger,
+  getVehicleLedgerDateIntegrityDiagnostic,
+  getHistoricalDriverDepositIntegrityDiagnostic,
+  getLedgerIntegrityDiagnosticSnapshot,
   getVehicleMonthlyReport,
   getOfficeBalance,
   createManualVehicleBalanceEntry,
