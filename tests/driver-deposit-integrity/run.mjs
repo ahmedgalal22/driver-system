@@ -5,9 +5,10 @@ import { installIDB } from './idb-shim.mjs';
 installIDB();
 
 const { DB } = await import('./database.js');
+const { diagnoseHistoricalDriverDeposits, LEGACY_DRIVER_DEPOSIT_REFERENCE_TYPE } = await import('./services/ledgerIntegrityDiagnostics.js');
 
 const U = 'driver-deposit-integrity-tester';
-const LEGACY_REF_TYPE = 'driver_deposit';
+const LEGACY_REF_TYPE = LEGACY_DRIVER_DEPOSIT_REFERENCE_TYPE;
 let failures = 0;
 const ok = (condition, label) => {
   console.log(`${condition ? 'PASS' : 'FAIL'}  ${label}`);
@@ -17,140 +18,18 @@ const uuid = () => crypto.randomUUID();
 
 await DB.init();
 
+const emptyDiagnostic = diagnoseHistoricalDriverDeposits([]);
+ok(emptyDiagnostic.total_candidate_reference_ids === 0
+  && emptyDiagnostic.complete_pairs === 0
+  && emptyDiagnostic.active_problematic_cases === 0,
+  'shared Driver Deposit classifier handles an empty ledger deterministically');
+
 const OWNER_A = uuid();
 const OWNER_B = uuid();
 const DRIVER_A = uuid();
 const DRIVER_B = uuid();
 const VEHICLE_A = uuid();
 const VEHICLE_B = uuid();
-
-const stateOf = (entry) => ({
-  active: entry.is_reversed === false && entry.deleted_at === null,
-  reversed: entry.is_reversed === true,
-  deleted: entry.deleted_at !== null,
-});
-
-function isLegacyCandidate(entry) {
-  return entry?.reference_type === LEGACY_REF_TYPE || entry?.type === LEGACY_REF_TYPE;
-}
-
-function isDriverLeg(entry) {
-  return isLegacyCandidate(entry)
-    && (entry.client_type === 'driver' || entry.type === LEGACY_REF_TYPE)
-    && entry.type !== 'withdraw';
-}
-
-function isVehicleLeg(entry) {
-  return isLegacyCandidate(entry) && entry.type === 'withdraw';
-}
-
-function detail(entry) {
-  if (!entry) return null;
-  return {
-    id: entry.id,
-    driver_id: entry.client_type === 'driver' ? entry.owner_id || null : null,
-    vehicle_id: entry.vehicle_id || null,
-    amount: entry.amount,
-    date: entry.date || null,
-    active: stateOf(entry).active,
-    reversed: stateOf(entry).reversed,
-    deleted: stateOf(entry).deleted,
-    type: entry.type || null,
-    client_type: entry.client_type || null,
-  };
-}
-
-/**
- * Read-only diagnostic. It recognizes both the historically observed driver
- * type=deposit form and the older marker-style type=driver_deposit form, but
- * it requires a legacy marker before treating a withdrawal as a candidate.
- */
-function diagnoseHistoricalDriverDeposits(records) {
-  const candidates = records.filter(isLegacyCandidate);
-  const groups = new Map();
-  let invalidOrdinal = 0;
-
-  for (const entry of candidates) {
-    const rawReference = typeof entry.reference_id === 'string' ? entry.reference_id.trim() : '';
-    const key = rawReference || `__invalid__${entry.id ?? ++invalidOrdinal}`;
-    if (!groups.has(key)) groups.set(key, { reference_id: rawReference || null, entries: [] });
-    groups.get(key).entries.push(entry);
-  }
-
-  const reports = [...groups.values()].map(group => {
-    const driverLegs = group.entries.filter(isDriverLeg);
-    const vehicleLegs = group.entries.filter(isVehicleLeg);
-    const allActive = group.entries.every(entry => stateOf(entry).active);
-    const hasInactive = group.entries.some(entry => !stateOf(entry).active);
-    const hasActive = group.entries.some(entry => stateOf(entry).active);
-    const flags = [];
-
-    if (!group.reference_id) {
-      flags.push('invalid_reference');
-    } else {
-      if (driverLegs.length === 0 && vehicleLegs.length > 0) flags.push('vehicle_only');
-      if (vehicleLegs.length === 0 && driverLegs.length > 0) flags.push('driver_only');
-      if (driverLegs.length > 1) flags.push('duplicate_driver');
-      if (vehicleLegs.length > 1) flags.push('duplicate_vehicle');
-    }
-
-    const oneDriver = driverLegs.length === 1 ? driverLegs[0] : null;
-    const oneVehicle = vehicleLegs.length === 1 ? vehicleLegs[0] : null;
-    if (group.reference_id && oneDriver && oneVehicle) {
-      const driverAmount = Number(oneDriver.amount);
-      const vehicleAmount = Number(oneVehicle.amount);
-      const malformed = oneDriver.client_type !== 'driver'
-        || !String(oneDriver.owner_id || '').trim()
-        || !String(oneDriver.vehicle_id || '').trim()
-        || !String(oneVehicle.vehicle_id || '').trim()
-        || !String(oneVehicle.owner_id || '').trim()
-        || String(oneDriver.vehicle_id) !== String(oneVehicle.vehicle_id)
-        || !Number.isFinite(driverAmount)
-        || !Number.isFinite(vehicleAmount)
-        || driverAmount <= 0
-        || vehicleAmount <= 0
-        || driverAmount !== vehicleAmount;
-      if (malformed) flags.push('driver_vehicle_mismatch');
-    }
-
-    if (hasInactive) flags.push('reversed_or_deleted_history');
-
-    const activeStructuralFlags = flags.filter(flag => flag !== 'reversed_or_deleted_history');
-    const completeActive = allActive && activeStructuralFlags.length === 0
-      && driverLegs.length === 1 && vehicleLegs.length === 1;
-    const primary = completeActive
-      ? 'complete'
-      : !group.reference_id
-        ? 'invalid_reference'
-        : hasInactive
-          ? 'reversed_or_deleted_history'
-          : flags[0] || 'driver_vehicle_mismatch';
-
-    return {
-      reference_id: group.reference_id,
-      primary,
-      flags,
-      active_problematic: hasActive && !completeActive,
-      driver_legs: driverLegs.map(detail),
-      vehicle_legs: vehicleLegs.map(detail),
-    };
-  }).sort((a, b) => String(a.reference_id || '').localeCompare(String(b.reference_id || '')));
-
-  const count = (predicate) => reports.filter(predicate).length;
-  return {
-    total_candidate_reference_ids: reports.length,
-    complete_pairs: count(report => report.primary === 'complete'),
-    driver_only_pairs: count(report => report.flags.includes('driver_only')),
-    vehicle_only_pairs: count(report => report.flags.includes('vehicle_only')),
-    duplicate_driver_cases: count(report => report.flags.includes('duplicate_driver')),
-    duplicate_vehicle_cases: count(report => report.flags.includes('duplicate_vehicle')),
-    driver_vehicle_mismatch_cases: count(report => report.flags.includes('driver_vehicle_mismatch')),
-    invalid_reference_cases: count(report => report.flags.includes('invalid_reference')),
-    reversed_or_deleted_history_cases: count(report => report.flags.includes('reversed_or_deleted_history')),
-    active_problematic_cases: count(report => report.active_problematic),
-    reports,
-  };
-}
 
 async function addLegacy(entry) {
   return DB.add('vehicle_ledger', entry, { username: U });

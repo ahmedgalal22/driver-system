@@ -4,6 +4,7 @@ installIDB();
 
 const { DB } = await import('./database.js');
 const { DateUtils } = await import('./dateUtils.js');
+const { classifyBusinessDate, diagnoseVehicleLedgerDates } = await import('./services/ledgerIntegrityDiagnostics.js');
 
 const U = 'vehicle-ledger-date-integrity-tester';
 let failures = 0;
@@ -15,87 +16,21 @@ const uuid = () => crypto.randomUUID();
 
 await DB.init();
 
+const dateBoundaryToday = '2026-01-01';
+ok(classifyBusinessDate('2024-02-29', dateBoundaryToday).category === 'valid_date'
+  && classifyBusinessDate('2026-02-29', dateBoundaryToday).category === 'invalid_calendar_date'
+  && classifyBusinessDate('2026-01-01', dateBoundaryToday).future === false
+  && classifyBusinessDate('2026-01-02', dateBoundaryToday).future === true,
+  'shared date classifier preserves leap-year, today, and future boundary behavior');
+ok(classifyBusinessDate(null, dateBoundaryToday).category === 'missing_date'
+  && classifyBusinessDate('', dateBoundaryToday).category === 'missing_date'
+  && classifyBusinessDate('2026/01/01', dateBoundaryToday).category === 'invalid_format'
+  && classifyBusinessDate(20260101, dateBoundaryToday).category === 'invalid_type',
+  'shared date classifier preserves missing, malformed, and invalid-type boundaries');
+
 const OWNER_ID = uuid();
 const VEHICLE_ID = uuid();
 const DRIVER_ID = uuid();
-
-function isActive(entry) {
-  return entry.is_reversed === false && entry.deleted_at === null;
-}
-
-function classifyBusinessDate(value, today) {
-  if (value === null || value === undefined || value === '') return { category: 'missing_date', future: false };
-  if (typeof value !== 'string') return { category: 'invalid_type', future: false };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return { category: 'invalid_format', future: false };
-
-  const [year, month, day] = value.split('-').map(Number);
-  const candidate = new Date(Date.UTC(year, month - 1, day));
-  const real = candidate.getUTCFullYear() === year
-    && candidate.getUTCMonth() === month - 1
-    && candidate.getUTCDate() === day;
-  if (!real) return { category: 'invalid_calendar_date', future: false };
-  return { category: 'valid_date', future: value > today };
-}
-
-function ledgerDetail(entry, dateResult) {
-  return {
-    id: entry.id,
-    vehicle_id: entry.vehicle_id || null,
-    type: entry.type || null,
-    amount: entry.amount,
-    date: Object.hasOwn(entry, 'date') ? entry.date : undefined,
-    effect: entry.effect || null,
-    reference_type: entry.reference_type || null,
-    reference_id: entry.reference_id || null,
-    active: isActive(entry),
-    reversed: entry.is_reversed === true,
-    deleted: entry.deleted_at !== null,
-    category: dateResult.category,
-    future: dateResult.future,
-  };
-}
-
-/**
- * Read-only date diagnostic for rows that can affect Vehicle Balance. The
- * population intentionally matches the balance-relevant shape: active,
- * vehicle-linked deposits and withdrawals. Active vehicle-linked custom types
- * are surfaced separately but do not enter report arithmetic.
- */
-function diagnoseVehicleLedgerDates(records, today) {
-  const activeRows = records.filter(isActive);
-  const activeVehicleLinked = activeRows.filter(entry => String(entry.vehicle_id || '').trim());
-  const relevant = activeVehicleLinked.filter(entry => entry.type === 'deposit' || entry.type === 'withdraw');
-  const excludedCustomTypes = activeVehicleLinked.filter(entry => entry.type !== 'deposit' && entry.type !== 'withdraw');
-
-  const details = relevant.map(entry => ledgerDetail(entry, classifyBusinessDate(entry.date, today)));
-  const count = (category) => details.filter(detail => detail.category === category).length;
-  const rowsByType = Object.fromEntries(['deposit', 'withdraw'].map(type => [
-    type,
-    details.filter(detail => detail.type === type).length,
-  ]));
-  const rowsByEffect = Object.fromEntries([...new Set(details.map(detail => detail.effect || 'none'))]
-    .sort()
-    .map(effect => [effect, details.filter(detail => (detail.effect || 'none') === effect).length]));
-  const rowsByReferenceType = Object.fromEntries([...new Set(details.map(detail => detail.reference_type || 'none'))]
-    .sort()
-    .map(referenceType => [referenceType, details.filter(detail => (detail.reference_type || 'none') === referenceType).length]));
-
-  return {
-    total_active_vehicle_ledger_rows: details.length,
-    valid_dates: count('valid_date'),
-    missing_dates: count('missing_date'),
-    invalid_formats: count('invalid_format'),
-    invalid_calendar_dates: count('invalid_calendar_date'),
-    invalid_date_types: count('invalid_type'),
-    future_dated_rows: details.filter(detail => detail.future).length,
-    rows_by_type: rowsByType,
-    rows_by_effect: rowsByEffect,
-    rows_by_reference_type: rowsByReferenceType,
-    problematic_active_rows: details.filter(detail => detail.category !== 'valid_date'),
-    future_rows: details.filter(detail => detail.future),
-    excluded_active_vehicle_custom_type_rows: excludedCustomTypes.map(entry => ledgerDetail(entry, classifyBusinessDate(entry.date, today))),
-  };
-}
 
 async function addLedger({
   vehicle_id = VEHICLE_ID,
