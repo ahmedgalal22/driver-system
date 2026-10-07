@@ -915,10 +915,6 @@ async function getVehicleLedgerDateIntegrityDiagnostic() {
   return LedgerIntegrityDiagnosticService.getVehicleLedgerDateIntegrityDiagnostic();
 }
 
-async function getHistoricalDriverDepositIntegrityDiagnostic() {
-  return LedgerIntegrityDiagnosticService.getHistoricalDriverDepositIntegrityDiagnostic();
-}
-
 async function getLedgerIntegrityDiagnosticSnapshot() {
   return LedgerIntegrityDiagnosticService.getLedgerIntegrityDiagnosticSnapshot();
 }
@@ -2347,7 +2343,6 @@ export const FinancialService = Object.freeze({
   rebuildVehicleBalance,
   getVehicleLedger,
   getVehicleLedgerDateIntegrityDiagnostic,
-  getHistoricalDriverDepositIntegrityDiagnostic,
   getLedgerIntegrityDiagnosticSnapshot,
   getVehicleMonthlyReport,
   getOfficeBalance,

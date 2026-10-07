@@ -1,8 +1,5 @@
 import { DateUtils } from '../dateUtils.js';
-import {
-  diagnoseHistoricalDriverDeposits,
-  diagnoseVehicleLedgerDates,
-} from './ledgerIntegrityDiagnostics.js';
+import { diagnoseVehicleLedgerDates } from './ledgerIntegrityDiagnostics.js';
 import { ReadDataSource } from './readDataSource.js';
 
 const LEDGER_STORE = 'vehicle_ledger';
@@ -97,14 +94,6 @@ function _vehicleLedgerDateDiagnostic(records, metadata) {
   };
 }
 
-function _historicalDriverDepositDiagnostic(records, metadata) {
-  return {
-    ...metadata,
-    recordCount: records.length,
-    ...diagnoseHistoricalDriverDeposits(records),
-  };
-}
-
 function _verificationReadError(error, beforeCount) {
   const verificationError = new Error(
     '[LedgerIntegrityDiagnosticService] second ledger read failed; read-only verification could not be completed.',
@@ -138,18 +127,11 @@ export function createLedgerIntegrityDiagnosticService({
       return _vehicleLedgerDateDiagnostic(records, metadata);
     },
 
-    async getHistoricalDriverDepositIntegrityDiagnostic() {
-      const metadata = _runMetadata(dateUtils);
-      const records = await _readCanonicalLedgerRecords(readDataSource);
-      return _historicalDriverDepositDiagnostic(records, metadata);
-    },
-
     async getLedgerIntegrityDiagnosticSnapshot() {
       const metadata = _runMetadata(dateUtils);
       const beforeRecords = await _readCanonicalLedgerRecords(readDataSource);
       const beforeSnapshot = _canonicalLedgerSnapshot(beforeRecords);
       const vehicleLedgerDateIntegrity = _vehicleLedgerDateDiagnostic(beforeRecords, metadata);
-      const historicalDriverDepositIntegrity = _historicalDriverDepositDiagnostic(beforeRecords, metadata);
 
       let afterRecords;
       try {
@@ -164,7 +146,6 @@ export function createLedgerIntegrityDiagnosticService({
       return {
         ...metadata,
         vehicleLedgerDateIntegrity,
-        historicalDriverDepositIntegrity,
         readOnlyVerification: {
           readOnlyVerified: snapshotEqual,
           beforeCount: beforeRecords.length,

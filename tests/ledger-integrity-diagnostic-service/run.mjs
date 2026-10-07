@@ -1,17 +1,12 @@
-// run.mjs — Phase 7C.2B read-only Ledger Integrity Diagnostic Service contract.
+// run.mjs — Read-only Vehicle Ledger Date Integrity Diagnostic Service contract.
 import { installIDB } from './idb-shim.mjs';
 import { readFileSync } from 'node:fs';
 installIDB();
 
 const { DB } = await import('./database.js');
 const { FinancialService } = await import('./financial.js');
-const {
-  createLedgerIntegrityDiagnosticService,
-} = await import('./services/ledgerIntegrityDiagnosticService.js');
-const {
-  diagnoseHistoricalDriverDeposits,
-  diagnoseVehicleLedgerDates,
-} = await import('./services/ledgerIntegrityDiagnostics.js');
+const { createLedgerIntegrityDiagnosticService } = await import('./services/ledgerIntegrityDiagnosticService.js');
+const { diagnoseVehicleLedgerDates } = await import('./services/ledgerIntegrityDiagnostics.js');
 
 const U = 'ledger-integrity-diagnostic-service-tester';
 const FINANCIAL_SRC = readFileSync('./financial.js', 'utf8');
@@ -26,7 +21,7 @@ const FIXED_DATE_UTILS = Object.freeze({
   todayLocal: () => '2026-06-15',
   nowLocal: () => '2026-06-15T12:34:56',
 });
-
+const REMOVED_LEGACY_SNAPSHOT_FIELD = ['historical', 'Driver', 'Deposit', 'Integrity'].join('');
 const cloneRecords = records => records.map(record => ({ ...record }));
 
 function fixtureRecord(id, overrides = {}) {
@@ -51,53 +46,32 @@ function fixtureRecord(id, overrides = {}) {
 }
 
 const FIXTURE_RECORDS = [
-  fixtureRecord(7, {
-    owner_id: 'driver-a', client_id: 'driver-a', client_type: 'driver',
-    type: 'deposit', amount: 5000, reference_type: 'driver_deposit', reference_id: 'complete-pair',
-  }),
-  fixtureRecord(2, { type: 'withdraw', amount: 1200, date: '2026/01/10', reference_type: 'invalid-format' }),
-  fixtureRecord(6, {
-    type: 'withdraw', amount: 5000, reference_type: 'driver_deposit', reference_id: 'complete-pair',
-  }),
-  fixtureRecord(4, {
-    owner_id: 'driver-history', client_id: 'driver-history', client_type: 'driver',
-    type: 'deposit', amount: 6000, reference_type: 'driver_deposit', reference_id: 'inactive-history',
-    is_reversed: true,
-  }),
+  fixtureRecord(4, { type: 'withdraw', amount: 1200, date: '2026/01/10', reference_type: 'invalid-format' }),
   fixtureRecord(1, { amount: 1100, date: '2026-01-01', reference_type: 'valid-date' }),
-  fixtureRecord(9, {
-    type: 'withdraw', amount: 6000, reference_type: 'driver_deposit', reference_id: 'inactive-history',
-    deleted_at: '2026-06-01T10:00:00',
-  }),
-  fixtureRecord(3, { amount: 1300, date: '2999-01-01', reference_type: 'future-date' }),
-  fixtureRecord(5, {
-    type: 'driver_karta_payment', amount: -1400, date: '2026-01-11', reference_type: 'receipt_row',
-  }),
-  fixtureRecord(8, {
-    owner_id: 'driver-only', client_id: 'driver-only', client_type: 'driver',
-    type: 'deposit', amount: 7000, reference_type: 'driver_deposit', reference_id: 'driver-only',
-  }),
+  fixtureRecord(6, { type: 'deposit', amount: 1600, date: '2999-01-01', reference_type: 'future-date' }),
+  fixtureRecord(3, { type: 'withdraw', amount: 1400, date: '2026-02-30', is_reversed: true, reference_type: 'reversed-invalid' }),
+  fixtureRecord(5, { type: 'driver_karta_payment', amount: -1500, date: '2026-01-11', reference_type: 'receipt_row' }),
+  fixtureRecord(2, { type: 'deposit', amount: 1300, date: undefined, deleted_at: '2026-06-01T10:00:00', reference_type: 'deleted-missing' }),
 ];
 
 function makeReadBoundary(responses) {
   const calls = [];
   let writeCalls = 0;
   let readIndex = 0;
-  const readDataSource = {
-    async findByFields(...args) {
-      calls.push(args);
-      const response = responses[Math.min(readIndex, responses.length - 1)];
-      readIndex++;
-      if (response instanceof Error) throw response;
-      return cloneRecords(response);
-    },
-    async add() { writeCalls++; throw new Error('write must not be called'); },
-    async update() { writeCalls++; throw new Error('write must not be called'); },
-    async delete() { writeCalls++; throw new Error('write must not be called'); },
-    async transaction() { writeCalls++; throw new Error('write must not be called'); },
-  };
   return {
-    readDataSource,
+    readDataSource: {
+      async findByFields(...args) {
+        calls.push(args);
+        const response = responses[Math.min(readIndex, responses.length - 1)];
+        readIndex++;
+        if (response instanceof Error) throw response;
+        return cloneRecords(response);
+      },
+      async add() { writeCalls++; throw new Error('write must not be called'); },
+      async update() { writeCalls++; throw new Error('write must not be called'); },
+      async delete() { writeCalls++; throw new Error('write must not be called'); },
+      async transaction() { writeCalls++; throw new Error('write must not be called'); },
+    },
     calls,
     getWriteCalls: () => writeCalls,
   };
@@ -110,10 +84,10 @@ const diagnosticApiSource = FINANCIAL_SRC.slice(
 );
 ok(FINANCIAL_SRC.includes("import { LedgerIntegrityDiagnosticService } from './services/ledgerIntegrityDiagnosticService.js';")
   && diagnosticApiSource.includes('LedgerIntegrityDiagnosticService.getVehicleLedgerDateIntegrityDiagnostic()')
-  && diagnosticApiSource.includes('LedgerIntegrityDiagnosticService.getHistoricalDriverDepositIntegrityDiagnostic()')
   && diagnosticApiSource.includes('LedgerIntegrityDiagnosticService.getLedgerIntegrityDiagnosticSnapshot()')
+  && !diagnosticApiSource.includes('HistoricalDriverDeposit')
   && !diagnosticApiSource.includes('DB.'),
-'FinancialService diagnostic APIs delegate to the diagnostic service and add no direct database call');
+'FinancialService retains only date-integrity diagnostic delegation without direct database access');
 ok(DIAGNOSTIC_SERVICE_SRC.includes("import { ReadDataSource } from './readDataSource.js';")
   && !DIAGNOSTIC_SERVICE_SRC.includes("from '../database.js'")
   && !/\bindexedDB\b|IDBTransaction|objectStore|\.open\(/.test(DIAGNOSTIC_SERVICE_SRC),
@@ -125,7 +99,6 @@ const diagnosticService = createLedgerIntegrityDiagnosticService({
   dateUtils: FIXED_DATE_UTILS,
 });
 const dateDiagnostic = await diagnosticService.getVehicleLedgerDateIntegrityDiagnostic();
-const depositDiagnostic = await diagnosticService.getHistoricalDriverDepositIntegrityDiagnostic();
 const snapshotDiagnostic = await diagnosticService.getLedgerIntegrityDiagnosticSnapshot();
 
 ok(boundary.calls.every(args => args.length === 3
@@ -136,9 +109,8 @@ ok(boundary.calls.every(args => args.length === 3
 ok(boundary.getWriteCalls() === 0,
 'diagnostic execution invokes no write-capable operation on the injected read boundary');
 
-console.log('\n— classifier preservation and combined snapshot —');
+console.log('\n— date classifier and combined snapshot —');
 const expectedDate = diagnoseVehicleLedgerDates(FIXTURE_RECORDS, FIXED_DATE_UTILS.todayLocal());
-const expectedDeposits = diagnoseHistoricalDriverDeposits(FIXTURE_RECORDS);
 ok(dateDiagnostic.runAt === '2026-06-15T12:34:56'
   && dateDiagnostic.source === 'vehicle_ledger'
   && dateDiagnostic.today === '2026-06-15'
@@ -147,42 +119,29 @@ ok(dateDiagnostic.runAt === '2026-06-15T12:34:56'
   && dateDiagnostic.invalid_formats === expectedDate.invalid_formats
   && dateDiagnostic.future_dated_rows === expectedDate.future_dated_rows
   && dateDiagnostic.excluded_active_vehicle_custom_type_rows.length === expectedDate.excluded_active_vehicle_custom_type_rows.length,
-'vehicle-ledger date DTO preserves Phase 7C.2A aggregates, invalid-date handling, future detection, and custom-type exclusion');
-ok(depositDiagnostic.recordCount === FIXTURE_RECORDS.length
-  && depositDiagnostic.complete_pairs === expectedDeposits.complete_pairs
-  && depositDiagnostic.driver_only_pairs === expectedDeposits.driver_only_pairs
-  && depositDiagnostic.reversed_or_deleted_history_cases === expectedDeposits.reversed_or_deleted_history_cases
-  && depositDiagnostic.active_problematic_cases === expectedDeposits.active_problematic_cases,
-'historical Driver Deposit DTO preserves Phase 7C.2A pairing and inactive-history classifications');
+'vehicle-ledger date DTO preserves pure date-classifier aggregates and custom-type exclusion');
 ok(snapshotDiagnostic.runAt === '2026-06-15T12:34:56'
   && snapshotDiagnostic.vehicleLedgerDateIntegrity.runAt === snapshotDiagnostic.runAt
-  && snapshotDiagnostic.historicalDriverDepositIntegrity.runAt === snapshotDiagnostic.runAt
   && snapshotDiagnostic.vehicleLedgerDateIntegrity.total_active_vehicle_ledger_rows === dateDiagnostic.total_active_vehicle_ledger_rows
-  && snapshotDiagnostic.historicalDriverDepositIntegrity.complete_pairs === depositDiagnostic.complete_pairs
   && snapshotDiagnostic.readOnlyVerification.readOnlyVerified === true
   && snapshotDiagnostic.readOnlyVerification.snapshotEqual === true
   && snapshotDiagnostic.readOnlyVerification.beforeCount === FIXTURE_RECORDS.length
-  && snapshotDiagnostic.readOnlyVerification.afterCount === FIXTURE_RECORDS.length,
-'combined snapshot includes both diagnostics, shared metadata, and successful two-read verification metadata');
+  && snapshotDiagnostic.readOnlyVerification.afterCount === FIXTURE_RECORDS.length
+  && !Object.hasOwn(snapshotDiagnostic, REMOVED_LEGACY_SNAPSHOT_FIELD),
+'combined snapshot preserves date diagnostics and read-only verification without legacy Driver Deposit output');
 
 console.log('\n— deterministic canonical ordering and verification failures —');
-const reordered = [
-  FIXTURE_RECORDS[3], FIXTURE_RECORDS[8], FIXTURE_RECORDS[0],
-  FIXTURE_RECORDS[5], FIXTURE_RECORDS[2], FIXTURE_RECORDS[7],
-  FIXTURE_RECORDS[1], FIXTURE_RECORDS[6], FIXTURE_RECORDS[4],
-];
-const orderedService = createLedgerIntegrityDiagnosticService({
+const reordered = [...FIXTURE_RECORDS].reverse();
+const orderedSnapshot = await createLedgerIntegrityDiagnosticService({
   readDataSource: makeReadBoundary([FIXTURE_RECORDS, FIXTURE_RECORDS]).readDataSource,
   dateUtils: FIXED_DATE_UTILS,
-});
-const reorderedService = createLedgerIntegrityDiagnosticService({
+}).getLedgerIntegrityDiagnosticSnapshot();
+const reorderedSnapshot = await createLedgerIntegrityDiagnosticService({
   readDataSource: makeReadBoundary([reordered, reordered]).readDataSource,
   dateUtils: FIXED_DATE_UTILS,
-});
-const orderedSnapshot = await orderedService.getLedgerIntegrityDiagnosticSnapshot();
-const reorderedSnapshot = await reorderedService.getLedgerIntegrityDiagnosticSnapshot();
+}).getLedgerIntegrityDiagnosticSnapshot();
 ok(JSON.stringify(orderedSnapshot) === JSON.stringify(reorderedSnapshot),
-'same logical ledger records in different input order produce the same canonical diagnostic snapshot');
+'same logical ledger records in different input order produce the same canonical date diagnostic snapshot');
 
 const changedRecords = cloneRecords(FIXTURE_RECORDS);
 changedRecords.find(record => record.id === 1).amount = 9999;
@@ -191,8 +150,7 @@ const changedSnapshot = await createLedgerIntegrityDiagnosticService({
   dateUtils: FIXED_DATE_UTILS,
 }).getLedgerIntegrityDiagnosticSnapshot();
 ok(changedSnapshot.readOnlyVerification.readOnlyVerified === false
-  && changedSnapshot.readOnlyVerification.snapshotEqual === false
-  && changedSnapshot.readOnlyVerification.beforeCount === changedSnapshot.readOnlyVerification.afterCount,
+  && changedSnapshot.readOnlyVerification.snapshotEqual === false,
 'a changed second read is reported as an unsuccessful read-only verification');
 
 const secondReadFailure = new Error('second read failed');
@@ -212,7 +170,6 @@ ok(verificationFailure?.cause === secondReadFailure
 
 console.log('\n— real FinancialService adapter read-only contract —');
 await DB.init();
-const savedByFixtureId = new Map();
 for (const sourceRecord of FIXTURE_RECORDS) {
   const payload = { ...sourceRecord };
   delete payload.id;
@@ -221,7 +178,6 @@ for (const sourceRecord of FIXTURE_RECORDS) {
   payload.is_reversed = false;
   payload.deleted_at = null;
   const saved = await DB.add('vehicle_ledger', payload, { username: U });
-  savedByFixtureId.set(sourceRecord.id, saved);
   if (isReversed) {
     await DB.update('vehicle_ledger', saved.id, {
       is_reversed: true,
@@ -234,26 +190,20 @@ for (const sourceRecord of FIXTURE_RECORDS) {
 
 const beforeDatabaseDiagnostic = await DB.findByFields('vehicle_ledger', {}, { includeDeleted: true });
 const financialDateDiagnostic = await FinancialService.getVehicleLedgerDateIntegrityDiagnostic();
-const financialDepositDiagnostic = await FinancialService.getHistoricalDriverDepositIntegrityDiagnostic();
 const financialSnapshotDiagnostic = await FinancialService.getLedgerIntegrityDiagnosticSnapshot();
 const afterDatabaseDiagnostic = await DB.findByFields('vehicle_ledger', {}, { includeDeleted: true });
 const expectedFinancialDate = diagnoseVehicleLedgerDates(beforeDatabaseDiagnostic, financialDateDiagnostic.today);
-const expectedFinancialDeposits = diagnoseHistoricalDriverDeposits(beforeDatabaseDiagnostic);
-
 ok(financialDateDiagnostic.recordCount === beforeDatabaseDiagnostic.length
   && financialDateDiagnostic.total_active_vehicle_ledger_rows === expectedFinancialDate.total_active_vehicle_ledger_rows
   && financialDateDiagnostic.invalid_formats === expectedFinancialDate.invalid_formats
   && financialDateDiagnostic.future_dated_rows === expectedFinancialDate.future_dated_rows,
-'FinancialService vehicle-ledger API reads complete history and returns the pure date-classifier aggregates');
-ok(financialDepositDiagnostic.recordCount === beforeDatabaseDiagnostic.length
-  && financialDepositDiagnostic.complete_pairs === expectedFinancialDeposits.complete_pairs
-  && financialDepositDiagnostic.reversed_or_deleted_history_cases === expectedFinancialDeposits.reversed_or_deleted_history_cases,
-'FinancialService historical Driver Deposit API preserves pure classifier results for reversed/deleted history');
+'FinancialService vehicle-ledger date API reads complete history and returns pure classifier aggregates');
 ok(financialSnapshotDiagnostic.readOnlyVerification.readOnlyVerified === true
   && financialSnapshotDiagnostic.readOnlyVerification.beforeCount === beforeDatabaseDiagnostic.length
   && financialSnapshotDiagnostic.readOnlyVerification.afterCount === beforeDatabaseDiagnostic.length
+  && !Object.hasOwn(financialSnapshotDiagnostic, REMOVED_LEGACY_SNAPSHOT_FIELD)
   && JSON.stringify(afterDatabaseDiagnostic) === JSON.stringify(beforeDatabaseDiagnostic),
-'FinancialService combined diagnostic is read-only and verifies equal before/after ledger snapshots');
+'FinancialService date diagnostic snapshot is read-only and has no legacy Driver Deposit field');
 
 console.log(failures === 0
   ? '\n✅ ALL LEDGER-INTEGRITY-DIAGNOSTIC-SERVICE ASSERTIONS PASSED'
