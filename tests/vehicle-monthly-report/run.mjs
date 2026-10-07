@@ -68,10 +68,9 @@ console.log('\n— seed deterministic monthly Vehicle Ledger fixture —');
 await addLedger({ type: 'deposit', amount: 10000, date: '2026-08-01', reference_type: 'prior_deposit' });
 await addLedger({ type: 'withdraw', amount: 3000, date: '2026-08-20', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance' });
 
-// September inflows = 3,910 cents.
+// September inflows = 3,410 cents.
 await addLedger({ type: 'deposit', amount: 2000, date: '2026-09-01', effect: 'receipt_row_payment_vehicle', reference_type: 'receipt_row_payment_vehicle', reference_id: uuid(), applied_at: '2026-09-01T09:00:00' });
 await addLedger({ type: 'deposit', amount: 1000, date: '2026-09-02', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance', reference_id: uuid() });
-await addLedger({ type: 'deposit', amount: 500, date: '2026-09-03', reference_type: 'driver_deposit', reference_id: 'legacy-deposit' });
 await addLedger({ type: 'deposit', amount: 300, date: '2026-09-04', reference_type: 'other-deposit' });
 const tieA = await addLedger({ type: 'deposit', amount: 50, date: '2026-09-08', applied_at: '2026-09-08T09:00:00', reference_type: 'tie-a' });
 const tieB = await addLedger({ type: 'deposit', amount: 60, date: '2026-09-08', applied_at: '2026-09-08T10:00:00', reference_type: 'tie-b' });
@@ -87,11 +86,10 @@ await DB.add('receipt_rows', {
   driver_settlement_price: 999999,
 }, { username: U });
 
-// September outflows = 6,890 cents.
+// September outflows = 6,690 cents.
 await addLedger({ type: 'withdraw', amount: 4000, date: '2026-09-05', effect: 'karta_settlement_charge', reference_type: 'receipt_row', reference_id: KARTA_ROW_ID, note: 'تسوية كارتة' });
 await addLedger({ type: 'withdraw', amount: 1500, date: '2026-09-05', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance', reference_id: uuid(), maintenance_type: 'زيت', applied_at: '2026-09-05T10:00:00' });
 await addLedger({ type: 'withdraw', amount: 1000, date: '2026-09-06', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance', reference_id: uuid() });
-await addLedger({ type: 'withdraw', amount: 200, date: '2026-09-06', reference_type: 'driver_deposit', reference_id: 'legacy-withdraw' });
 await addLedger({ type: 'withdraw', amount: 100, date: '2026-09-07', reference_type: 'other-withdraw' });
 const lastDay = await addLedger({ type: 'withdraw', amount: 90, date: '2026-09-30', reference_type: 'last-day' });
 
@@ -128,14 +126,14 @@ const september = await FinancialService.getVehicleMonthlyReport(VEHICLE_A, '202
 ok(september.monthStart === '2026-09-01' && september.nextMonthStart === '2026-10-01',
   'month boundaries are calendar-safe and use exclusive next-month start');
 ok(september.openingBalanceCents === 7000, 'opening balance uses valid active rows before the month only');
-ok(september.monthlyInflowsCents === 3910 && september.inflowTransactionCount === 7,
+ok(september.monthlyInflowsCents === 3410 && september.inflowTransactionCount === 6,
   'monthly inflows include all and only valid active September deposits');
-ok(september.monthlyOutflowsCents === 6890 && september.outflowTransactionCount === 6,
-  'monthly outflows include Karta, maintenance, manual, legacy, other, and last-day withdrawals');
-ok(september.closingBalanceCents === 4020
+ok(september.monthlyOutflowsCents === 6690 && september.outflowTransactionCount === 5,
+  'monthly outflows include Karta, maintenance, manual, other, and last-day withdrawals');
+ok(september.closingBalanceCents === 3720
   && september.closingBalanceCents === september.openingBalanceCents + september.monthlyInflowsCents - september.monthlyOutflowsCents,
   'opening + inflows - outflows equals the deterministic closing balance');
-ok(september.movementCount === 13
+ok(september.movementCount === 11
   && september.reconciliation.isReconciled
   && september.reconciliation.finalRunningBalanceCents === september.closingBalanceCents,
   'movement count, cumulative cross-check, and final running balance reconcile');
@@ -143,15 +141,13 @@ ok(september.movementCount === 13
 console.log('\n— category contract and immutable Karta ledger amount —');
 ok(september.breakdown.inflows.receiptRowPayment.amountCents === 2000
   && september.breakdown.inflows.manualVehicleDeposit.amountCents === 1000
-  && september.breakdown.inflows.historicalDriverDeposit.amountCents === 500
   && september.breakdown.inflows.other.amountCents === 410,
-  'inflow category totals reconcile to receipt/manual/historical/other sources');
+  'inflow category totals reconcile to receipt/manual/other sources');
 ok(september.breakdown.outflows.kartaSettlement.amountCents === 4000
   && september.breakdown.outflows.maintenance.amountCents === 1500
   && september.breakdown.outflows.manualVehicleWithdrawal.amountCents === 1000
-  && september.breakdown.outflows.historicalDriverDeposit.amountCents === 200
   && september.breakdown.outflows.other.amountCents === 190,
-  'outflow category totals reconcile to Karta/maintenance/manual/historical/other sources');
+  'outflow category totals reconcile to Karta/maintenance/manual/other sources');
 ok(Object.values(september.breakdown.inflows).reduce((sum, item) => sum + item.amountCents, 0) === september.monthlyInflowsCents
   && Object.values(september.breakdown.outflows).reduce((sum, item) => sum + item.amountCents, 0) === september.monthlyOutflowsCents,
   'breakdown category totals reconcile exactly with monthly inflow/outflow totals');
@@ -198,10 +194,10 @@ ok(september.excludedActiveVehicleCustomTypeCount === 1,
 
 console.log('\n— future month, empty month, and vehicle isolation —');
 const october = await FinancialService.getVehicleMonthlyReport(VEHICLE_A, '2999-10');
-ok(october.openingBalanceCents === 4020
+ok(october.openingBalanceCents === 3720
   && october.monthlyInflowsCents === 333
   && october.monthlyOutflowsCents === 0
-  && october.closingBalanceCents === 4353,
+  && october.closingBalanceCents === 4053,
   'valid future-date row is included normally when its own future month is selected');
 const july = await FinancialService.getVehicleMonthlyReport(VEHICLE_A, '2026-07');
 ok(july.openingBalanceCents === 0 && july.movementCount === 0 && july.closingBalanceCents === 0,

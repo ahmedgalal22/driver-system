@@ -971,7 +971,6 @@ function _monthlyReportCategory(entry) {
   if (type === 'deposit') {
     if (effect === RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT && referenceType === RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE) return 'receipt_row_payment';
     if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_deposit';
-    if (referenceType === 'driver_deposit') return 'historical_driver_deposit';
     return 'other';
   }
 
@@ -979,7 +978,6 @@ function _monthlyReportCategory(entry) {
     if (effect === 'karta_settlement_charge' && referenceType === 'receipt_row') return 'karta_settlement';
     if (effect === 'manual_vehicle_balance' && hasMaintenance) return 'maintenance';
     if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_withdrawal';
-    if (referenceType === 'driver_deposit') return 'historical_driver_deposit';
     return 'other';
   }
 
@@ -1008,14 +1006,12 @@ function _newMonthlyReportBreakdown() {
     inflows: {
       receiptRowPayment: { amountCents: 0, count: 0 },
       manualVehicleDeposit: { amountCents: 0, count: 0 },
-      historicalDriverDeposit: { amountCents: 0, count: 0 },
       other: { amountCents: 0, count: 0 },
     },
     outflows: {
       kartaSettlement: { amountCents: 0, count: 0 },
       maintenance: { amountCents: 0, count: 0 },
       manualVehicleWithdrawal: { amountCents: 0, count: 0 },
-      historicalDriverDeposit: { amountCents: 0, count: 0 },
       other: { amountCents: 0, count: 0 },
     },
   };
@@ -1025,8 +1021,8 @@ function _addMonthlyReportBreakdown(breakdown, entry, amountCents) {
   const category = _monthlyReportCategory(entry);
   const target = entry.type === 'deposit' ? breakdown.inflows : breakdown.outflows;
   const key = entry.type === 'deposit'
-    ? ({ receipt_row_payment: 'receiptRowPayment', manual_vehicle_deposit: 'manualVehicleDeposit', historical_driver_deposit: 'historicalDriverDeposit' }[category] || 'other')
-    : ({ karta_settlement: 'kartaSettlement', maintenance: 'maintenance', manual_vehicle_withdrawal: 'manualVehicleWithdrawal', historical_driver_deposit: 'historicalDriverDeposit' }[category] || 'other');
+    ? ({ receipt_row_payment: 'receiptRowPayment', manual_vehicle_deposit: 'manualVehicleDeposit' }[category] || 'other')
+    : ({ karta_settlement: 'kartaSettlement', maintenance: 'maintenance', manual_vehicle_withdrawal: 'manualVehicleWithdrawal' }[category] || 'other');
   target[key].amountCents += amountCents;
   target[key].count += 1;
 }

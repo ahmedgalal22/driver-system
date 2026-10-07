@@ -1413,7 +1413,6 @@ function _monthlyReportCategoryLabel(category, plural = false) {
   const labels = {
     receipt_row_payment: plural ? 'صرف الكارتات' : 'صرف كارتة',
     manual_vehicle_deposit: 'إيداع يدوي',
-    historical_driver_deposit: 'Driver Deposit تاريخي',
     karta_settlement: 'تسوية كارتة',
     maintenance: 'صيانة',
     manual_vehicle_withdrawal: 'سحب يدوي',
@@ -1557,10 +1556,10 @@ function _renderVehicleMonthlyReportContent(vehicle) {
   const breakdown = `
     <section class="vehicle-monthly-report__breakdowns">
       ${_renderMonthlyReportBreakdown('تفصيل الداخل', report.breakdown?.inflows, {
-        receiptRowPayment: 'صرف الكارتات', manualVehicleDeposit: 'إيداع يدوي', historicalDriverDeposit: 'Driver Deposit تاريخي', other: 'أخرى',
+        receiptRowPayment: 'صرف الكارتات', manualVehicleDeposit: 'إيداع يدوي', other: 'أخرى',
       })}
       ${_renderMonthlyReportBreakdown('تفصيل الخارج', report.breakdown?.outflows, {
-        kartaSettlement: 'تسوية الكارتات', maintenance: 'صيانة', manualVehicleWithdrawal: 'سحب يدوي', historicalDriverDeposit: 'Driver Deposit تاريخي', other: 'أخرى',
+        kartaSettlement: 'تسوية الكارتات', maintenance: 'صيانة', manualVehicleWithdrawal: 'سحب يدوي', other: 'أخرى',
       })}
     </section>
   `;
