@@ -130,7 +130,8 @@ const manualRefsA = movementsA.entries
   .sort();
 ok(manualRefsA.join(',') === [depositA.reference_id, withdrawalA.reference_id].sort().join(','),
   'manual company deposit and withdrawal appear in the existing company movement projection');
-ok(movementsA.entries.some(entry => entry.reference_type === 'receipt_row_payment'
+ok(movementsA.entries.some(entry => entry.reference_type === 'receipt_row_payment_company'
+  && entry.effect === 'receipt_row_payment_company'
   && entry.reference_id === receiptRow.row_id && entry.amount === 18),
   'existing receipt-row company movement remains visible alongside manual company movements');
 

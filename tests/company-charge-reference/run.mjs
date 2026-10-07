@@ -74,7 +74,7 @@ ok(chargeB.reference_display === 'إضافة كارتة: 1260',
 ok(!chargeA.reference_display.includes(rowA.row_id) && !chargeB.reference_display.includes(rowB.row_id),
   'company-charge display reference uses kartano rather than the receipt-row UUID');
 
-const paymentEntry = displayEntries.find(entry => entry.reference_type === 'receipt_row_payment');
+const paymentEntry = displayEntries.find(entry => entry.reference_type === 'receipt_row_payment_company');
 const manualEntry = displayEntries.find(entry => entry.reference_id === manual.reference_id);
 ok(!paymentEntry.reference_display && !manualEntry.reference_display,
   'payment-status and manual company movements retain existing fallback reference behavior');

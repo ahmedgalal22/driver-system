@@ -11,8 +11,9 @@
  * RULE 3  : Every operation executes inside ONE DB.transaction() call.
  * RULE 4  : update/delete MUST reverse old entries before applying new ones.
  * RULE 10 : receipt-row payment postings (تم صرفه) are durable vehicle_ledger
- *   entries (effect/reference_type 'receipt_row_payment', reference_id = row
- *   UUID); status transitions post/reverse them atomically with the row write.
+ *   entries with separate company/vehicle payment namespaces, both linked by
+ *   reference_id = receipt row UUID; status transitions post/reverse only those
+ *   payment effects atomically with the row write.
  * RULE 5  : Every financial record carries { reference_type, reference_id }.
  * RULE 6  : All monetary values are numbers — never strings.
  * RULE 9  : DB stores integers (cents). money.js handles all conversion.
@@ -55,6 +56,14 @@ const MANUAL_DRIVER_REF_TYPE = 'manual_driver_balance';
 const MANUAL_DRIVER_EFFECT = 'manual_driver_balance';
 const RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE = 'receipt_row_company_charge';
 const RECEIPT_ROW_COMPANY_CHARGE_EFFECT = 'receipt_row_company_charge';
+
+// Receipt-row financial lifecycle namespaces are deliberately independent:
+// creation charge ≠ payment company effect ≠ payment vehicle effect.
+const PAYMENT_STATUS = Object.freeze({ UNPAID: 'unpaid', PAID: 'paid' });
+const RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE = 'receipt_row_payment_company';
+const RECEIPT_ROW_PAYMENT_COMPANY_EFFECT = 'receipt_row_payment_company';
+const RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE = 'receipt_row_payment_vehicle';
+const RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT = 'receipt_row_payment_vehicle';
 
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
@@ -174,7 +183,7 @@ function _readDriverSettlementPriceCents(value, label = 'driver_settlement_price
   return cents;
 }
 
-function _buildReceiptRowEntities(validatedRows, receiptId) {
+function _buildReceiptRowEntities(validatedRows, receiptId, { forceUnpaid = false } = {}) {
   return validatedRows.map(row => ({
     row_id: row.row_id,
     receipt_id: receiptId,
@@ -205,11 +214,13 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     discount: Money.toCents(row.discount ?? 0),
     add: Money.toCents(row.add ?? 0),
     row_order: row.row_order ?? null,
-    // payment_status: 'unpaid' | 'paid' — default unpaid; any non-'paid'
-    // value (incl. legacy rows without the field) clamps to 'unpaid'.
-    payment_status: row.payment_status === PAYMENT_STATUS.PAID
-      ? PAYMENT_STATUS.PAID
-      : PAYMENT_STATUS.UNPAID,
+    // New receipt creation is always unpaid. Receipt edits preserve the
+    // explicit row lifecycle status supplied by the persisted edit form.
+    payment_status: forceUnpaid
+      ? PAYMENT_STATUS.UNPAID
+      : row.payment_status === PAYMENT_STATUS.PAID
+        ? PAYMENT_STATUS.PAID
+        : PAYMENT_STATUS.UNPAID,
   }));
 }
 
@@ -294,113 +305,178 @@ function _validate(data) {
 
 // ─── PUBLIC: createReceipt ─────────────────────────────────────────────────────
 
-// ─── RECEIPT ROW PAYMENT POSTINGS (تم صرفه / لم يتم صرفه) ───────────────────
-// Financial effect exists ONLY while a row is paid. One ACTIVE posting set
-// per receipt row UUID, durable in vehicle_ledger:
-//   • vehicle leg — client_type 'vehicle', vehicle_id set (by_vehicle index →
-//     rebuildVehicleBalance), amount = الصافي (row.net, cents)
-//   • company leg — client_type 'office', amount = الصافي + الصرف
-//     (row.net + row.sarf, cents); NO vehicle_id (would double-count in
-//     rebuildVehicleBalance)
-// Reversal = is_reversed:true (project audit convention), never hard delete.
+// ─── RECEIPT-ROW PAYMENT EFFECTS (تم صرفه / لم يتم صرفه) ───────────────
+// Payment effects are intentionally distinct from receipt creation charges.
+// A complete active payment state contains exactly one company effect and one
+// vehicle effect for the same immutable receipt-row UUID.
 
-async function _getActivePaymentPostings(rowId) {
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
-  return entries.filter(e =>
-    e.reference_type === PAYMENT_REF_TYPE &&
-    e.effect === PAYMENT_EFFECT &&
-    e.is_reversed === false &&
-    e.deleted_at === null
+function _isActiveLedgerEntry(entry) {
+  return entry?.is_reversed === false && entry?.deleted_at === null;
+}
+
+function _analyzeReceiptPaymentEffects(entries, rowId) {
+  const rowKey = String(rowId || '').trim();
+  const active = (entries || []).filter(entry => _isActiveLedgerEntry(entry)
+    && String(entry.reference_id || '') === rowKey);
+  const companyLegs = active.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE
+    && entry.effect === RECEIPT_ROW_PAYMENT_COMPANY_EFFECT
+  );
+  const vehicleLegs = active.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE
+    && entry.effect === RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT
+  );
+
+  let state = 'none';
+  if (companyLegs.length === 1 && vehicleLegs.length === 1) state = 'complete';
+  else if (companyLegs.length || vehicleLegs.length) {
+    state = companyLegs.length <= 1 && vehicleLegs.length <= 1 ? 'partial' : 'duplicate';
+  }
+
+  return {
+    state,
+    companyLegs,
+    vehicleLegs,
+    activePaymentLegs: [...companyLegs, ...vehicleLegs],
+  };
+}
+
+function _assertNoActiveReceiptPaymentEffects(pair, operation, rowId) {
+  if (pair.state === 'none') return;
+  throw new Error(
+    `[FinancialService:${operation}] receipt row ${rowId} has ${pair.state} active payment effects; expected none.`
   );
 }
 
-async function _resolvePaymentTargets(row) {
-  // Guards evaluated BEFORE the write transaction (same race rationale as
-  // createKartaSettlement): unknown/deleted relations fail LOUDLY so nothing
-  // is silently associated with the wrong vehicle or company.
-  const vehicle = await ClientRepository.getVehicleById(String(row.vehicle_id || ''));
+function _assertCompleteReceiptPaymentPair(pair, operation, row) {
+  if (pair.state !== 'complete') {
+    throw new Error(
+      `[FinancialService:${operation}] receipt row ${row.row_id} has ${pair.state} active payment effects; expected one complete payment pair.`
+    );
+  }
+
+  const company = pair.companyLegs[0];
+  const vehicle = pair.vehicleLegs[0];
+  const netCents = Number(row.net) || 0;
+  const sarfCents = Number(row.sarf) || 0;
+  if (company.type !== 'deposit'
+    || vehicle.type !== 'deposit'
+    || company.vehicle_id !== null
+    || String(vehicle.vehicle_id || '') !== String(row.vehicle_id || '')
+    || Number(company.amount) !== netCents + sarfCents
+    || Number(vehicle.amount) !== netCents
+    || String(company.reference_id || '') !== String(row.row_id)
+    || String(vehicle.reference_id || '') !== String(row.row_id)) {
+    throw new Error(
+      `[FinancialService:${operation}] receipt row ${row.row_id} has inconsistent active payment effects.`
+    );
+  }
+}
+
+async function _resolveReceiptPaymentTargets(row, { tx } = {}) {
+  const vehicle = await ClientRepository.getVehicleById(String(row.vehicle_id || ''), { tx });
   if (!vehicle || vehicle.deleted_at !== null) {
     throw new Error('[FinancialService] cannot post payment: vehicle not found for the row.');
   }
+
   const officeName = String(row.office || '').trim();
   if (!officeName) {
     throw new Error('[FinancialService] cannot post payment: row has no company (اسم الشركة).');
   }
-  const offices = await OfficeRepository.findByName(officeName);
-  const office = (offices || []).find(o => o && o.deleted_at === null);
+  const offices = tx
+    ? await tx.findByFields('offices', { name: officeName })
+    : await OfficeRepository.findByName(officeName);
+  const office = (offices || []).find(candidate => candidate && candidate.deleted_at === null);
   if (!office) {
     throw new Error(`[FinancialService] unknown office: ${officeName}`);
   }
   return { vehicle, office };
 }
 
-function _paymentLegPayloads(username, row, targets, receiptDate) {
-  const now = DateUtils.nowLocal();
-  const date = row.date || receiptDate || DateUtils.todayLocal();
-  const netCents  = Number(row.net)  || 0; // persisted rows: already cents
+function _receiptPaymentDate(row, receiptDate = null) {
+  return row.date || receiptDate || DateUtils.todayLocal();
+}
+
+function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+  const netCents = Number(row.net) || 0;
   const sarfCents = Number(row.sarf) || 0;
-  const { vehicle, office } = targets;
+  return {
+    username,
+    owner_id: String(office.id),
+    owner_name: office.name || null,
+    client_id: String(office.id),
+    client_type: 'office',
+    client_name: office.name || null,
+    vehicle_id: null,
+    vehicle_plate: row.vehicle_plate || null,
+    type: 'deposit',
+    effect: RECEIPT_ROW_PAYMENT_COMPANY_EFFECT,
+    amount: netCents + sarfCents,
+    reference_type: RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE,
+    reference_id: String(row.row_id),
+    date: _receiptPaymentDate(row, receiptDate),
+    applied_at: appliedAt,
+    is_reversed: false,
+    note: `صرف كارتة — الصافي + الصرف (${office.name || ''})`,
+  };
+}
+
+function _buildReceiptPaymentVehicleLeg(username, row, vehicle, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+  const netCents = Number(row.net) || 0;
+  return {
+    username,
+    owner_id: String(vehicle.owner_id || ''),
+    owner_name: vehicle.owner_name || null,
+    client_id: String(vehicle.id),
+    client_type: 'vehicle',
+    client_name: vehicle.plate || row.vehicle_plate || null,
+    vehicle_id: vehicle.id,
+    vehicle_plate: vehicle.plate || row.vehicle_plate || null,
+    type: 'deposit',
+    effect: RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT,
+    amount: netCents,
+    reference_type: RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE,
+    reference_id: String(row.row_id),
+    date: _receiptPaymentDate(row, receiptDate),
+    applied_at: appliedAt,
+    is_reversed: false,
+    note: `صرف كارتة — الصافي (مركبة ${vehicle.plate || row.vehicle_plate || ''})`,
+  };
+}
+
+function _buildReceiptPaymentLegs(username, row, targets, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
   return [
-    { // vehicle leg — الصافي
-      username,
-      owner_id: String(vehicle.owner_id || ''),
-      owner_name: vehicle.owner_name || null,
-      client_id: String(vehicle.id),
-      client_type: 'vehicle',
-      client_name: vehicle.plate || row.vehicle_plate || null,
-      vehicle_id: vehicle.id,
-      vehicle_plate: vehicle.plate || row.vehicle_plate || null,
-      type: 'deposit',
-      effect: PAYMENT_EFFECT,
-      amount: netCents,
-      reference_type: PAYMENT_REF_TYPE,
-      reference_id: String(row.row_id),
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: `صرف كارتة — الصافي (مركبة ${vehicle.plate || row.vehicle_plate || ''})`,
-    },
-    { // company leg — الصافي + الصرف (explicitly NOT just الصافي)
-      username,
-      owner_id: String(office.id),
-      owner_name: office.name || null,
-      client_id: String(office.id),
-      client_type: 'office',
-      client_name: office.name || null,
-      vehicle_id: null, // by_vehicle sums must never see the company leg
-      vehicle_plate: row.vehicle_plate || null,
-      type: 'deposit',
-      effect: PAYMENT_EFFECT,
-      amount: netCents + sarfCents,
-      reference_type: PAYMENT_REF_TYPE,
-      reference_id: String(row.row_id),
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: `صرف كارتة — الصافي + الصرف (${office.name || ''})`,
-    },
+    _buildReceiptPaymentCompanyLeg(username, row, targets.office, receiptDate, appliedAt),
+    _buildReceiptPaymentVehicleLeg(username, row, targets.vehicle, receiptDate, appliedAt),
   ];
 }
 
-async function _paymentAddCommands(username, row, receiptDate) {
-  const targets = await _resolvePaymentTargets(row);
-  return _paymentLegPayloads(username, row, targets, receiptDate)
+async function _receiptPaymentAddCommands(username, row, receiptDate = null) {
+  const targets = await _resolveReceiptPaymentTargets(row);
+  return _buildReceiptPaymentLegs(username, row, targets, receiptDate)
     .map(payload => createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload }));
 }
 
-function _paymentReverseCommands(entries, username) {
+function _receiptPaymentReverseCommands(entries, username) {
   const now = DateUtils.nowLocal();
   const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-  return entries.map(e =>
-    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', e.id, { patch: reversePatch })
+  return entries.map(entry =>
+    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
   );
+}
+
+async function _getReceiptPaymentPair(rowId, { tx } = {}) {
+  const entries = tx
+    ? await tx.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId))
+    : await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
+  return _analyzeReceiptPaymentEffects(entries, rowId);
 }
 
 // ─── RECEIPT-ROW COMPANY CHARGES (Karta creation) ───────────────────────────
 // Every persisted receipt row with a resolved company creates one independent
-// company withdrawal. This is intentionally separate from receipt_row_payment:
-// it exists at receipt creation regardless of payment_status and remains linked
-// to the row UUID through the receipt lifecycle.
+// creation-side company withdrawal. It is intentionally separate from both
+// payment-company and payment-vehicle effects, exists regardless of
+// payment_status, and remains linked to the row UUID through the lifecycle.
 async function _resolveReceiptRowCompany(row) {
   const officeName = String(row.office || '').trim();
   if (!officeName) return null;
@@ -543,7 +619,7 @@ async function createReceipt(username, data) {
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, receiptId);
 
   // Build ReceiptRow entities
-  const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId);
+  const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId, { forceUnpaid: true });
 
   // Assemble the full persistence record ONCE.
   const receiptRecord = {
@@ -571,24 +647,16 @@ async function createReceipt(username, data) {
     )));
   }
 
-  // Payment postings: a newly created row enters paid only if explicitly
-  // collected as such (form default is unpaid → normally zero commands here).
-  // Fresh row UUIDs → no pre-existing postings can exist for these ids.
-  const paymentAddCommands = [];
-  for (const row of receiptRows) {
-    if (row.payment_status === PAYMENT_STATUS.PAID) {
-      paymentAddCommands.push(...(await _paymentAddCommands(username, row, receiptRecord.receipt_date)));
-    }
-  }
+  // New receipt rows always begin unpaid. Payment postings are created only
+  // by the explicit receipt-row payment status lifecycle.
 
-  // Combine all commands: header + rows + company charges + any paid-row
-  // payment postings commit atomically through the existing write boundary.
+  // New receipt creation commits only header, rows, route discovery, and the
+  // independent company creation charges. Payment lifecycle entries are absent.
   const allCommands = [
     receiptCommand,
     ...receiptRowCommands,
     ...loadPriceCommands,
     ...companyChargeAddCommands,
-    ...paymentAddCommands,
   ];
 
   // Execute through WriteDataSource
@@ -601,172 +669,192 @@ async function createReceipt(username, data) {
 
 // ─── PUBLIC: updateReceipt ─────────────────────────────────────────────────────
 
+function _receiptCreationIdentity(row, receiptDate) {
+  return JSON.stringify({
+    net: Number(row.net) || 0,
+    sarf: Number(row.sarf) || 0,
+    office: String(row.office || '').trim(),
+    date: row.date || receiptDate || null,
+  });
+}
+
+function _receiptPaymentIdentity(row, receiptDate) {
+  return JSON.stringify({
+    payment_status: row.payment_status === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID,
+    net: Number(row.net) || 0,
+    sarf: Number(row.sarf) || 0,
+    vehicle_id: String(row.vehicle_id || ''),
+    office: String(row.office || '').trim(),
+    date: row.date || receiptDate || null,
+  });
+}
+
 async function updateReceipt(username, id, data) {
   if (!username) throw new Error('[FinancialService:update] username is required.');
-  if (!id)       throw new Error('[FinancialService:update] id is required.');
+  if (!id) throw new Error('[FinancialService:update] id is required.');
 
   const clean = _validate(data);
-
-  // Build updated Receipt header
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, id);
-
-  // Build updated ReceiptRow entities
-  const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
-
-  // Discover only missing routes from the replacement rows; existing routes
-  // retain their manually managed prices.
-  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, newReceiptRows);
-
-  // Assemble the full persistence record ONCE (Update semantics:
-  // notes is only patched when provided).
+  const nextRows = _buildReceiptRowEntities(clean.rows, id);
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
   };
+  const existingRows = await _getExistingReceiptRows(id);
+  const existingById = new Map(existingRows.map(row => [String(row.row_id), row]));
+  const nextById = new Map(nextRows.map(row => [String(row.row_id), row]));
+  if (nextById.size !== nextRows.length) {
+    throw new Error('[FinancialService:update] duplicate receipt row_id in edit payload.');
+  }
 
-  // Retrieve existing ReceiptRows (they must be REPLACED, not appended —
-  // new row entities get fresh row_ids on every edit, so failing to delete
-  // the old set would duplicate every karta in receipt_rows).
-  const existingReceiptRows = await _getExistingReceiptRows(id);
-
-  // Payment reconciliation (atomic with the row replacement below):
-  // replacement issues fresh row UUIDs, and every posting is linked to its
-  // row UUID — so each paid OLD row's ACTIVE postings reverse into audit and
-  // each paid NEW row posts exactly once. Unchanged paid rows therefore have
-  // ZERO net balance effect; changed vehicle/company/الصافي/الصرف rows are
-  // safely adjusted (old effect reversed, new effect posted) — never
-  // duplicated, never lost.
-  const paymentReverseCommands = [];
-  for (const oldRow of existingReceiptRows) {
-    const active = await _getActivePaymentPostings(oldRow.row_id);
-    if (active.length > 0) {
-      paymentReverseCommands.push(..._paymentReverseCommands(active, username));
+  // A row added during an edit is still a new receipt row and therefore starts
+  // unpaid. Existing rows retain their persisted payment lifecycle status.
+  for (const nextRow of nextRows) {
+    if (!existingById.has(String(nextRow.row_id))) {
+      nextRow.payment_status = PAYMENT_STATUS.UNPAID;
     }
+  }
+
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, nextRows);
+  const creationReverseCommands = [];
+  const paymentReverseCommands = [];
+  const creationAddRows = [];
+  const paymentAddRows = [];
+
+  for (const oldRow of existingRows) {
+    const rowKey = String(oldRow.row_id);
+    const nextRow = nextById.get(rowKey) || null;
+    const creationChanged = !nextRow
+      || _receiptCreationIdentity(oldRow, receiptHeader.receipt_date)
+        !== _receiptCreationIdentity(nextRow, receiptRecord.receipt_date);
+    const paymentChanged = !nextRow
+      || _receiptPaymentIdentity(oldRow, receiptHeader.receipt_date)
+        !== _receiptPaymentIdentity(nextRow, receiptRecord.receipt_date);
+
+    if (creationChanged) {
+      const creation = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
+      if (creation.length > 0) {
+        creationReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(creation, username));
+      }
+      if (nextRow) creationAddRows.push(nextRow);
+    }
+
+    if (paymentChanged) {
+      const paymentPair = await _getReceiptPaymentPair(oldRow.row_id);
+      const oldPaid = oldRow.payment_status === PAYMENT_STATUS.PAID;
+      if (oldPaid) {
+        _assertCompleteReceiptPaymentPair(paymentPair, 'updateReceipt', oldRow);
+        paymentReverseCommands.push(..._receiptPaymentReverseCommands(paymentPair.activePaymentLegs, username));
+      } else {
+        _assertNoActiveReceiptPaymentEffects(paymentPair, 'updateReceipt', oldRow.row_id);
+      }
+      if (nextRow?.payment_status === PAYMENT_STATUS.PAID) paymentAddRows.push(nextRow);
+    }
+  }
+
+  for (const nextRow of nextRows) {
+    if (!existingById.has(String(nextRow.row_id))) {
+      creationAddRows.push(nextRow);
+    }
+  }
+
+  const creationAddCommands = [];
+  for (const row of creationAddRows) {
+    creationAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
+      username, row, receiptRecord.receipt_date
+    )));
   }
   const paymentAddCommands = [];
-  for (const newRow of newReceiptRows) {
-    if (newRow.payment_status === PAYMENT_STATUS.PAID) {
-      paymentAddCommands.push(...(await _paymentAddCommands(username, newRow, receiptRecord.receipt_date)));
-    }
-  }
-
-  // Row replacement mints fresh row UUIDs. Reverse every old receipt-created
-  // company charge into audit history, then create exactly one charge for every
-  // new row with a resolved company.
-  const companyChargeReverseCommands = [];
-  for (const oldRow of existingReceiptRows) {
-    const active = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
-    if (active.length > 0) {
-      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(active, username));
-    }
-  }
-  const companyChargeAddCommands = [];
-  for (const newRow of newReceiptRows) {
-    companyChargeAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
-      username, newRow, receiptRecord.receipt_date
+  for (const row of paymentAddRows) {
+    paymentAddCommands.push(...(await _receiptPaymentAddCommands(
+      username, row, receiptRecord.receipt_date
     )));
   }
 
-  // Prepare PersistenceCommands via ReceiptRepository
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
     receiptRecord, { username }, PersistenceCommandType.UPDATE
   );
+  const rowCommands = [];
+  for (const oldRow of existingRows) {
+    if (!nextById.has(String(oldRow.row_id))) {
+      rowCommands.push(ReceiptRepository.prepareReceiptRowOperations(
+        [{ row_id: oldRow.row_id }], { username }, PersistenceCommandType.DELETE
+      )[0]);
+    }
+  }
+  for (const nextRow of nextRows) {
+    const type = existingById.has(String(nextRow.row_id))
+      ? PersistenceCommandType.UPDATE
+      : PersistenceCommandType.ADD;
+    rowCommands.push(ReceiptRepository.prepareReceiptRowOperations([nextRow], { username }, type)[0]);
+  }
 
-  const deleteRowCommands = existingReceiptRows.map(row =>
-    ReceiptRepository.prepareReceiptRowOperations(
-      [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
-    )[0]
-  );
-
-  const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
-
-  // Combine all commands: header update → replace rows → reverse/recreate both
-  // independent financial namespaces in one atomic write batch.
   const allCommands = [
     receiptCommand,
-    ...deleteRowCommands,
-    ...receiptRowCommands,
+    ...rowCommands,
     ...loadPriceCommands,
+    ...creationReverseCommands,
     ...paymentReverseCommands,
-    ...companyChargeReverseCommands,
-    ...companyChargeAddCommands,
+    ...creationAddCommands,
     ...paymentAddCommands,
   ];
 
-  // The active-Karta guard and the full receipt mutation share one IDB
-  // transaction. Once the guard observes no active settlement for these rows,
-  // no concurrent Karta settlement can survive against a completed replacement.
   const results = await DB.transaction(async (tx) => {
     const currentRows = await _getExistingReceiptRows(id, tx);
-    _assertReceiptRowSetMatches(existingReceiptRows, currentRows, 'updateReceipt');
+    _assertReceiptRowSetMatches(existingRows, currentRows, 'updateReceipt');
     await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'updateReceipt');
     return WriteDataSource.executeWithinTransaction(tx, allCommands);
   }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices'] });
 
-  const receipt = Money.decimalizeRecord(results[0]); // First command is the header update
-
-  return { receipt };
+  return { receipt: Money.decimalizeRecord(results[0]) };
 }
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
 
 async function deleteReceipt(username, id) {
   if (!username) throw new Error('[FinancialService:delete] username is required.');
-  if (!id)       throw new Error('[FinancialService:delete] id is required.');
+  if (!id) throw new Error('[FinancialService:delete] id is required.');
 
-  // Prepare delete command for Receipt via ReceiptRepository (Delete carries id only)
-  const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
-    { id },
-    { username },
-    PersistenceCommandType.DELETE
-  );
-
-  // Prepare delete commands for ReceiptRows
   const existingRows = await _getExistingReceiptRows(id);
-
-  // Payment reconciliation: deleting a receipt whose rows were paid reverses
-  // exactly those postings (is_reversed audit, never hard delete) inside the
-  // same atomic execute — a deleted row can never leave a live effect behind.
-  const paymentReverseCommands = [];
+  // Paid-row deletion is intentionally blocked pending explicit business
+  // approval of the final paid-delete company accounting rule. This prevents a
+  // namespace migration from silently choosing that accounting interpretation.
   for (const row of existingRows) {
-    const active = await _getActivePaymentPostings(row.row_id);
-    if (active.length > 0) {
-      paymentReverseCommands.push(..._paymentReverseCommands(active, username));
+    const paymentPair = await _getReceiptPaymentPair(row.row_id);
+    if (row.payment_status === PAYMENT_STATUS.PAID || paymentPair.state !== 'none') {
+      throw new Error(
+        '[FinancialService:deleteReceipt] paid receipt row deletion requires approved lifecycle accounting. '
+        + 'Change the row to unpaid first, then delete the receipt.'
+      );
     }
   }
 
-  const companyChargeReverseCommands = [];
-  for (const row of existingRows) {
-    const active = await _getActiveReceiptRowCompanyCharges(row.row_id);
-    if (active.length > 0) {
-      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(active, username));
-    }
-  }
-
+  const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
+    { id }, { username }, PersistenceCommandType.DELETE
+  );
   const receiptRowDeleteCommands = existingRows.map(row =>
     ReceiptRepository.prepareReceiptRowOperations(
       [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
     )[0]
   );
+  const creationReverseCommands = [];
+  for (const row of existingRows) {
+    const creation = await _getActiveReceiptRowCompanyCharges(row.row_id);
+    if (creation.length > 0) {
+      creationReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(creation, username));
+    }
+  }
 
-  // Combine all commands: delete rows/header and reverse both independent
-  // receipt-row financial namespaces atomically.
-  const allCommands = [
-    ...receiptRowDeleteCommands,
-    receiptDeleteCommand,
-    ...paymentReverseCommands,
-    ...companyChargeReverseCommands,
-  ];
-
-  // Read active Karta state and execute row/header mutation in the same IDB
-  // transaction so delete cannot leave an active settlement referencing a
-  // soft-deleted receipt row.
   await DB.transaction(async (tx) => {
     const currentRows = await _getExistingReceiptRows(id, tx);
     _assertReceiptRowSetMatches(existingRows, currentRows, 'deleteReceipt');
     await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'deleteReceipt');
-    await WriteDataSource.executeWithinTransaction(tx, allCommands);
+    await WriteDataSource.executeWithinTransaction(tx, [
+      ...receiptRowDeleteCommands,
+      receiptDeleteCommand,
+      ...creationReverseCommands,
+    ]);
   }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER] });
 
   return { id, deleted: true };
@@ -885,7 +973,7 @@ function _monthlyReportCategory(entry) {
   const hasMaintenance = String(entry.maintenance_type || '').trim().length > 0;
 
   if (type === 'deposit') {
-    if (effect === 'receipt_row_payment' && referenceType === 'receipt_row_payment') return 'receipt_row_payment';
+    if (effect === RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT && referenceType === RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE) return 'receipt_row_payment';
     if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_deposit';
     if (referenceType === 'driver_deposit') return 'historical_driver_deposit';
     return 'other';
@@ -1113,7 +1201,7 @@ async function getOfficeBalance(office_id) {
   const active = entries
     .filter(e => e.deleted_at === null
       && e.vehicle_id === null
-      && ((e.reference_type === PAYMENT_REF_TYPE && e.effect === PAYMENT_EFFECT)
+      && ((e.reference_type === RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE && e.effect === RECEIPT_ROW_PAYMENT_COMPANY_EFFECT)
         || (e.reference_type === RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE && e.effect === RECEIPT_ROW_COMPANY_CHARGE_EFFECT)
         || (e.reference_type === MANUAL_OFFICE_REF_TYPE && e.effect === MANUAL_OFFICE_EFFECT)))
     .sort((a, b) => {
@@ -1586,10 +1674,6 @@ async function getDriverBalance(driver_id) {
 
 
 // ─── DRIVER KARTA SETTLEMENT (Phase 6B) ──────────────────────────────────────
-
-const PAYMENT_STATUS = Object.freeze({ UNPAID: 'unpaid', PAID: 'paid' }); // receipt_rows.payment_status whitelist
-const PAYMENT_EFFECT   = 'receipt_row_payment'; // effect tag: exactly one ACTIVE posting set per receipt row UUID
-const PAYMENT_REF_TYPE = 'receipt_row_payment'; // reference_type tag: reference_id = the receipt row's stable UUID
 
 const KARTA_REF_TYPE = 'receipt_row';
 const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
@@ -2190,51 +2274,70 @@ async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
   if (!rowKey) throw new Error('[FinancialService:setReceiptRowPaymentStatus] row_id is required.');
   const target = targetStatus === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID;
 
-  const row = await ReceiptRepository.getRowById(rowKey);
-  if (!row || row.deleted_at !== null) {
-    throw new Error('[FinancialService:setReceiptRowPaymentStatus] receipt row not found.');
-  }
-  const current = row.payment_status === PAYMENT_STATUS.PAID
-    ? PAYMENT_STATUS.PAID
-    : PAYMENT_STATUS.UNPAID;
+  return DB.transaction(async (tx) => {
+    const row = await ReceiptRepository.getRowById(rowKey, { tx });
+    if (!row || row.deleted_at !== null) {
+      throw new Error('[FinancialService:setReceiptRowPaymentStatus] receipt row not found.');
+    }
+    const current = row.payment_status === PAYMENT_STATUS.PAID
+      ? PAYMENT_STATUS.PAID
+      : PAYMENT_STATUS.UNPAID;
+    const paymentPair = await _getReceiptPaymentPair(rowKey, { tx });
 
-  // ── no-transition guard: unchanged status ⇒ ZERO financial operation ──
-  if (current === target) {
-    return { row_id: rowKey, payment_status: current, changed: false };
-  }
+    if (current === target) {
+      if (target === PAYMENT_STATUS.PAID) {
+        _assertCompleteReceiptPaymentPair(paymentPair, 'setReceiptRowPaymentStatus', row);
+      } else {
+        _assertNoActiveReceiptPaymentEffects(paymentPair, 'setReceiptRowPaymentStatus', rowKey);
+      }
+      return {
+        row_id: rowKey,
+        receipt_id: row.receipt_id,
+        payment_status: current,
+        changed: false,
+        vehicle_id: row.vehicle_id,
+        office_id: target === PAYMENT_STATUS.PAID
+          ? paymentPair.companyLegs[0].client_id
+          : null,
+      };
+    }
 
-  if (target === PAYMENT_STATUS.PAID) {
-    // Idempotency: if an ACTIVE posting set already exists for this row UUID,
-    // never create another one (this also answers «was the posting created?»).
-    const active = await _getActivePaymentPostings(rowKey);
-    const legs = active.length > 0
-      ? []
-      : _paymentLegPayloads(username, row, await _resolvePaymentTargets(row), null);
+    if (target === PAYMENT_STATUS.PAID) {
+      _assertNoActiveReceiptPaymentEffects(paymentPair, 'setReceiptRowPaymentStatus', rowKey);
+      const targets = await _resolveReceiptPaymentTargets(row, { tx });
+      const legs = _buildReceiptPaymentLegs(username, row, targets, null);
+      await tx.runOps([
+        ...legs.map(payload => ({ op: 'add', store: STORE.LEDGER, payload })),
+        { op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.PAID } },
+      ]);
+      return {
+        row_id: rowKey,
+        receipt_id: row.receipt_id,
+        payment_status: PAYMENT_STATUS.PAID,
+        changed: true,
+        vehicle_id: targets.vehicle.id,
+        office_id: targets.office.id,
+      };
+    }
 
-    await DB.transaction(async (tx) => {
-      const ops = legs.map(payload => ({ op: 'add', store: STORE.LEDGER, payload }));
-      ops.push({ op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.PAID } });
-      await tx.runOps(ops);
-    }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
-  } else {
-    // paid → unpaid: reverse the exact previously created ACTIVE postings.
-    await DB.transaction(async (tx) => {
-      const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowKey);
-      const active = entries.filter(e =>
-        e.reference_type === PAYMENT_REF_TYPE &&
-        e.effect === PAYMENT_EFFECT &&
-        e.is_reversed === false &&
-        e.deleted_at === null
-      );
-      const now = DateUtils.nowLocal();
-      const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-      const ops = active.map(e => ({ op: 'update', store: STORE.LEDGER, id: e.id, patch: reversePatch }));
-      ops.push({ op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.UNPAID } });
-      await tx.runOps(ops);
-    }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
-  }
-
-  return { row_id: rowKey, payment_status: target, changed: true };
+    _assertCompleteReceiptPaymentPair(paymentPair, 'setReceiptRowPaymentStatus', row);
+    const now = DateUtils.nowLocal();
+    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    await tx.runOps([
+      ...paymentPair.activePaymentLegs.map(entry => ({
+        op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch,
+      })),
+      { op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.UNPAID } },
+    ]);
+    return {
+      row_id: rowKey,
+      receipt_id: row.receipt_id,
+      payment_status: PAYMENT_STATUS.UNPAID,
+      changed: true,
+      vehicle_id: row.vehicle_id,
+      office_id: paymentPair.companyLegs[0].client_id,
+    };
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'offices'] });
 }
 
 export const FinancialService = Object.freeze({

@@ -140,7 +140,7 @@ await addLegacy({
 });
 await addLegacy({
   ...legacyVehicle('receipt-payment-reference'),
-  type: 'deposit', effect: 'receipt_row_payment', reference_type: 'receipt_row_payment', reference_id: 'receipt-row-2', amount: 9300,
+  type: 'deposit', effect: 'receipt_row_payment_vehicle', reference_type: 'receipt_row_payment_vehicle', reference_id: 'receipt-row-2', amount: 9300,
 });
 
 const before = await DB.findByFields('vehicle_ledger', {}, { includeDeleted: true });

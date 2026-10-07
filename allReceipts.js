@@ -1317,7 +1317,14 @@ async function _handleRowPaymentStatusChange(select) {
   if (!rowId) return;
   select.disabled = true;
   try {
-    await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+    const result = await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+    if (result.changed) {
+      // FinancialService is DOM-free. Notify read models only after its
+      // transaction committed and include authoritative affected identities.
+      window.dispatchEvent(new CustomEvent('receipt-financial:changed', { detail: result }));
+      // Existing dashboard/all-receipts consumers already use this domain event.
+      window.dispatchEvent(new CustomEvent('receipts:changed', { detail: result }));
+    }
   } catch (err) {
     alert(err?.message || '❌ تعذر تحديث حالة الصرف');
   }

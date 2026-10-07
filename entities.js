@@ -213,6 +213,9 @@ window.OwnersModule = OwnersModule;
 let _ownersActiveSubTab = 'vehicles';
 let _selectedClient = null;
 let _selectedVehicle = null;
+// Monotonic request token prevents a slower previous vehicle-details load from
+// overwriting a newer selected vehicle render.
+let _vehicleDetailsRequestVersion = 0;
 let _editingDriverId = null;
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 function _getCurrentDriverId() {
@@ -2179,10 +2182,11 @@ async function _renderOwnerVehicles(client) {
 }
 
 async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
+  const requestVersion = ++_vehicleDetailsRequestVersion;
   const client = await _getClient('owner', id);
-  if (!client) return;
+  if (!client || requestVersion !== _vehicleDetailsRequestVersion) return;
   const vehicle = await _resolveDetailVehicle(client, vehicleId);
-  if (!vehicle) return;
+  if (!vehicle || requestVersion !== _vehicleDetailsRequestVersion) return;
 
   _selectedClient = client;
   _selectedVehicle = vehicle;
@@ -2196,13 +2200,15 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
   }));
 
   const financials = await _getVehicleDetailsFinancials(vehicle.id);
+  if (requestVersion !== _vehicleDetailsRequestVersion) return;
   const ledgerHtml = _renderLedger(client, financials.ledger);
   const maintenanceHtml = await _renderMaintenanceTab(financials.ledger);
   const monthlyReportHtml = _renderVehicleMonthlyReportTab(vehicle);
   const relatedHtml = await _renderOwnerVehicles(client);
+  if (requestVersion !== _vehicleDetailsRequestVersion) return;
 
   const page = document.getElementById('ownerDetailsPage');
-  if (!page) return;
+  if (!page || requestVersion !== _vehicleDetailsRequestVersion) return;
   const vehicleDetailsFocus = _captureVehicleDetailsFocus(page);
 
   page.innerHTML = `
@@ -2792,6 +2798,17 @@ window.addEventListener('owners:changed', () => {
   if (detailsPage && !detailsPage.classList.contains('hidden') && _selectedClient?.type === 'owner') {
     showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
   }
+  loadOwners();
+});
+
+window.addEventListener('receipt-financial:changed', (event) => {
+  const vehicleId = String(event.detail?.vehicle_id || '');
+  const detailsPage = document.getElementById('ownerDetailsPage');
+  if (vehicleId && detailsPage && !detailsPage.classList.contains('hidden')
+    && String(_selectedVehicle?.id || '') === vehicleId && _selectedClient?.type === 'owner') {
+    showOwnerDetails(_selectedClient.id, 'owner', vehicleId);
+  }
+  // The list projection always rebuilds balances from vehicle_ledger.
   loadOwners();
 });
 

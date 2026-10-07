@@ -104,7 +104,7 @@ function _normalizeRow(row) {
   if (row._type === ROW_TYPES.SEPARATOR) {
     return {
       ...row,
-      _rowId      : row._rowId || _uuid(),
+      _rowId      : row._rowId || row.row_id || _uuid(),
       _type       : ROW_TYPES.SEPARATOR,
       vehicleName : normalizeOptionalString(row.vehicleName),
       subtotal    : Number(row.subtotal) || 0,
@@ -116,7 +116,8 @@ function _normalizeRow(row) {
 
   return {
     ...row,
-    _rowId       : row._rowId || _uuid(),
+    // Preserve the persisted row lifecycle identity on ordinary receipt edits.
+    _rowId       : row._rowId || row.row_id || _uuid(),
     _type        : row._type  || ROW_TYPES.DATA,
     owner_id     : row.owner_id != null ? String(row.owner_id).trim() : null,
     owner_name   : normalizeOptionalString(row.owner_name),
@@ -2617,6 +2618,9 @@ async function collectReceiptRows() {
 
     receiptRows.push({
       _type        : 'data',
+      // Existing edit rows retain their immutable lifecycle ID; new form rows
+      // intentionally omit it and receive a new UUID during normalization.
+      ...(row.dataset.rowId ? { row_id: row.dataset.rowId } : {}),
       payment_status: row.dataset.paymentStatus === 'paid' ? 'paid' : 'unpaid',
       owner_id     : String(finalOwner.id),
       owner_name   : finalOwner.name,
@@ -3132,9 +3136,9 @@ async function loadReceiptForEdit(receiptData) {
     const tr = document.createElement('tr');
     tr.innerHTML = _buildRowHTML();
     tbody.appendChild(tr);
-    // Payment status round-trips invisibly through the form: re-saving an
-    // edited paid row keeps it paid (its posting is reconciled, never lost);
-    // legacy rows without the field default to unpaid.
+    // Preserve immutable row identity and payment state through ordinary edits.
+    // FinancialService applies creation/payment lifecycle reversals separately.
+    tr.dataset.rowId = String(rowData.row_id || '');
     tr.dataset.paymentStatus = rowData.payment_status === 'paid' ? 'paid' : 'unpaid';
 
     // Bridge persisted vocabulary (cents) → UI field values (decimals)

@@ -108,7 +108,8 @@ const manualRefs = movements
 ok(manualRefs.join(',') === [deposit.reference_id, withdrawal.reference_id].sort().join(','),
   'both manual movements appear in the existing vehicle movement projection');
 ok(movements.some(entry => entry.reference_id === receiptRow.row_id
-  && entry.reference_type === 'receipt_row_payment'),
+  && entry.reference_type === 'receipt_row_payment_vehicle'
+  && entry.effect === 'receipt_row_payment_vehicle'),
   'existing receipt-row payment movement remains visible alongside manual movements');
 
 // A fresh FinancialService module instance reads the same persisted IndexedDB

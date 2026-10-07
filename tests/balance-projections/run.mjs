@@ -105,7 +105,8 @@ ok(firstVehicleEntries.length === 1 && firstVehicleEntries[0].amount === 11
   'vehicle movement projection exposes the existing net deposit under row UUID r1');
 ok(firstOffice.entries.length === 3
   && firstOffice.entries.filter(entry => entry.reference_type === 'receipt_row_company_charge').length === 2
-  && firstOffice.entries.some(entry => entry.reference_type === 'receipt_row_payment'
+  && firstOffice.entries.some(entry => entry.reference_type === 'receipt_row_payment_company'
+    && entry.effect === 'receipt_row_payment_company'
     && entry.amount === 18 && entry.reference_id === r1.row_id && entry.vehicle_id === null),
   'company projection exposes both receipt-created charges and the independent paid-row net+sarf leg');
 

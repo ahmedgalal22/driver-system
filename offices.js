@@ -1286,6 +1286,12 @@ function attachOfficesPageListeners() {
   window.addEventListener('offices:changed', () => {
     loadOffices();
   });
+
+  window.addEventListener('receipt-financial:changed', () => {
+    // Company balance remains the existing ledger projection; reload only after
+    // the receipt payment transaction has committed.
+    loadOffices();
+  });
 }
 
 

@@ -69,7 +69,7 @@ await addLedger({ type: 'deposit', amount: 10000, date: '2026-08-01', reference_
 await addLedger({ type: 'withdraw', amount: 3000, date: '2026-08-20', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance' });
 
 // September inflows = 3,910 cents.
-await addLedger({ type: 'deposit', amount: 2000, date: '2026-09-01', effect: 'receipt_row_payment', reference_type: 'receipt_row_payment', reference_id: uuid(), applied_at: '2026-09-01T09:00:00' });
+await addLedger({ type: 'deposit', amount: 2000, date: '2026-09-01', effect: 'receipt_row_payment_vehicle', reference_type: 'receipt_row_payment_vehicle', reference_id: uuid(), applied_at: '2026-09-01T09:00:00' });
 await addLedger({ type: 'deposit', amount: 1000, date: '2026-09-02', effect: 'manual_vehicle_balance', reference_type: 'manual_vehicle_balance', reference_id: uuid() });
 await addLedger({ type: 'deposit', amount: 500, date: '2026-09-03', reference_type: 'driver_deposit', reference_id: 'legacy-deposit' });
 await addLedger({ type: 'deposit', amount: 300, date: '2026-09-04', reference_type: 'other-deposit' });
