@@ -11,6 +11,7 @@ import { ExcelService } from './excelService.js';
 import { DateUtils } from './dateUtils.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
+import { ReceiptRepository } from './services/receiptRepository.js';
 
 
 // ========================================
@@ -217,6 +218,7 @@ let _selectedVehicle = null;
 // overwriting a newer selected vehicle render.
 let _vehicleDetailsRequestVersion = 0;
 let _editingDriverId = null;
+let _editingDriverPreviousName = '';
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 function _getCurrentDriverId() {
   try {
@@ -1177,6 +1179,7 @@ async function _saveKartaSettlementPriceModal() {
 
 function _openDriverModal(driver = null) {
   _editingDriverId = driver ? driver.id : null;
+  _editingDriverPreviousName = driver?.name || '';
   let modal = document.getElementById('driverModal');
   if (!modal) {
     const div = document.createElement('div');
@@ -1241,19 +1244,26 @@ async function _saveDriver() {
 
   const username = _currentUsername();
   try {
-    if (_editingDriverId) {
-      await ClientRepository.updateDriver(_editingDriverId, {
+    const savedDriver = _editingDriverId
+      ? await ClientRepository.updateDriver(_editingDriverId, {
         name,
         phone: phone || null,
-      }, { username });
-    } else {
-      await ClientRepository.saveDriver({
+      }, { username })
+      : await ClientRepository.saveDriver({
         username,
         name,
         phone: phone || null,
       }, { username });
-    }
 
+    // Narrow post-persistence notification: receipt autocomplete owns the
+    // in-place cache refresh; FinancialService and page navigation stay out of it.
+    window.dispatchEvent(new CustomEvent('drivers:changed', {
+      detail: {
+        driverId: String(savedDriver.id),
+        driverName: savedDriver.name || name,
+        previousName: _editingDriverPreviousName,
+      },
+    }));
     document.getElementById('driverModal')?.classList.add('hidden');
     await loadOwners();
   } catch (err) {
@@ -1271,10 +1281,11 @@ async function _getClient(type, id) {
  * remains available solely for the separate «المركبات» management tab.
  */
 async function _getVehicleDetailsFinancials(vehicleId) {
-  const [balance, ledger] = await Promise.all([
+  const [balance, rawLedger] = await Promise.all([
     FinancialService.rebuildVehicleBalance(vehicleId),
     FinancialService.getVehicleLedger(vehicleId),
   ]);
+  const ledger = await _resolveVehicleLedgerPresentation(rawLedger);
   return {
     balance: balance.balance,
     ledger,
@@ -1323,6 +1334,9 @@ const MAINTENANCE_TYPE_SUGGESTIONS = Object.freeze([
   'جاز', 'فلاتر', 'زيت', 'كاوتش', 'ميكانيكي', 'اكسسوارت',
 ]);
 let _vehicleDetailsTab = 'financial';
+let _vehicleFinancialEntriesCache = [];
+let _vehicleFinancialSearchQuery = '';
+let _vehicleFinancialSearchVehicleId = null;
 let _maintenanceEntriesCache = [];
 let _maintenanceSearchQuery = '';
 let _editingMaintenanceReferenceId = null;
@@ -1571,8 +1585,6 @@ function _renderVehicleMonthlyReportContent(vehicle) {
         <td>${_escapeMaintenanceText(movement.date || '—')}</td>
         <td>${_escapeMaintenanceText(_monthlyReportCategoryLabel(movement.category))}</td>
         <td>${_escapeMaintenanceText(_monthlyReportTypeLabel(movement.type))}</td>
-        <td>${_escapeMaintenanceText(_monthlyReportReference(movement))}</td>
-        <td>${_escapeMaintenanceText(movement.batchId || '—')}</td>
         <td class="vehicle-monthly-report__amount--in">${isDeposit ? _monthlyReportCents(movement.amountCents) : '—'}</td>
         <td class="vehicle-monthly-report__amount--out">${!isDeposit ? _monthlyReportCents(movement.amountCents) : '—'}</td>
         <td class="${_balanceClass(Money.toDecimal(movement.runningBalanceCents))}">${_monthlyReportCents(movement.runningBalanceCents)}</td>
@@ -1587,8 +1599,8 @@ function _renderVehicleMonthlyReportContent(vehicle) {
       <header><h4>الحركات الشهرية</h4>${reconciliationNotice}</header>
       <div class="table-wrapper vehicle-monthly-report__table-wrap">
         <table class="table vehicle-monthly-report__table">
-          <thead><tr><th>التاريخ</th><th>البيان</th><th>النوع</th><th>المرجع</th><th>رقم الدفعة</th><th>المبلغ الداخل</th><th>المبلغ الخارج</th><th>الرصيد الجاري</th><th>ملاحظة</th><th>تفاصيل إضافية</th></tr></thead>
-          <tbody>${movementRows || '<tr><td colspan="10" class="vehicle-details-empty-state">لا توجد حركات مالية صالحة لهذه المركبة خلال الشهر المحدد.</td></tr>'}</tbody>
+          <thead><tr><th>التاريخ</th><th>البيان</th><th>النوع</th><th>المبلغ الداخل</th><th>المبلغ الخارج</th><th>الرصيد الجاري</th><th>ملاحظة</th><th>تفاصيل إضافية</th></tr></thead>
+          <tbody>${movementRows || '<tr><td colspan="8" class="vehicle-details-empty-state">لا توجد حركات مالية صالحة لهذه المركبة خلال الشهر المحدد.</td></tr>'}</tbody>
         </table>
       </div>
     </section>
@@ -1914,11 +1926,88 @@ async function _saveVehicleMaintenance() {
   }
 }
 
-// ── رصيد العميل — existing vehicle_ledger read projection ─────────────────
-// The existing layout remains intact. Entries are read-only movements from the
-// same vehicle_ledger records used by rebuildVehicleBalance; the date controls
-// remain visual-only because no client-ledger filtering workflow exists.
+// ── Vehicle financial movements — read-only presentation ─────────────────
+// Ledger rows remain the existing vehicle_ledger projection. Receipt-payment
+// company names are resolved for display only; no ledger row is modified.
+async function _resolveVehicleLedgerPresentation(entries) {
+  const receiptPaymentRowIds = [...new Set((entries || [])
+    .filter(entry => entry.reference_type === 'receipt_row_payment_vehicle' && entry.reference_id)
+    .map(entry => String(entry.reference_id)))];
+  const rows = await Promise.all(receiptPaymentRowIds.map(async (rowId) => {
+    try { return await ReceiptRepository.getRowById(rowId); } catch (_) { return null; }
+  }));
+  const companyByRowId = new Map(rows
+    .filter(row => row?.row_id && String(row.office || '').trim())
+    .map(row => [String(row.row_id), String(row.office).trim()]));
+
+  return (entries || []).map(entry => entry.reference_type === 'receipt_row_payment_vehicle'
+    ? { ...entry, receipt_payment_company_name: companyByRowId.get(String(entry.reference_id || '')) || '' }
+    : entry);
+}
+
+function _vehicleLedgerDescription(entry) {
+  if (entry?.reference_type === 'receipt_row_payment_vehicle') {
+    const companyName = String(entry.receipt_payment_company_name || '').trim();
+    return companyName ? `صرف كارتة - ${companyName}` : 'صرف كارتة - الشركة';
+  }
+  return _ledgerNote(entry);
+}
+
+function _vehicleFinancialSearchHaystack(entry) {
+  return [
+    _dateLabel(entry?.date || entry?.applied_at),
+    entry?.date,
+    entry?.applied_at,
+    _ledgerType(entry?.type),
+    entry?.type,
+    _fmt(entry?.amount),
+    entry?.amount,
+    entry?.vehicle_plate,
+    _vehicleLedgerDescription(entry),
+    entry?.note,
+    entry?.receipt_payment_company_name,
+    entry?.reference_number,
+    entry?.reference_type,
+  ].map(value => String(value ?? '').toLowerCase()).join(' ');
+}
+
+function _filterVehicleFinancialEntries(entries, query = _vehicleFinancialSearchQuery) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  if (!normalizedQuery) return [...(entries || [])];
+  return (entries || []).filter(entry => _vehicleFinancialSearchHaystack(entry).includes(normalizedQuery));
+}
+
+function _renderVehicleFinancialRows(entries) {
+  if (!entries.length) {
+    const hasQuery = String(_vehicleFinancialSearchQuery || '').trim().length > 0;
+    return `
+      <tr>
+        <td colspan="4" class="vehicle-details-empty-state">
+          <span class="vehicle-details-empty-state__icon" aria-hidden="true">▱</span>
+          ${hasQuery ? 'لا توجد حركات مالية مطابقة للبحث' : 'لا توجد حركات مالية للمركبة حتى الآن'}
+        </td>
+      </tr>
+    `;
+  }
+  return entries.map(e => `
+    <tr class="vehicle-details-financial-row vehicle-details-financial-row--${e.type === 'deposit' ? 'deposit' : 'withdraw'}">
+      <td class="vehicle-details-date-cell">${_dateLabel(e.date || e.applied_at)}</td>
+      <td class="vehicle-details-amount-cell">${_fmt(e.amount)}</td>
+      <td class="vehicle-details-strong-cell">${e.vehicle_plate || '-'}</td>
+      <td class="vehicle-details-note-cell">${_escapeMaintenanceText(_vehicleLedgerDescription(e))}</td>
+    </tr>
+  `).join('');
+}
+
+function _refreshVehicleFinancialTable() {
+  const body = document.getElementById('clientLedgerBody');
+  if (!body) return;
+  body.innerHTML = _renderVehicleFinancialRows(_filterVehicleFinancialEntries(_vehicleFinancialEntriesCache));
+}
+
 function _renderLedger(client, ledger = []) {
+  _vehicleFinancialEntriesCache = [...(ledger || [])];
+  const tableRows = _renderVehicleFinancialRows(_filterVehicleFinancialEntries(_vehicleFinancialEntriesCache));
   return `
     <section class="vehicle-details-panel vehicle-financial-panel">
       <header class="vehicle-details-panel-header vehicle-details-panel-header--financial">
@@ -1950,6 +2039,10 @@ function _renderLedger(client, ledger = []) {
           </div>
         </div>
       </header>
+      <div class="vehicle-details-search-wrap">
+        <svg class="vehicle-details-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.2-4.2"/></svg>
+        <input id="vehicleFinancialSearch" type="search" class="input vehicle-details-search-input" aria-label="بحث في الحركات المالية" value="${_escapeMaintenanceText(_vehicleFinancialSearchQuery)}" placeholder="ابحث بالتاريخ أو الحركة أو الشركة أو الملاحظة">
+      </div>
       <div class="table-wrapper vehicle-details-table-wrap">
         <table class="table vehicle-details-table vehicle-details-table--financial">
           <thead>
@@ -1960,23 +2053,7 @@ function _renderLedger(client, ledger = []) {
               <th>ملاحظة</th>
             </tr>
           </thead>
-          <tbody id="clientLedgerBody">
-            ${ledger.length ? ledger.map(e => `
-              <tr class="vehicle-details-financial-row vehicle-details-financial-row--${e.type === 'deposit' ? 'deposit' : 'withdraw'}">
-                <td class="vehicle-details-date-cell">${_dateLabel(e.date || e.applied_at)}</td>
-                <td class="vehicle-details-amount-cell">${_fmt(e.amount)}</td>
-                <td class="vehicle-details-strong-cell">${e.vehicle_plate || '-'}</td>
-                <td class="vehicle-details-note-cell">${_ledgerNote(e)}</td>
-              </tr>
-            `).join('') : `
-              <tr>
-                <td colspan="4" class="vehicle-details-empty-state">
-                  <span class="vehicle-details-empty-state__icon" aria-hidden="true">▱</span>
-                  لا توجد حركات مالية للمركبة حتى الآن
-                </td>
-              </tr>
-            `}
-          </tbody>
+          <tbody id="clientLedgerBody">${tableRows}</tbody>
         </table>
       </div>
     </section>
@@ -2189,6 +2266,11 @@ async function showOwnerDetails(id, type = 'owner', vehicleId = null) {
 
   _selectedClient = client;
   _selectedVehicle = vehicle;
+  const vehicleKey = String(vehicle.id);
+  if (_vehicleFinancialSearchVehicleId !== vehicleKey) {
+    _vehicleFinancialSearchVehicleId = vehicleKey;
+    _vehicleFinancialSearchQuery = '';
+  }
   _ensureVehicleMonthlyReportState(vehicle.id);
 
   sessionStorage.setItem(LAST_PAGE_CTX_KEY, JSON.stringify({
@@ -2785,6 +2867,11 @@ function attachOwnersPageListeners() {
     if (e.target.id === 'vehicleMaintenanceSearch') {
       _maintenanceSearchQuery = e.target.value || '';
       _refreshMaintenanceTable();
+      return;
+    }
+    if (e.target.id === 'vehicleFinancialSearch') {
+      _vehicleFinancialSearchQuery = e.target.value || '';
+      _refreshVehicleFinancialTable();
     }
   });
 

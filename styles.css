@@ -3109,7 +3109,7 @@ input[type="number"] {
 
 .vehicle-details-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   margin: 0 0 1.25rem;
   padding: 0.375rem;
@@ -3120,6 +3120,7 @@ input[type="number"] {
 }
 .vehicle-details-tab {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
   justify-content: center;
   gap: 0.625rem;
@@ -3135,6 +3136,7 @@ input[type="number"] {
   text-align: center;
 }
 .vehicle-details-tab svg { width: 19px; height: 19px; flex: 0 0 auto; }
+.vehicle-details-tab span { min-width: 0; overflow-wrap: anywhere; }
 .vehicle-details-tab:hover { color: #4c1d95; background: #ede9fe; }
 .vehicle-details-tab.active-purple {
   color: #5b21b6;
@@ -3428,6 +3430,7 @@ input[type="number"] {
   .vehicle-details-caption { font-size: 0.73rem; }
   .vehicle-details-tabs { gap: 0.35rem; padding: 0.3rem; }
   .vehicle-details-tab { min-height: 48px; gap: 0.42rem; padding: 0.65rem 0.45rem; font-size: 0.76rem; }
+  .vehicle-details-tab span { line-height: 1.2; }
   .vehicle-details-tab svg { width: 17px; height: 17px; }
   .vehicle-details-panel-header { align-items: flex-start; flex-direction: column; padding: 1rem; }
   .vehicle-details-filter-bar,

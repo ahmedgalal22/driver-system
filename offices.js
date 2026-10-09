@@ -473,7 +473,7 @@ const OfficesModule = Object.freeze({
 let _searchQuery = '';
 let _editingOfficeId = null;
 let _editingOfficeDraft = null;
-let _activeDetailsTab = 'hamola';
+let _activeDetailsTab = 'balance';
 let _detailsOfficeId = null;
 let _hamolaEditId = null;
 let _officeBalanceEntryType = 'deposit';
@@ -723,15 +723,13 @@ function _renderHamolaTable(rows) {
 // read-only FinancialService office projection, including receipt-row-payment
 // company legs and explicit manual office movements.
 async function _resolveOfficeBalanceReferences(entries) {
-  const companyChargeIds = [...new Set((entries || [])
-    .filter(entry => entry.reference_type === 'receipt_row_company_charge'
-      && entry.effect === 'receipt_row_company_charge'
+  const receiptRowIds = [...new Set((entries || [])
+    .filter(entry => (entry.reference_type === 'receipt_row_company_charge'
+      || entry.reference_type === 'receipt_row_payment_company')
       && entry.reference_id)
     .map(entry => String(entry.reference_id)))];
 
-  if (companyChargeIds.length === 0) return entries || [];
-
-  const rows = await Promise.all(companyChargeIds.map(async (rowId) => {
+  const rows = await Promise.all(receiptRowIds.map(async (rowId) => {
     try { return await ReceiptRepository.getRowById(rowId); } catch (_) { return null; }
   }));
   const kartanoByRowId = new Map(rows
@@ -739,11 +737,29 @@ async function _resolveOfficeBalanceReferences(entries) {
     .map(row => [String(row.row_id), String(row.kartano).trim()]));
 
   return (entries || []).map(entry => {
-    const kartano = entry.reference_type === 'receipt_row_company_charge'
-      && entry.effect === 'receipt_row_company_charge'
-      ? kartanoByRowId.get(String(entry.reference_id))
-      : '';
-    return kartano ? { ...entry, reference_display: `إضافة كارتة: ${kartano}` } : entry;
+    const referenceType = String(entry.reference_type || '');
+    const kartano = kartanoByRowId.get(String(entry.reference_id || ''));
+
+    if (referenceType === 'receipt_row_company_charge') {
+      return {
+        ...entry,
+        reference_display: kartano ? `إضافة كارتة: ${kartano}` : 'إضافة كارتة',
+      };
+    }
+    if (referenceType === 'receipt_row_payment_company') {
+      return {
+        ...entry,
+        reference_display: kartano ? `صرف كارتة: ${kartano}` : 'صرف كارتة',
+      };
+    }
+    if (referenceType === 'manual_office_balance') {
+      const note = String(entry.note || '').trim();
+      return {
+        ...entry,
+        reference_display: note ? `حركة يدوية: ${note}` : 'حركة يدوية',
+      };
+    }
+    return { ...entry, reference_display: 'حركة مالية' };
   });
 }
 
@@ -764,6 +780,10 @@ function _renderOfficeBalance(entries) {
     if (entry.type === 'deposit') return Math.abs(amount);
     if (entry.type === 'withdraw') return -Math.abs(amount);
     return amount;
+  }
+
+  function entryReferenceLabel(entry) {
+    return _text(entry.reference_display || 'حركة مالية');
   }
 
   const sorted = entries.slice().sort((a, b) => {
@@ -792,7 +812,7 @@ function _renderOfficeBalance(entries) {
         <td>${entryTypeLabel(entry)}</td>
         <td>${delta < 0 ? '-' : ''}${_fmt(Math.abs(delta))}</td>
         <td>${_fmt(balance)}</td>
-        <td>${_text(entry.reference_display || entry.reference_number || entry.reference_id || '-')}</td>
+        <td>${entryReferenceLabel(entry)}</td>
       </tr>
     `).join('')
     : `<tr><td colspan="5" class="text-center text-muted p-4">لا توجد حركات</td></tr>`;
@@ -897,6 +917,9 @@ async function showOfficeDetails(id) {
   if (!session) return;
   if (!id) throw new Error('[offices-page] office id is required');
 
+  // Opening any company's details starts from the Company Balance tab. Tab
+  // selection is still retained while the current details view stays open.
+  _activeDetailsTab = 'balance';
   _detailsOfficeId = String(id);
   const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
   if (!office) throw new Error('Office not found');
@@ -1200,7 +1223,7 @@ function attachOfficesPageListeners() {
     }
 
     if (target.closest('[data-action="office-back"]')) {
-      _activeDetailsTab = 'hamola';
+      _activeDetailsTab = 'balance';
       _detailsOfficeId = null;
       if (typeof window.showPage === 'function') await window.showPage('officesPage');
       return;

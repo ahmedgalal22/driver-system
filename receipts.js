@@ -1226,9 +1226,10 @@ async function loadOfficesForReceipt() {
 // UI: a lightweight CUSTOM dropdown (see below) suggests drivers — the native
 // <datalist> was replaced: it can't open on focus/click, can't be styled, and
 // its keyboard filtering varies across browsers. The cache below is the single
-// suggestion source; selection still commits the driver NAME as text and the
-// authoritative driver_id is resolved from the store at save time. Unknown
-// names trigger the quick-create prompt at save (never a silent persist).
+// suggestion source; selection commits the driver NAME as text and retains its
+// stable id on the input for in-form identity updates. Manual text is still
+// resolved from the store at save time. Unknown names trigger the quick-create
+// prompt at save (never a silent persist).
 
 // Each entry carries its PRE-NORMALIZED form (built once here, reused on every
 // keystroke — no per-keystroke name re-normalization). norm.text is the
@@ -1286,15 +1287,48 @@ async function _receiptLoadDriverOptions() {
   }
 }
 
-/** Reload drivers from the store into the cache; drop stale row picks. */
-async function _receiptRefreshDriverOptions() {
+/**
+ * Reload drivers from the store into the existing receipt autocomplete cache.
+ * A renamed driver is updated only on form rows carrying that driver's stable
+ * selection id; display-name equality is intentionally never used as identity.
+ */
+async function _receiptRefreshDriverOptions({ driverId = '' } = {}) {
   await _receiptLoadDriverOptions();
   const names = new Set(_receiptDriversCache.map(d => d.name.trim()));
+  const driversById = new Map(_receiptDriversCache.map(d => [String(d.id), d]));
+  const changedDriverId = String(driverId || '');
   document.querySelectorAll('#receiptTableBody .receipt-data').forEach(el => {
-    // Mirrors the old select behavior: a driver deleted from the store can no
-    // longer stay selected — the row falls back to «— بدون سائق —».
+    const selectedDriverId = String(el.dataset.driverId || '');
+    if (selectedDriverId) {
+      const selectedDriver = driversById.get(selectedDriverId);
+      // Mirrors the old select behavior: a deleted driver can no longer stay
+      // selected — the row falls back to «— بدون سائق —».
+      if (!selectedDriver) {
+        el.value = '';
+        delete el.dataset.driverId;
+      } else if (changedDriverId && selectedDriverId === changedDriverId) {
+        el.value = selectedDriver.name;
+      }
+      return;
+    }
+    // A manually typed, non-selected value keeps the prior autocomplete
+    // behavior: only currently known driver names remain after a refresh.
     if (el.value.trim() && !names.has(el.value.trim())) el.value = '';
   });
+  if (_driverAC.open && _driverAC.input) {
+    _driverAC.items = _driverACRankedItems(_driverAC.input.value);
+    _driverAC.active = -1;
+    _driverACRender();
+    _driverACPosition();
+  }
+}
+
+/** Clear an autocomplete selection as soon as its displayed input is edited. */
+function _clearReceiptDriverSelectionOnInput(input) {
+  const selectedDriverId = String(input?.dataset?.driverId || '');
+  if (!selectedDriverId) return;
+  const selectedDriver = _receiptDriversCache.find(d => String(d.id) === selectedDriverId);
+  if (!selectedDriver || input.value !== selectedDriver.name) delete input.dataset.driverId;
 }
 
 /** Display name of the driver picked on a form row ('' when none picked). */
@@ -1487,7 +1521,8 @@ function _driverACMove(delta) {
 function _driverACCommit(item) {
   if (!item || !_driverAC.input) { _driverACClose(); return; }
   const input = _driverAC.input;
-  input.value = item.d.name; // text only — id resolved at save (name → id)
+  input.value = item.d.name;
+  input.dataset.driverId = String(item.d.id); // stable in-form selection identity
   _driverACClose();
   input.focus();
 }
@@ -1576,7 +1611,10 @@ async function _promptCreateDriverForRow(row, driverName) {
   // Auto-select the newly created driver on this row, close the popup, and let
   // the save continue — the user never has to reopen the autocomplete.
   const input = row.querySelector('.receipt-data');
-  if (input) input.value = String(record.name || driverName);
+  if (input) {
+    input.value = String(record.name || driverName);
+    input.dataset.driverId = String(record.id);
+  }
   _driverACClose();
   return record;
 }
@@ -1845,8 +1883,13 @@ function fillFromPreviousRow(newRow) {
     const prevRow = dataRows[dataRows.length - 2];
     const carEl   = newRow.querySelector('.receipt-car');
     const dataEl  = newRow.querySelector('.receipt-data');
-    if (carEl)   carEl.value   = prevRow.querySelector('.receipt-car')?.value   || '';
-    if (dataEl)  dataEl.value  = prevRow.querySelector('.receipt-data')?.value  || '';
+    const prevDataEl = prevRow.querySelector('.receipt-data');
+    if (carEl) carEl.value = prevRow.querySelector('.receipt-car')?.value || '';
+    if (dataEl) {
+      dataEl.value = prevDataEl?.value || '';
+      if (prevDataEl?.dataset.driverId) dataEl.dataset.driverId = prevDataEl.dataset.driverId;
+      else delete dataEl.dataset.driverId;
+    }
   }
 }
 
@@ -2092,12 +2135,14 @@ function fillColumnDown(colIndex) {
   // Find the last row that has a value in this column
   let sourceRowIdx = -1;
   let sourceVal = '';
+  let sourceInp = null;
   for (let i = rows.length - 1; i >= 0; i--) {
     const cell = [...rows[i].querySelectorAll('td')][colIndex];
-    const inp = cell?.querySelector('input, select'); // driver column is a select
+    const inp = cell?.querySelector('input, select');
     if (inp && inp.value.trim() !== '') {
       sourceRowIdx = i;
       sourceVal = inp.value;
+      sourceInp = inp;
       break;
     }
   }
@@ -2112,6 +2157,10 @@ function fillColumnDown(colIndex) {
   const nextInp = nextCell?.querySelector('input, select');
   if (nextInp) {
     nextInp.value = sourceVal;
+    if (sourceInp?.classList.contains('receipt-data')) {
+      if (sourceInp.dataset.driverId) nextInp.dataset.driverId = sourceInp.dataset.driverId;
+      else delete nextInp.dataset.driverId;
+    }
     nextInp.dispatchEvent(new Event('input'));
   }
 }
@@ -3150,6 +3199,8 @@ async function loadReceiptForEdit(receiptData) {
     // Driver: restore the NAME from the driver record (id → name, D3) — the
     // same text the old select displayed; unknown/deleted id → «— بدون سائق —».
     setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');
+    const driverInput = tr.querySelector('.receipt-data');
+    if (driverInput && rowData.driver_id != null) driverInput.dataset.driverId = String(rowData.driver_id);
     // receipt-owner removed from table
     setF('receipt-car',           ui.car);
     setF('receipt-weight',        ui.weight);
@@ -3513,6 +3564,7 @@ document.addEventListener('click', function (e) {
   if (_isDriverRowInput(e.target) && !_driverAC.open) _driverACOpen(e.target);
 });
 document.addEventListener('input', function (e) {
+  if (_isDriverRowInput(e.target)) _clearReceiptDriverSelectionOnInput(e.target);
   // Typing re-ranks the suggestion list (normalized: diacritics / tatweel /
   // extra spaces / case ignored) using the pre-normalized cache — O(drivers)
   // cheap string compares per keystroke, no regex re-normalization.
@@ -3527,6 +3579,11 @@ document.addEventListener('keydown', _driverACKeydown, true); // capture: pre-em
 
 window.addEventListener('owners:changed', () => {
   loadClientsList();
+});
+window.addEventListener('drivers:changed', (event) => {
+  _receiptRefreshDriverOptions(event.detail || {}).catch(err => {
+    console.warn('[receipts] driver autocomplete refresh failed', err);
+  });
 });
 window.addEventListener('offices:changed', () => {
   loadOfficesForReceipt();

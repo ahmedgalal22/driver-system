@@ -54,7 +54,7 @@ await FinancialService.createReceipt(U, {
 });
 await FinancialService.setReceiptRowPaymentStatus(U, rowA.row_id, 'paid');
 const manual = await FinancialService.createManualOfficeBalanceEntry(U, {
-  office_id: OFFICE.id, entry_type: 'deposit', amount: 50, date: '2026-08-10', note: 'حركة يدوية',
+  office_id: OFFICE.id, entry_type: 'deposit', amount: 50, date: '2026-08-10', note: 'إيداع تشغيل',
 });
 
 const balanceData = await FinancialService.getOfficeBalance(OFFICE.id);
@@ -76,27 +76,67 @@ ok(!chargeA.reference_display.includes(rowA.row_id) && !chargeB.reference_displa
 
 const paymentEntry = displayEntries.find(entry => entry.reference_type === 'receipt_row_payment_company');
 const manualEntry = displayEntries.find(entry => entry.reference_id === manual.reference_id);
-ok(!paymentEntry.reference_display && !manualEntry.reference_display,
-  'payment-status and manual company movements retain existing fallback reference behavior');
+ok(paymentEntry.reference_display === 'صرف كارتة: 1258',
+  'receipt payment resolves the related card number instead of exposing the receipt-row UUID');
+ok(manualEntry.reference_display === 'حركة يدوية: إيداع تشغيل',
+  'manual company movement displays its Arabic note instead of the technical reference ID');
+
+const unresolvedEntries = await resolveReferences([
+  { reference_type: 'receipt_row_payment_company', reference_id: 'missing-receipt-row' },
+  { reference_type: 'manual_office_balance', reference_id: 'manual-technical-id', note: '' },
+  { reference_type: 'unknown_reference_type', reference_id: 'raw-technical-id' },
+]);
+ok(unresolvedEntries[0].reference_display === 'صرف كارتة'
+  && unresolvedEntries[1].reference_display === 'حركة يدوية'
+  && unresolvedEntries[2].reference_display === 'حركة مالية',
+  'unresolvable receipt, manual, and unknown references use clear Arabic fallbacks');
 
 const displayRenderer = new Function('_text', '_fmt', '_balanceClass', `
   ${extractFn(SRC, '_renderOfficeBalance')}
   return _renderOfficeBalance;
 `)((value) => value == null ? '' : String(value), (value) => Number(value || 0).toFixed(2), () => '');
 const html = displayRenderer(displayEntries);
-ok(html.includes('إضافة كارتة: 1258') && html.includes('إضافة كارتة: 1260'),
-  'Company Balance table renderer consumes the resolved display reference');
+ok(html.includes('إضافة كارتة: 1258')
+  && html.includes('إضافة كارتة: 1260')
+  && html.includes('صرف كارتة: 1258')
+  && html.includes('حركة يدوية: إيداع تشغيل'),
+  'Company Balance table renderer consumes the Arabic display reference for every supported movement type');
+const fallbackHtml = displayRenderer(unresolvedEntries);
+ok(fallbackHtml.includes('صرف كارتة')
+  && fallbackHtml.includes('حركة يدوية')
+  && fallbackHtml.includes('حركة مالية')
+  && !fallbackHtml.includes('raw-technical-id')
+  && !fallbackHtml.includes('manual-technical-id')
+  && !fallbackHtml.includes('missing-receipt-row'),
+  'renderer never falls back to a raw technical reference ID');
 
+const persistedFields = (entries) => entries.map(entry => ({
+  id: entry.id,
+  amount: entry.amount,
+  reference_type: entry.reference_type,
+  reference_id: entry.reference_id,
+  effect: entry.effect,
+  note: entry.note,
+}));
 const balanceAfterDisplayResolution = await FinancialService.getOfficeBalance(OFFICE.id);
 ok(balanceAfterDisplayResolution.balance === balanceData.balance
   && balanceAfterDisplayResolution.deposit_total === balanceData.deposit_total
   && balanceAfterDisplayResolution.withdraw_total === balanceData.withdraw_total,
   'reference display enrichment does not change Company Balance amounts or calculations');
+ok(JSON.stringify(persistedFields(balanceAfterDisplayResolution.entries))
+  === JSON.stringify(persistedFields(balanceData.entries)),
+  'reference display enrichment does not change persisted ledger identifiers, effects, notes, or amounts');
 
 console.log('\n— source scope —');
-ok(SRC.includes("entry.reference_type === 'receipt_row_company_charge'")
-  && SRC.includes('entry.reference_display || entry.reference_number || entry.reference_id ||'),
-  'reference formatting is scoped only to receipt-created company charges with existing fallback behavior');
+ok(SRC.includes("let _activeDetailsTab = 'balance';")
+  && SRC.includes("_activeDetailsTab = 'balance';\n  _detailsOfficeId = String(id);"),
+  'Company Details opens every office on the Company Balance tab');
+ok(SRC.includes("referenceType === 'receipt_row_company_charge'")
+  && SRC.includes("referenceType === 'receipt_row_payment_company'")
+  && SRC.includes("referenceType === 'manual_office_balance'")
+  && SRC.includes("reference_display: 'حركة مالية'")
+  && SRC.includes("return _text(entry.reference_display || 'حركة مالية');"),
+  'presentation maps every supported company movement type and hides unknown technical IDs');
 
 console.log(failures === 0
   ? '\n✅ ALL COMPANY-CHARGE-REFERENCE ASSERTIONS PASSED'
