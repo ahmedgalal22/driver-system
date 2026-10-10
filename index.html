@@ -140,56 +140,71 @@
 
       <section id="ownerDetailsPage" class="page hidden"></section>
       <section id="driverDetailsPage" class="page hidden">
-        <div class="ent-details-page">
-          <div class="ent-details-header">
-            <button type="button" data-action="back-to-drivers" class="ent-btn-back">← رجوع</button>
-            <h2 id="driverDetailsName" class="ent-details-name">—</h2>
-            <div class="ent-header-actions" aria-label="حركات رصيد السائق">
-              <button type="button" data-action="open-driver-balance-entry" data-entry-type="deposit" class="ent-btn-add" style="background:linear-gradient(135deg,#16a34a,#15803d);">💰 إيداع</button>
-              <button type="button" data-action="open-driver-balance-entry" data-entry-type="withdraw" class="ent-btn-add" style="background:linear-gradient(135deg,#dc2626,#b91c1c);">💸 سحب</button>
+        <div class="driver-details-page">
+          <header class="driver-details-hero">
+            <div class="driver-details-hero__topline">
+              <button type="button" data-action="back-to-drivers" class="btn driver-details-back" aria-label="العودة إلى قائمة السائقين">← <span>رجوع</span></button>
+              <span class="driver-details-badge">👨‍✈️ سائق</span>
             </div>
-            <span class="ent-details-type">سائق</span>
-          </div>
+            <div class="driver-details-hero__content">
+              <span class="driver-details-identity-icon" aria-hidden="true">👨‍✈️</span>
+              <div class="driver-details-identity-copy">
+                <p>تفاصيل السائق</p>
+                <h2 id="driverDetailsName">—</h2>
+                <span class="driver-details-phone">☎ <span id="driverDetailsPhone">—</span></span>
+              </div>
+              <div class="driver-details-actions" aria-label="حركات رصيد السائق">
+                <button type="button" data-action="open-driver-balance-entry" data-entry-type="deposit" class="btn driver-details-action driver-details-action--deposit">💰 إيداع</button>
+                <button type="button" data-action="open-driver-balance-entry" data-entry-type="withdraw" class="btn driver-details-action driver-details-action--withdraw">💸 سحب</button>
+              </div>
+            </div>
+          </header>
 
-          <div class="stat-grid mb-8" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
-            <div class="card">
-              <p class="text-muted text-xs mb-2">رصيد السائق</p>
-              <div id="driverDetailsBalance" class="text-3xl font-bold mb-2">0.00</div>
-              <p class="text-xs text-muted mb-4">رقم الهاتف: <span id="driverDetailsPhone">—</span></p>
+          <section class="driver-details-summary" aria-label="ملخص رصيد السائق">
+            <div class="driver-details-balance-card">
+              <span class="driver-details-balance-card__icon" aria-hidden="true">₪</span>
+              <div>
+                <p>رصيد السائق الحالي</p>
+                <div id="driverDetailsBalance" class="driver-details-balance-value">0.00</div>
+                <span class="driver-details-balance-card__hint">يُحدّث من سجل الحركات النشط</span>
+              </div>
             </div>
-          </div>
+          </section>
 
           <!-- Driver details tabs (Phase 6 — UI separation: kartas vs financial transactions) -->
-          <div class="tabs mb-6" role="tablist">
-            <button type="button" role="tab" id="driverTabBtnKartas" data-action="driver-tab-kartas" class="tab-btn active-purple" aria-selected="true">الكارتات / النماذج</button>
-            <button type="button" role="tab" id="driverTabBtnLedger" data-action="driver-tab-ledger" class="tab-btn" aria-selected="false">الحركات المالية</button>
+          <div class="driver-details-tabs" role="tablist" aria-label="أقسام تفاصيل السائق">
+            <button type="button" role="tab" id="driverTabBtnKartas" data-action="driver-tab-kartas" class="tab-btn driver-details-tab active-purple" aria-selected="true">▦ <span>الكارتات / النماذج</span></button>
+            <button type="button" role="tab" id="driverTabBtnLedger" data-action="driver-tab-ledger" class="tab-btn driver-details-tab" aria-selected="false">▤ <span>الحركات المالية</span></button>
           </div>
 
           <!-- Receipts / Kartas panel -->
-          <div id="driverTabKartas" class="mb-8" role="tabpanel">
-            <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
-              <h3 class="text-lg font-bold">الكارتات</h3>
-              <div class="flex items-center gap-2 flex-wrap">
-                <input id="kartaSearchInput" type="text" class="input input-sm" placeholder="🔍 ابحث في الكارتات..." style="max-width:280px;">
-                <button type="button" id="settleUnsettledKartasBtn" data-action="settle-unsettled-kartas" class="btn btn-primary btn-sm hidden">تسوية عام</button>
+          <div id="driverTabKartas" class="driver-details-panel driver-details-panel--kartas" role="tabpanel">
+            <div class="driver-details-panel__header">
+              <div>
+                <p class="driver-details-panel__eyebrow">متابعة الكارتات</p>
+                <h3>الكارتات والتسويات</h3>
+              </div>
+              <div class="driver-details-panel__controls">
+                <input id="kartaSearchInput" type="text" class="input input-sm driver-details-search" placeholder="🔍 ابحث في الكارتات...">
+                <button type="button" id="settleUnsettledKartasBtn" data-action="settle-unsettled-kartas" class="btn driver-details-settle-action hidden">تسوية عام</button>
               </div>
             </div>
 
             <!-- Summary Cards -->
-            <div id="kartaSummaryCards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div id="kartaSummaryCards" class="driver-details-karta-summary">
               <!-- Populated dynamically by JS -->
             </div>
 
             <!-- Driver Karta settlement state tabs. The default is unsettled rows. -->
-            <div class="tabs mb-4" role="group" aria-label="تصفية الكارتات حسب التسوية">
+            <div class="driver-details-status-tabs" role="group" aria-label="تصفية الكارتات حسب التسوية">
               <button type="button" data-action="karta-status-filter" data-filter="unsettled" class="tab-btn active-purple" aria-pressed="true">لم يتم تسويته</button>
               <button type="button" data-action="karta-status-filter" data-filter="settled" class="tab-btn" aria-pressed="false">تمت تسويته</button>
               <button type="button" data-action="karta-status-filter" data-filter="all" class="tab-btn" aria-pressed="false">الكل</button>
             </div>
 
             <!-- Kartas Table -->
-            <div class="table-wrapper">
-              <table class="table">
+            <div class="table-wrapper driver-details-table-wrap">
+              <table class="table driver-details-table driver-details-table--kartas">
                 <thead>
                   <tr>
                     <th>التاريخ</th>
@@ -211,32 +226,35 @@
           </div>
 
           <!-- Financial Transactions panel -->
-          <section id="driverTabLedger" class="mb-8 hidden" role="tabpanel">
-            <h3 class="text-lg font-bold mb-4">حركات السائق</h3>
-            <div class="filter-row mb-6 flex-wrap" style="display:flex;gap:12px;align-items:flex-end;">
-              <div class="form-group mb-0">
-                <label class="label mb-2 text-muted text-xs" for="driverFromDate">من</label>
+          <section id="driverTabLedger" class="driver-details-panel driver-details-panel--ledger hidden" role="tabpanel">
+            <div class="driver-details-panel__header driver-details-panel__header--ledger">
+              <div>
+                <p class="driver-details-panel__eyebrow">سجل مالي</p>
+                <h3>الحركات المالية</h3>
+              </div>
+            </div>
+            <div class="driver-details-filters">
+              <div class="driver-details-filter-field">
+                <label class="label" for="driverFromDate">من</label>
                 <input id="driverFromDate" type="date" class="input input-sm">
               </div>
-              <div class="form-group mb-0">
-                <label class="label mb-2 text-muted text-xs" for="driverToDate">إلى</label>
+              <div class="driver-details-filter-field">
+                <label class="label" for="driverToDate">إلى</label>
                 <input id="driverToDate" type="date" class="input input-sm">
               </div>
-              <div class="form-group mb-0" style="flex:1;min-width:180px;">
-                <label class="label mb-2 text-muted text-xs" for="driverSearchQuery">بحث</label>
-                <input id="driverSearchQuery" type="text" class="input input-sm" placeholder="ابحث في الحركات...">
+              <div class="driver-details-filter-field driver-details-filter-field--search">
+                <label class="label" for="driverSearchQuery">بحث</label>
+                <input id="driverSearchQuery" type="search" class="input input-sm" placeholder="ابحث بالتاريخ أو المبلغ أو الوصف...">
               </div>
-              <button type="button" data-action="driver-reset-filters" class="btn btn-secondary btn-sm mb-0">
+              <button type="button" data-action="driver-reset-filters" class="btn driver-details-reset-filters">
                 إعادة ضبط
               </button>
             </div>
-            <div class="table-wrapper">
-              <table class="table">
+            <div class="table-wrapper driver-details-table-wrap">
+              <table class="table driver-details-table driver-details-table--ledger">
                 <thead>
                   <tr>
                     <th>التاريخ</th>
-                    <th>النوع</th>
-                    <th>المركبة / المرجع</th>
                     <th>المبلغ</th>
                     <th>الرصيد بعد الحركة</th>
                     <th>الوصف</th>
@@ -245,7 +263,7 @@
                 </thead>
                 <tbody id="driverTransactionsBody">
                   <tr>
-                    <td colspan="7" class="text-muted text-center p-6">لا توجد حركات</td>
+                    <td colspan="5" class="driver-details-empty-state">لا توجد حركات</td>
                   </tr>
                 </tbody>
               </table>

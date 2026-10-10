@@ -808,21 +808,32 @@ function _setDriverDetailsTab(tab) {
   if (ledgerBtn) { ledgerBtn.classList.toggle('active-purple', !isKartas); ledgerBtn.setAttribute('aria-selected', String(!isKartas)); }
 }
 
+function _populateDriverDetailsIdentity(driver, balanceData) {
+  const nameEl = document.getElementById('driverDetailsName');
+  const phoneEl = document.getElementById('driverDetailsPhone');
+  const balanceEl = document.getElementById('driverDetailsBalance');
+  const balance = Number(balanceData?.balance) || 0;
+
+  if (nameEl) nameEl.textContent = driver?.name || '—';
+  if (phoneEl) phoneEl.textContent = driver?.phone || '—';
+  if (balanceEl) {
+    balanceEl.textContent = _fmt(balance);
+    balanceEl.classList.toggle('driver-details-balance-value--positive', balance > 0);
+    balanceEl.classList.toggle('driver-details-balance-value--negative', balance < 0);
+  }
+}
+
 function _renderDriverLedgerTable(entries) {
   const tbody = document.getElementById('driverTransactionsBody');
   if (!tbody) return;
 
   if (!Array.isArray(entries) || entries.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center p-6">لا توجد حركات</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="driver-details-empty-state">لا توجد حركات</td></tr>';
     return;
   }
 
   tbody.innerHTML = entries.map((entry) => {
     const dateStr = _dateLabel(entry.date || entry.applied_at || entry.created_at);
-    const typeStr = entry.reference_type === 'manual_driver_balance'
-      ? (entry.type === 'withdraw' ? 'سحب' : 'إيداع')
-      : _ledgerType(entry.type);
-    const refStr = entry.vehicle_plate || entry.reference_number || entry.reference_id || '—';
     const amtStr = _fmt(entry.amount);
     const balStr = _fmt(entry.running_balance);
     const descStr = _ledgerNote(entry);
@@ -840,13 +851,11 @@ function _renderDriverLedgerTable(entries) {
 
     return `
       <tr>
-        <td>${dateStr}</td>
-        <td>${typeStr}</td>
-        <td>${refStr}</td>
-        <td class="font-semibold">${amtStr}</td>
-        <td>${balStr}</td>
-        <td>${descStr}</td>
-        <td class="text-center">${actionsStr}</td>
+        <td class="driver-details-date-cell">${dateStr}</td>
+        <td class="driver-details-amount-cell">${amtStr}</td>
+        <td class="driver-details-balance-cell">${balStr}</td>
+        <td class="driver-details-description-cell">${descStr}</td>
+        <td class="driver-details-actions-cell">${actionsStr}</td>
       </tr>
     `;
   }).join('');
@@ -866,6 +875,7 @@ async function showDriverDetails(id) {
   const ledger = await FinancialService.getDriverLedger(id);
   _driverLedgerCache = ledger || [];
 
+  _populateDriverDetailsIdentity(driver, balanceData);
   _renderDriverLedgerTable(_driverLedgerCache);
 
   const fromEl = document.getElementById('driverFromDate');
@@ -915,7 +925,7 @@ function _applyDriverFilters() {
   if (query) {
     filtered = filtered.filter(e => {
       const hay = [
-        e.date, e.applied_at, e.type, e.vehicle_plate, e.reference_number, e.reference_id, e.note, _ledgerNote(e)
+        e.date, e.applied_at, _fmt(e.amount), e.running_balance, e.note, _ledgerNote(e)
       ].join(' ').toLowerCase();
       return hay.includes(query);
     });
@@ -946,10 +956,10 @@ async function _loadDriverKartasTab(driverId) {
     _currentKartas = kartas;
 
     summaryContainer.innerHTML = `
-      <div class="card p-4"><div class="text-xs text-muted">إجمالي الكارتات</div><div class="text-2xl font-bold">${summary.total_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">لم يتم تسويته</div><div class="text-2xl font-bold text-red-600">${summary.unsettled_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">تمت تسويته</div><div class="text-2xl font-bold text-green-600">${summary.settled_kartas}</div></div>
-      <div class="card p-4"><div class="text-xs text-muted">إجمالي السعر</div><div id="kartaFilteredTotalPrice" class="text-xl font-bold">${_fmt(summary.total_price)}</div></div>
+      <div class="driver-details-karta-summary-card driver-details-karta-summary-card--total"><span class="driver-details-karta-summary-card__icon" aria-hidden="true">▦</span><div><span>إجمالي الكارتات</span><strong>${summary.total_kartas}</strong></div></div>
+      <div class="driver-details-karta-summary-card driver-details-karta-summary-card--pending"><span class="driver-details-karta-summary-card__icon" aria-hidden="true">◷</span><div><span>لم يتم تسويته</span><strong>${summary.unsettled_kartas}</strong></div></div>
+      <div class="driver-details-karta-summary-card driver-details-karta-summary-card--settled"><span class="driver-details-karta-summary-card__icon" aria-hidden="true">✓</span><div><span>تمت تسويته</span><strong>${summary.settled_kartas}</strong></div></div>
+      <div class="driver-details-karta-summary-card driver-details-karta-summary-card--amount"><span class="driver-details-karta-summary-card__icon" aria-hidden="true">£</span><div><span>إجمالي السعر</span><strong id="kartaFilteredTotalPrice">${_fmt(summary.total_price)}</strong></div></div>
     `;
 
     _applyKartaFilters(tbody, driverId);

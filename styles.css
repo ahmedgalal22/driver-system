@@ -3873,3 +3873,349 @@ input[type="number"] {
   color: #92400e;
   background: #fffbeb;
 }
+
+/* ── Driver Details — scoped RTL redesign ───────────────────────────────── */
+.driver-details-page {
+  --driver-ink: #16324f;
+  --driver-muted: #698196;
+  --driver-surface: #ffffff;
+  --driver-surface-soft: #f4f8fb;
+  --driver-line: #d9e4ed;
+  --driver-brand: #1f5d8b;
+  --driver-brand-strong: #17496e;
+  --driver-teal: #13766f;
+  --driver-positive: #167044;
+  --driver-negative: #b64b34;
+  direction: rtl;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: clamp(1rem, 2.5vw, 2rem);
+  color: var(--driver-ink);
+  border: 1px solid var(--driver-line);
+  border-radius: 24px;
+  background: linear-gradient(145deg, #f8fbfd 0%, #f2f7fb 100%);
+  box-shadow: 0 18px 42px rgba(22, 50, 79, 0.08);
+}
+
+.driver-details-hero {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(1.1rem, 3vw, 1.8rem);
+  border: 1px solid #285f86;
+  border-radius: 18px;
+  color: #f8fcff;
+  background: linear-gradient(125deg, #123d60 0%, #1f5d8b 55%, #167a78 100%);
+  box-shadow: 0 12px 26px rgba(22, 75, 110, 0.2);
+}
+.driver-details-hero::after {
+  content: '';
+  position: absolute;
+  inset: auto -5rem -6rem auto;
+  width: 15rem;
+  height: 15rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.driver-details-hero__topline,
+.driver-details-hero__content,
+.driver-details-actions,
+.driver-details-panel__header,
+.driver-details-panel__controls,
+.driver-details-filters,
+.driver-details-karta-summary-card {
+  display: flex;
+  align-items: center;
+}
+.driver-details-hero__topline {
+  position: relative;
+  z-index: 1;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.driver-details-back {
+  min-height: 36px;
+  padding: 0.45rem 0.75rem;
+  color: #eff9ff;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 10px;
+  background: rgba(9, 35, 57, 0.22);
+}
+.driver-details-back:hover { color: #ffffff; background: rgba(9, 35, 57, 0.42); }
+.driver-details-badge {
+  padding: 0.36rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+.driver-details-hero__content {
+  position: relative;
+  z-index: 1;
+  gap: 1rem;
+  margin-top: 1.4rem;
+}
+.driver-details-identity-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 58px;
+  min-width: 58px;
+  height: 58px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.15);
+  font-size: 1.65rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.driver-details-identity-copy { min-width: 0; }
+.driver-details-identity-copy p {
+  margin: 0 0 0.22rem;
+  color: #cfe7f7;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.driver-details-identity-copy h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.driver-details-phone {
+  display: inline-flex;
+  gap: 0.38rem;
+  margin-top: 0.45rem;
+  color: #e2f5ff;
+  font-size: 0.8rem;
+  direction: ltr;
+}
+.driver-details-actions {
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-inline-start: auto;
+}
+.driver-details-action {
+  min-height: 40px;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-weight: 800;
+}
+.driver-details-action--deposit { color: #083d2a; background: #d9fbe8; border-color: #a9e8c1; }
+.driver-details-action--withdraw { color: #631f15; background: #ffe5dc; border-color: #f4baaa; }
+.driver-details-action:hover { transform: translateY(-1px); filter: brightness(0.98); }
+
+.driver-details-summary { margin: 1rem 0 1.25rem; }
+.driver-details-balance-card {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  max-width: 390px;
+  padding: 1rem 1.15rem;
+  border: 1px solid #c9dce9;
+  border-radius: 16px;
+  background: var(--driver-surface);
+  box-shadow: 0 7px 18px rgba(22, 50, 79, 0.05);
+}
+.driver-details-balance-card__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  color: #1b618d;
+  background: #e3f2fb;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+.driver-details-balance-card p {
+  margin: 0 0 0.18rem;
+  color: var(--driver-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.driver-details-balance-value {
+  color: var(--driver-brand);
+  font-size: clamp(1.45rem, 3vw, 2rem);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  text-align: right;
+}
+.driver-details-balance-value--positive { color: var(--driver-positive); }
+.driver-details-balance-value--negative { color: var(--driver-negative); }
+.driver-details-balance-card__hint { color: #8a9dad; font-size: 0.68rem; }
+
+.driver-details-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  padding: 0.38rem;
+  border: 1px solid var(--driver-line);
+  border-radius: 14px;
+  background: #eaf1f6;
+}
+.driver-details-tab {
+  min-width: 0;
+  min-height: 46px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: #5d7488;
+  font-weight: 800;
+}
+.driver-details-tab.active-purple {
+  color: var(--driver-brand-strong);
+  border-color: #c6dae9;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(22, 75, 110, 0.1);
+}
+
+.driver-details-panel {
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--driver-line);
+  border-radius: 18px;
+  background: var(--driver-surface);
+  box-shadow: 0 8px 22px rgba(22, 50, 79, 0.045);
+}
+.driver-details-panel__header {
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.05rem 1.15rem;
+  border-bottom: 1px solid #dce7ef;
+  background: linear-gradient(90deg, #f5f9fc, #ffffff);
+}
+.driver-details-panel__eyebrow {
+  margin: 0 0 0.2rem;
+  color: var(--driver-teal);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.driver-details-panel h3 { margin: 0; color: var(--driver-ink); font-size: 1.05rem; font-weight: 900; }
+.driver-details-panel__controls { flex-wrap: wrap; gap: 0.55rem; }
+.driver-details-search { min-width: min(100%, 240px); }
+.driver-details-settle-action {
+  color: #ffffff;
+  background: linear-gradient(135deg, #1f5d8b, #16766f);
+  border: 0;
+}
+
+.driver-details-karta-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding: 1rem 1.15rem;
+}
+.driver-details-karta-summary-card {
+  gap: 0.62rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #d8e4ec;
+  border-radius: 13px;
+  background: #fbfdfe;
+}
+.driver-details-karta-summary-card__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-weight: 900;
+}
+.driver-details-karta-summary-card span:not(.driver-details-karta-summary-card__icon) {
+  display: block;
+  color: var(--driver-muted);
+  font-size: 0.67rem;
+  font-weight: 800;
+}
+.driver-details-karta-summary-card strong {
+  display: block;
+  margin-top: 0.12rem;
+  color: var(--driver-ink);
+  font-size: 1.05rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.driver-details-karta-summary-card--total .driver-details-karta-summary-card__icon { color: #1d6090; background: #e0f1fb; }
+.driver-details-karta-summary-card--pending .driver-details-karta-summary-card__icon { color: #b75a1d; background: #fff0dc; }
+.driver-details-karta-summary-card--settled .driver-details-karta-summary-card__icon { color: #157147; background: #ddf8e9; }
+.driver-details-karta-summary-card--amount .driver-details-karta-summary-card__icon { color: #5f4aa1; background: #eee9ff; }
+
+.driver-details-status-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 1.15rem 1rem;
+}
+.driver-details-status-tabs .tab-btn {
+  border: 1px solid #d6e2ea;
+  border-radius: 999px;
+  color: #607588;
+  background: #f8fbfc;
+}
+.driver-details-status-tabs .tab-btn.active-purple { color: #ffffff; border-color: #1f5d8b; background: #1f5d8b; }
+
+.driver-details-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 1fr)) minmax(180px, 1.4fr) auto;
+  gap: 0.7rem;
+  align-items: end;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid #e0e9f0;
+  background: #f7fafc;
+}
+.driver-details-filter-field { min-width: 0; }
+.driver-details-filter-field .label { display: block; margin-bottom: 0.3rem; color: #647d91; font-size: 0.72rem; font-weight: 800; }
+.driver-details-filter-field .input { width: 100%; border-color: #cbdbe6; background: #ffffff; }
+.driver-details-reset-filters { min-height: 34px; color: #3c617a; border: 1px solid #c9dce8; background: #ffffff; }
+
+.driver-details-table-wrap { margin: 0 1.15rem 1.15rem; border: 1px solid #d6e2ea; border-radius: 13px; }
+.driver-details-table { min-width: 760px; border-collapse: collapse; }
+.driver-details-table thead tr { background: #234f70; }
+.driver-details-table th { color: #f8fcff; border-color: #234f70; font-size: 0.73rem; font-weight: 900; white-space: nowrap; }
+.driver-details-table td { color: #40596d; border-color: #e0e9ef; background: #ffffff; vertical-align: middle; }
+.driver-details-table tbody tr:nth-child(even) td { background: #f8fbfd; }
+.driver-details-table tbody tr:hover td { background: #eef7fb; }
+.driver-details-table--ledger th,
+.driver-details-table--ledger td { padding: 0.82rem 0.9rem; }
+.driver-details-date-cell { color: #60788c; direction: ltr; white-space: nowrap; }
+.driver-details-amount-cell,
+.driver-details-balance-cell { color: var(--driver-brand); font-weight: 900; font-variant-numeric: tabular-nums; direction: ltr; white-space: nowrap; }
+.driver-details-description-cell { min-width: 210px; line-height: 1.6; }
+.driver-details-actions-cell { width: 90px; text-align: center; }
+.driver-details-actions-cell .btn-icon { box-shadow: none; }
+.driver-details-empty-state { padding: 2.5rem !important; color: #7890a2; background: #f8fbfc !important; text-align: center !important; font-weight: 800; }
+
+.driver-details-page :is(button, input):focus-visible {
+  outline: 3px solid rgba(31, 93, 139, 0.32);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .driver-details-karta-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .driver-details-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .driver-details-filter-field--search { grid-column: 1 / -1; }
+  .driver-details-reset-filters { width: 100%; }
+}
+
+@media (max-width: 620px) {
+  .driver-details-page { padding: 0.7rem; border-radius: 16px; }
+  .driver-details-hero { padding: 1rem; border-radius: 14px; }
+  .driver-details-hero__content { align-items: flex-start; flex-wrap: wrap; margin-top: 1rem; }
+  .driver-details-identity-icon { width: 46px; min-width: 46px; height: 46px; font-size: 1.3rem; }
+  .driver-details-actions { width: 100%; margin-inline-start: 0; }
+  .driver-details-action { flex: 1; }
+  .driver-details-tabs { gap: 0.3rem; padding: 0.3rem; }
+  .driver-details-tab { min-height: 50px; padding: 0.55rem 0.35rem; font-size: 0.78rem; }
+  .driver-details-panel__header { align-items: stretch; flex-direction: column; padding: 1rem; }
+  .driver-details-panel__controls { width: 100%; }
+  .driver-details-search { width: 100%; }
+  .driver-details-karta-summary,
+  .driver-details-filters { padding: 0.85rem; }
+  .driver-details-table-wrap { margin: 0 0.85rem 0.85rem; }
+}
