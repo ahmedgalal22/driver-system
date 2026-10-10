@@ -3887,8 +3887,9 @@ input[type="number"] {
   --driver-positive: #167044;
   --driver-negative: #b64b34;
   direction: rtl;
-  max-width: 1240px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   padding: clamp(1rem, 2.5vw, 2rem);
   color: var(--driver-ink);
   border: 1px solid var(--driver-line);
