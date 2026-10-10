@@ -3901,7 +3901,7 @@ input[type="number"] {
 .driver-details-hero {
   position: relative;
   overflow: hidden;
-  padding: clamp(1.1rem, 3vw, 1.8rem);
+  padding: clamp(0.85rem, 2vw, 1.25rem);
   border: 1px solid #285f86;
   border-radius: 18px;
   color: #f8fcff;
@@ -3935,8 +3935,8 @@ input[type="number"] {
   gap: 0.75rem;
 }
 .driver-details-back {
-  min-height: 36px;
-  padding: 0.45rem 0.75rem;
+  min-height: 34px;
+  padding: 0.35rem 0.65rem;
   color: #eff9ff;
   border: 1px solid rgba(255, 255, 255, 0.32);
   border-radius: 10px;
@@ -3944,7 +3944,7 @@ input[type="number"] {
 }
 .driver-details-back:hover { color: #ffffff; background: rgba(9, 35, 57, 0.42); }
 .driver-details-badge {
-  padding: 0.36rem 0.7rem;
+  padding: 0.28rem 0.6rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
@@ -3954,19 +3954,19 @@ input[type="number"] {
 .driver-details-hero__content {
   position: relative;
   z-index: 1;
-  gap: 1rem;
-  margin-top: 1.4rem;
+  gap: 0.8rem;
+  margin-top: 0.8rem;
 }
 .driver-details-identity-icon {
   display: inline-grid;
   place-items: center;
-  width: 58px;
-  min-width: 58px;
-  height: 58px;
+  width: 50px;
+  min-width: 50px;
+  height: 50px;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.15);
-  font-size: 1.65rem;
+  font-size: 1.4rem;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 .driver-details-identity-copy { min-width: 0; }
@@ -3979,7 +3979,7 @@ input[type="number"] {
 .driver-details-identity-copy h2 {
   margin: 0;
   color: #ffffff;
-  font-size: clamp(1.35rem, 3vw, 2rem);
+  font-size: clamp(1.2rem, 2.5vw, 1.75rem);
   font-weight: 900;
   letter-spacing: -0.02em;
 }
@@ -3997,8 +3997,8 @@ input[type="number"] {
   margin-inline-start: auto;
 }
 .driver-details-action {
-  min-height: 40px;
-  padding: 0.55rem 0.85rem;
+  min-height: 36px;
+  padding: 0.45rem 0.75rem;
   border: 1px solid transparent;
   border-radius: 10px;
   font-weight: 800;
@@ -4206,9 +4206,9 @@ input[type="number"] {
 
 @media (max-width: 620px) {
   .driver-details-page { padding: 0.7rem; border-radius: 16px; }
-  .driver-details-hero { padding: 1rem; border-radius: 14px; }
-  .driver-details-hero__content { align-items: flex-start; flex-wrap: wrap; margin-top: 1rem; }
-  .driver-details-identity-icon { width: 46px; min-width: 46px; height: 46px; font-size: 1.3rem; }
+  .driver-details-hero { padding: 0.8rem; border-radius: 14px; }
+  .driver-details-hero__content { align-items: flex-start; flex-wrap: wrap; margin-top: 0.75rem; }
+  .driver-details-identity-icon { width: 42px; min-width: 42px; height: 42px; font-size: 1.2rem; }
   .driver-details-actions { width: 100%; margin-inline-start: 0; }
   .driver-details-action { flex: 1; }
   .driver-details-tabs { gap: 0.3rem; padding: 0.3rem; }
