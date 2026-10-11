@@ -71,6 +71,33 @@ ok(renderedRow.includes('2026-10-10') && renderedRow.includes('125.50')
 ok(renderedRow.includes('data-action="edit-driver-tx"') && renderedRow.includes('data-action="delete-driver-tx"'),
   'existing manual movement actions remain available');
 
+console.log('\n— centered header balance contract —');
+const heroMarkup = DRIVER_PAGE.match(/<header class="driver-details-hero">([\s\S]*?)<\/header>/)?.[1] || '';
+const balanceOccurrences = (DRIVER_PAGE.match(/id="driverDetailsBalance"/g) || []).length;
+const identityIndex = heroMarkup.indexOf('<div class="driver-details-identity">');
+const balanceIndex = heroMarkup.indexOf('<section class="driver-details-summary driver-details-summary--hero"');
+const actionsIndex = heroMarkup.indexOf('<div class="driver-details-actions"');
+const heroEndIndex = DRIVER_PAGE.indexOf('</header>');
+const tabsStartIndex = DRIVER_PAGE.indexOf('<!-- Driver details tabs', heroEndIndex);
+const afterHeroBeforeTabs = DRIVER_PAGE.slice(heroEndIndex + '</header>'.length, tabsStartIndex);
+ok(balanceOccurrences === 1,
+  'Driver Details page contains exactly one existing Driver Balance element');
+ok(identityIndex >= 0 && balanceIndex > identityIndex && actionsIndex > balanceIndex,
+  'hero content orders identity, the existing balance card, then actions');
+ok(!/class="driver-details-summary(?:\s|")/.test(afterHeroBeforeTabs),
+  'no obsolete standalone Driver Details summary remains below the hero');
+ok(STYLES.includes('grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);')
+  && STYLES.includes('.driver-details-summary--hero')
+  && STYLES.includes('justify-self: center;'),
+  'desktop hero uses equal side columns with the balance card centered');
+ok(STYLES.includes('grid-template-columns: minmax(0, 1fr);')
+  && STYLES.includes('.driver-details-summary--hero { width: 100%; justify-self: stretch; }'),
+  'narrow screens stack the hero content without clipping the balance card');
+ok(STYLES.includes('width: 100%;')
+  && STYLES.includes('max-width: none;')
+  && STYLES.includes('margin: 0;'),
+  'the Driver Details full-width layout remains unchanged');
+
 console.log('\n— identity presentation contract —');
 const classList = {
   positive: false,

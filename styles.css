@@ -3954,8 +3954,20 @@ input[type="number"] {
 .driver-details-hero__content {
   position: relative;
   z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   gap: 0.8rem;
   margin-top: 0.8rem;
+  direction: ltr;
+}
+.driver-details-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  justify-self: start;
+  direction: rtl;
 }
 .driver-details-identity-icon {
   display: inline-grid;
@@ -3994,7 +4006,9 @@ input[type="number"] {
 .driver-details-actions {
   flex-wrap: wrap;
   gap: 0.55rem;
-  margin-inline-start: auto;
+  justify-self: end;
+  margin-inline-start: 0;
+  direction: rtl;
 }
 .driver-details-action {
   min-height: 36px;
@@ -4008,6 +4022,19 @@ input[type="number"] {
 .driver-details-action:hover { transform: translateY(-1px); filter: brightness(0.98); }
 
 .driver-details-summary { margin: 1rem 0 1.25rem; }
+.driver-details-summary--hero {
+  min-width: 0;
+  margin: 0;
+  justify-self: center;
+  direction: rtl;
+}
+.driver-details-summary--hero .driver-details-balance-card {
+  min-width: 250px;
+  padding: 0.7rem 0.9rem;
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 7px 18px rgba(9, 35, 57, 0.18);
+}
 .driver-details-balance-card {
   display: flex;
   align-items: center;
@@ -4207,9 +4234,12 @@ input[type="number"] {
 @media (max-width: 620px) {
   .driver-details-page { padding: 0.7rem; border-radius: 16px; }
   .driver-details-hero { padding: 0.8rem; border-radius: 14px; }
-  .driver-details-hero__content { align-items: flex-start; flex-wrap: wrap; margin-top: 0.75rem; }
+  .driver-details-hero__content { grid-template-columns: minmax(0, 1fr); align-items: start; margin-top: 0.75rem; direction: rtl; }
+  .driver-details-identity { justify-self: stretch; }
   .driver-details-identity-icon { width: 42px; min-width: 42px; height: 42px; font-size: 1.2rem; }
-  .driver-details-actions { width: 100%; margin-inline-start: 0; }
+  .driver-details-summary--hero { width: 100%; justify-self: stretch; }
+  .driver-details-summary--hero .driver-details-balance-card { min-width: 0; width: 100%; }
+  .driver-details-actions { width: 100%; justify-self: stretch; margin-inline-start: 0; }
   .driver-details-action { flex: 1; }
   .driver-details-tabs { gap: 0.3rem; padding: 0.3rem; }
   .driver-details-tab { min-height: 50px; padding: 0.55rem 0.35rem; font-size: 0.78rem; }

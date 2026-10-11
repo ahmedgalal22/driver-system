@@ -147,29 +147,30 @@
               <span class="driver-details-badge">👨‍✈️ سائق</span>
             </div>
             <div class="driver-details-hero__content">
-              <span class="driver-details-identity-icon" aria-hidden="true">👨‍✈️</span>
-              <div class="driver-details-identity-copy">
-                <p>تفاصيل السائق</p>
-                <h2 id="driverDetailsName">—</h2>
-                <span class="driver-details-phone">☎ <span id="driverDetailsPhone">—</span></span>
+              <div class="driver-details-identity">
+                <span class="driver-details-identity-icon" aria-hidden="true">👨‍✈️</span>
+                <div class="driver-details-identity-copy">
+                  <p>تفاصيل السائق</p>
+                  <h2 id="driverDetailsName">—</h2>
+                  <span class="driver-details-phone">☎ <span id="driverDetailsPhone">—</span></span>
+                </div>
               </div>
+              <section class="driver-details-summary driver-details-summary--hero" aria-label="ملخص رصيد السائق">
+                <div class="driver-details-balance-card">
+                  <span class="driver-details-balance-card__icon" aria-hidden="true">₪</span>
+                  <div>
+                    <p>رصيد السائق الحالي</p>
+                    <div id="driverDetailsBalance" class="driver-details-balance-value">0.00</div>
+                    <span class="driver-details-balance-card__hint">يُحدّث من سجل الحركات النشط</span>
+                  </div>
+                </div>
+              </section>
               <div class="driver-details-actions" aria-label="حركات رصيد السائق">
                 <button type="button" data-action="open-driver-balance-entry" data-entry-type="deposit" class="btn driver-details-action driver-details-action--deposit">💰 إيداع</button>
                 <button type="button" data-action="open-driver-balance-entry" data-entry-type="withdraw" class="btn driver-details-action driver-details-action--withdraw">💸 سحب</button>
               </div>
             </div>
           </header>
-
-          <section class="driver-details-summary" aria-label="ملخص رصيد السائق">
-            <div class="driver-details-balance-card">
-              <span class="driver-details-balance-card__icon" aria-hidden="true">₪</span>
-              <div>
-                <p>رصيد السائق الحالي</p>
-                <div id="driverDetailsBalance" class="driver-details-balance-value">0.00</div>
-                <span class="driver-details-balance-card__hint">يُحدّث من سجل الحركات النشط</span>
-              </div>
-            </div>
-          </section>
 
           <!-- Driver details tabs (Phase 6 — UI separation: kartas vs financial transactions) -->
           <div class="driver-details-tabs" role="tablist" aria-label="أقسام تفاصيل السائق">
