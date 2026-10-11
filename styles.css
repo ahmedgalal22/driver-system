@@ -3470,8 +3470,15 @@ input[type="number"] {
 }
 
 .vehicle-details-hero {
-  background: #eef3f8;
-  border-color: #d8e2ec;
+  background: linear-gradient(125deg, #102a43 0%, #164e63 55%, #0f766e 100%);
+  border-color: #1f5d6b;
+}
+.vehicle-details-hero .vehicle-details-eyebrow { color: #d7f1f3; }
+.vehicle-details-hero .vehicle-details-caption { color: #d4e2ec; }
+.vehicle-details-hero .vehicle-details-identity__icon {
+  color: #effcff;
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .vehicle-details-balance-card {
