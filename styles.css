@@ -3955,7 +3955,9 @@ input[type="number"] {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, max-content) minmax(0, 1fr);
+  grid-template-areas: "actions balance identity";
   align-items: center;
   gap: 0.8rem;
   margin-top: 0.8rem;
@@ -3966,7 +3968,8 @@ input[type="number"] {
   align-items: center;
   gap: 0.8rem;
   min-width: 0;
-  justify-self: start;
+  grid-area: identity;
+  justify-self: end;
   direction: rtl;
 }
 .driver-details-identity-icon {
@@ -4005,8 +4008,9 @@ input[type="number"] {
 }
 .driver-details-actions {
   flex-wrap: wrap;
+  grid-area: actions;
   gap: 0.55rem;
-  justify-self: end;
+  justify-self: start;
   margin-inline-start: 0;
   direction: rtl;
 }
@@ -4024,6 +4028,7 @@ input[type="number"] {
 .driver-details-summary { margin: 1rem 0 1.25rem; }
 .driver-details-summary--hero {
   min-width: 0;
+  grid-area: balance;
   margin: 0;
   justify-self: center;
   direction: rtl;
@@ -4231,15 +4236,18 @@ input[type="number"] {
   .driver-details-reset-filters { width: 100%; }
 }
 
-@media (max-width: 620px) {
-  .driver-details-page { padding: 0.7rem; border-radius: 16px; }
-  .driver-details-hero { padding: 0.8rem; border-radius: 14px; }
-  .driver-details-hero__content { grid-template-columns: minmax(0, 1fr); align-items: start; margin-top: 0.75rem; direction: rtl; }
+@media (max-width: 760px) {
+  .driver-details-hero__content { grid-template-columns: minmax(0, 1fr); grid-template-areas: "identity" "balance" "actions"; align-items: start; margin-top: 0.75rem; direction: rtl; }
   .driver-details-identity { justify-self: stretch; }
-  .driver-details-identity-icon { width: 42px; min-width: 42px; height: 42px; font-size: 1.2rem; }
   .driver-details-summary--hero { width: 100%; justify-self: stretch; }
   .driver-details-summary--hero .driver-details-balance-card { min-width: 0; width: 100%; }
   .driver-details-actions { width: 100%; justify-self: stretch; margin-inline-start: 0; }
+}
+
+@media (max-width: 620px) {
+  .driver-details-page { padding: 0.7rem; border-radius: 16px; }
+  .driver-details-hero { padding: 0.8rem; border-radius: 14px; }
+  .driver-details-identity-icon { width: 42px; min-width: 42px; height: 42px; font-size: 1.2rem; }
   .driver-details-action { flex: 1; }
   .driver-details-tabs { gap: 0.3rem; padding: 0.3rem; }
   .driver-details-tab { min-height: 50px; padding: 0.55rem 0.35rem; font-size: 0.78rem; }

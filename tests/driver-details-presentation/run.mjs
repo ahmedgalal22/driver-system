@@ -86,13 +86,17 @@ ok(identityIndex >= 0 && balanceIndex > identityIndex && actionsIndex > balanceI
   'hero content orders identity, the existing balance card, then actions');
 ok(!/class="driver-details-summary(?:\s|")/.test(afterHeroBeforeTabs),
   'no obsolete standalone Driver Details summary remains below the hero');
-ok(STYLES.includes('grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);')
-  && STYLES.includes('.driver-details-summary--hero')
+ok(STYLES.includes('grid-template-columns: minmax(0, 1fr) minmax(250px, max-content) minmax(0, 1fr);')
+  && STYLES.includes('grid-template-areas: "actions balance identity";')
+  && STYLES.includes('grid-area: identity;\n  justify-self: end;')
+  && STYLES.includes('grid-area: balance;')
+  && STYLES.includes('grid-area: actions;\n  gap: 0.55rem;\n  justify-self: start;')
   && STYLES.includes('justify-self: center;'),
-  'desktop hero uses equal side columns with the balance card centered');
-ok(STYLES.includes('grid-template-columns: minmax(0, 1fr);')
+  'desktop hero places actions left, the balance center, and identity right');
+ok(STYLES.includes('@media (max-width: 760px)')
+  && STYLES.includes('grid-template-areas: "identity" "balance" "actions";')
   && STYLES.includes('.driver-details-summary--hero { width: 100%; justify-self: stretch; }'),
-  'narrow screens stack the hero content without clipping the balance card');
+  'narrow and tablet widths stack the hero before the 250px center track can compress side content');
 ok(STYLES.includes('width: 100%;')
   && STYLES.includes('max-width: none;')
   && STYLES.includes('margin: 0;'),
