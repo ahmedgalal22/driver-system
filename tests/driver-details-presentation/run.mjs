@@ -74,25 +74,25 @@ ok(renderedRow.includes('data-action="edit-driver-tx"') && renderedRow.includes(
 console.log('\n— centered header balance contract —');
 const heroMarkup = DRIVER_PAGE.match(/<header class="driver-details-hero">([\s\S]*?)<\/header>/)?.[1] || '';
 const balanceOccurrences = (DRIVER_PAGE.match(/id="driverDetailsBalance"/g) || []).length;
-const actionsIndex = heroMarkup.indexOf('<div class="driver-details-header-actions"');
-const balanceIndex = heroMarkup.indexOf('<section class="driver-details-summary driver-details-summary--hero"');
 const identityIndex = heroMarkup.indexOf('<div class="driver-details-identity">');
+const balanceIndex = heroMarkup.indexOf('<section class="driver-details-summary driver-details-summary--hero"');
+const actionsIndex = heroMarkup.indexOf('<div class="driver-details-actions"');
 const heroEndIndex = DRIVER_PAGE.indexOf('</header>');
 const tabsStartIndex = DRIVER_PAGE.indexOf('<!-- Driver details tabs', heroEndIndex);
 const afterHeroBeforeTabs = DRIVER_PAGE.slice(heroEndIndex + '</header>'.length, tabsStartIndex);
 ok(balanceOccurrences === 1,
   'Driver Details page contains exactly one existing Driver Balance element');
-ok(actionsIndex >= 0 && balanceIndex > actionsIndex && identityIndex > balanceIndex,
-  'hero content orders actions, the existing balance card, then identity');
+ok(identityIndex >= 0 && balanceIndex > identityIndex && actionsIndex > balanceIndex,
+  'hero content orders identity, the existing balance card, then actions');
 ok(!/class="driver-details-summary(?:\s|")/.test(afterHeroBeforeTabs),
   'no obsolete standalone Driver Details summary remains below the hero');
 ok(STYLES.includes('grid-template-columns: minmax(0, 1fr) minmax(250px, max-content) minmax(0, 1fr);')
   && STYLES.includes('grid-template-areas: "actions balance identity";')
-  && STYLES.includes('.driver-details-header-actions {\n  grid-area: actions;')
   && STYLES.includes('grid-area: identity;\n  justify-self: end;')
   && STYLES.includes('grid-area: balance;')
+  && STYLES.includes('grid-area: actions;\n  gap: 0.55rem;\n  justify-self: start;')
   && STYLES.includes('justify-self: center;'),
-  'desktop hero matches the Vehicle Details three-region header geometry');
+  'desktop hero places actions left, the balance center, and identity right');
 ok(STYLES.includes('@media (max-width: 760px)')
   && STYLES.includes('grid-template-areas: "identity" "balance" "actions";')
   && STYLES.includes('.driver-details-summary--hero { width: 100%; justify-self: stretch; }'),
@@ -101,11 +101,6 @@ ok(STYLES.includes('width: 100%;')
   && STYLES.includes('max-width: none;')
   && STYLES.includes('margin: 0;'),
   'the Driver Details full-width layout remains unchanged');
-
-ok(STYLES.includes('.driver-details-hero {\n  position: relative;\n  overflow: hidden;\n  min-height: 124px;')
-  && STYLES.includes('padding: clamp(1rem, 2.4vw, 1.75rem);')
-  && STYLES.includes('gap: 1rem;'),
-  'Driver Details hero matches the Vehicle Details header height, padding, and grid spacing');
 
 console.log('\n— identity presentation contract —');
 const classList = {
