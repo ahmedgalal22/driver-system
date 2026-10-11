@@ -290,7 +290,7 @@ const _RECEIPT_COLS = Object.freeze([
   { key: 'weight',       header: 'وزن وش',         type: 'number' },
   { key: 'weight2',      header: 'وزن م',          type: 'number' },
   { key: 'deficit',      header: 'عجز',            type: 'number' },
-  { key: 'office',       header: 'اسم الشركة',     type: 'text'   },
+  { key: 'office',       header: 'اسم المكتب',     type: 'text'   },
   { key: 'loading',      header: 'التحميل',        type: 'text'   },
   { key: 'taktik',       header: 'الجهة',          type: 'text'   },
   { key: 'type',         header: 'النوع',          type: 'text'   },
@@ -613,7 +613,7 @@ const _ALL_RECEIPTS_COLS = Object.freeze([
       return (w1 > 0 || w2 > 0) ? _allReceiptsNum(w1 + w2 - d) : '';
     },
   },
-  { header: 'اسم الشركة',   getValue: (row, _rec) => _str(row.office ?? '') },
+  { header: 'اسم المكتب',   getValue: (row, _rec) => _str(row.office ?? '') },
   { header: 'التحميل',      getValue: (row, _rec) => _str(row.loading ?? '') },
   { header: 'الجهة',        getValue: (row, _rec) => _str(row.taktik ?? row.direction ?? '') },
   { header: 'النوع',        getValue: (row, _rec) => _str(row.type ?? '') },

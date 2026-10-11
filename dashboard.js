@@ -766,7 +766,7 @@ function _renderShell() {
         <div class="dashboard-header-inner">
           <div>
             <h1 class="text-2xl font-bold text-gray-800" style="margin:0 0 4px 0;">Dashboard العميل</h1>
-            <p class="text-muted text-xs" style="margin:0;">ملخص شامل للحركة المالية والربحية للمركبات والشركات</p>
+            <p class="text-muted text-xs" style="margin:0;">ملخص شامل للحركة المالية والربحية للمركبات والمكاتب</p>
           </div>
           
           <!-- Filters area -->

@@ -510,26 +510,26 @@ function _renderListShell() {
 
       <!-- العنوان والأزرار -->
       <div class="flex items-center justify-between flex-wrap gap-3 mb-6">
-        <h2 class="text-2xl font-bold text-gray-800 mb-0">إدارة الشركات</h2>
+        <h2 class="text-2xl font-bold text-gray-800 mb-0">إدارة المكاتب</h2>
         <div class="flex gap-2">
-          <button type="button" data-action="office-add" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:10px;padding:8px 18px;font-weight:700;font-size:0.875rem;cursor:pointer;font-family:inherit;transition:box-shadow 0.2s;">➕ إضافة شركة</button>
+          <button type="button" data-action="office-add" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:10px;padding:8px 18px;font-weight:700;font-size:0.875rem;cursor:pointer;font-family:inherit;transition:box-shadow 0.2s;">➕ إضافة مكتب</button>
         </div>
       </div>
 
       <!-- شريط البحث -->
       <div class="mb-6">
-        <input id="officeSearch" type="text" class="input" placeholder="🔍 ابحث عن شركة..." style="border-radius:12px;padding:10px 16px 10px 40px;" />
+        <input id="officeSearch" type="text" class="input" placeholder="🔍 ابحث عن مكتب..." style="border-radius:12px;padding:10px 16px 10px 40px;" />
       </div>
 
       <!-- قائمة الشركات -->
       <div style="margin-bottom:8px;">
-        <h3 class="text-lg font-bold text-gray-800 mb-3">قائمة الشركات</h3>
+        <h3 class="text-lg font-bold text-gray-800 mb-3">قائمة المكاتب</h3>
       </div>
       <div class="table-wrapper overflow-x-auto">
         <table class="table">
           <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
             <tr>
-              <th style="color:#fff;">اسم الشركة</th>
+              <th style="color:#fff;">اسم المكتب</th>
               <th style="color:#fff;">رقم الهاتف</th>
               <th style="color:#fff;">إجمالي الوزن</th>
               <th style="color:#fff;">إجراءات</th>
@@ -585,7 +585,7 @@ function _renderOfficeModal() {
 function _renderOfficeModalRow() {
   return `
     <tr>
-      <td><input type="text" class="input input-sm office-modal-name" placeholder="اسم الشركة" /></td>
+      <td><input type="text" class="input input-sm office-modal-name" placeholder="اسم المكتب" /></td>
       <td><input type="text" class="input input-sm office-modal-phone" placeholder="الهاتف" /></td>
       <td><button type="button" data-action="office-modal-remove-row" class="btn btn-secondary btn-sm">حذف</button></td>
     </tr>
@@ -616,7 +616,7 @@ function _renderDetailsShell(office) {
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:200px;">
           <div style="width:40px;height:40px;border-radius:50%;background:#22c55e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.125rem;flex-shrink:0;">🏢</div>
           <div>
-            <p style="font-size:0.6875rem;color:#6b7280;margin:0;">اسم الشركة</p>
+            <p style="font-size:0.6875rem;color:#6b7280;margin:0;">اسم المكتب</p>
             <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${office.name}</p>
           </div>
         </div>
@@ -631,7 +631,7 @@ function _renderDetailsShell(office) {
 
       <!-- التبويبات -->
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
-        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد الشركة</button>
+        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد المكتب</button>
         <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
       </div>
 
@@ -906,8 +906,8 @@ async function loadOffices() {
   }).join('') || `<tr><td colspan="4" class="text-center text-muted p-6">
     <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:24px;">
       <div style="width:64px;height:64px;background:#e2e8f0;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2rem;">🏢</div>
-      <p style="font-weight:700;color:#64748b;margin:0;">لا يوجد شركات</p>
-      <p style="font-size:0.8125rem;color:#94a3b8;margin:0;">ابدأ بإضافة الشركات من الزر أعلاه</p>
+      <p style="font-weight:700;color:#64748b;margin:0;">لا يوجد مكاتب</p>
+      <p style="font-size:0.8125rem;color:#94a3b8;margin:0;">ابدأ بإضافة المكاتب من الزر أعلاه</p>
     </div>
   </td></tr>`;
 }
@@ -1015,7 +1015,7 @@ function _openOfficeBalanceEntryModal(entryType) {
   const note = document.getElementById('officeBalanceEntryNote');
   const msg = document.getElementById('officeBalanceEntryMsg');
 
-  if (title) title.textContent = _officeBalanceEntryType === 'deposit' ? 'إيداع رصيد للشركة' : 'سحب رصيد من الشركة';
+  if (title) title.textContent = _officeBalanceEntryType === 'deposit' ? 'إيداع رصيد للمكتب' : 'سحب رصيد من المكتب';
   if (amount) amount.value = '';
   if (date) date.value = DateUtils.todayLocal();
   if (note) note.value = '';
@@ -1211,7 +1211,7 @@ function attachOfficesPageListeners() {
     if (target.closest('[data-action="office-delete"]')) {
       const id = target.closest('[data-id]')?.dataset.id;
       if (!id) return;
-      if (!confirm('هل أنت متأكد من حذف الشركة؟')) return;
+      if (!confirm('هل أنت متأكد من حذف المكتب؟')) return;
       await OfficesModule.deleteOffice(id);
       await loadOffices();
       return;
@@ -1236,7 +1236,7 @@ function attachOfficesPageListeners() {
           const { printHTML, buildPrintDocument } = await import('./printEngine.js');
           const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
           printHTML(buildPrintDocument({
-            title: 'طباعة تفاصيل الشركة',
+            title: 'طباعة تفاصيل المكتب',
             body: '<h2 style="text-align:center;color:#0f766e;margin-bottom:12px;">' + (office?.name || '') + '</h2>' + content.innerHTML,
             orientation: 'portrait',
           }), { id: 'office-print-iframe' });

@@ -449,7 +449,7 @@ function renderReceiptsControls() {
         <input data-filter-tab="receipts" data-filter-key="owner" type="text" value="${esc(f.owner)}" placeholder="صاحب المركبة" list="receiptOwnersDatalist" />
       </label>
       <label>
-        <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم الشركة" list="receiptCompaniesDatalist" />
+        <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم المكتب" list="receiptCompaniesDatalist" />
       </label>
       <label>
         <input data-filter-tab="receipts" data-filter-key="driver" type="text" value="${esc(f.driver)}" placeholder="اسم السائق" list="receiptDriversDatalist" />
@@ -1104,7 +1104,7 @@ function _receiptPrintBuildHeader(record) {
       </div>
       <div class="print-header-info" style="margin-top:4px;">
         <span>صاحب المركبة: <strong>${ownerName}</strong></span>
-        ${companyName ? `<span>الشركة: <strong>${companyName}</strong></span>` : ''}
+        ${companyName ? `<span>المكتب: <strong>${companyName}</strong></span>` : ''}
       </div>
     </div>`;
 }

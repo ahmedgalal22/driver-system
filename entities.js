@@ -1958,7 +1958,7 @@ async function _resolveVehicleLedgerPresentation(entries) {
 function _vehicleLedgerDescription(entry) {
   if (entry?.reference_type === 'receipt_row_payment_vehicle') {
     const companyName = String(entry.receipt_payment_company_name || '').trim();
-    return companyName ? `صرف كارتة - ${companyName}` : 'صرف كارتة - الشركة';
+    return companyName ? `صرف كارتة - ${companyName}` : 'صرف كارتة - المكتب';
   }
   return _ledgerNote(entry);
 }
@@ -2051,7 +2051,7 @@ function _renderLedger(client, ledger = []) {
       </header>
       <div class="vehicle-details-search-wrap">
         <svg class="vehicle-details-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.2-4.2"/></svg>
-        <input id="vehicleFinancialSearch" type="search" class="input vehicle-details-search-input" aria-label="بحث في الحركات المالية" value="${_escapeMaintenanceText(_vehicleFinancialSearchQuery)}" placeholder="ابحث بالتاريخ أو الحركة أو الشركة أو الملاحظة">
+        <input id="vehicleFinancialSearch" type="search" class="input vehicle-details-search-input" aria-label="بحث في الحركات المالية" value="${_escapeMaintenanceText(_vehicleFinancialSearchQuery)}" placeholder="ابحث بالتاريخ أو الحركة أو المكتب أو الملاحظة">
       </div>
       <div class="table-wrapper vehicle-details-table-wrap">
         <table class="table vehicle-details-table vehicle-details-table--financial">

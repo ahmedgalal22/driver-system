@@ -474,7 +474,7 @@ const COL_DEFS = [
   // index: 8
   { key: 'weightTotal',  label: 'الوزن',              cls: 'receipt-weight-total', type: 'number', minW: '60px',  printHide: false, readonly: true },
   // index: 9  ← اسم الشركة (office) — مخفي في الطباعة (Feature 4)
-  { key: 'office',       label: 'اسم الشركة',         cls: 'receipt-office',       type: 'text',   minW: '90px',  printHide: true  },
+  { key: 'office',       label: 'اسم المكتب',         cls: 'receipt-office',       type: 'text',   minW: '90px',  printHide: true  },
   // index: 10
   { key: 'loading',      label: 'التحميل',             cls: 'receipt-loading',      type: 'text',   minW: '85px',  printHide: false },
   // index: 11
@@ -1736,7 +1736,7 @@ function _buildRowHTML() {
         <td class="px-1 py-1 text-center${printClass}">
           <input type="text" list="officesList"
             class="${col.cls} w-full px-1 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none"
-            placeholder="الشركة">
+            placeholder="المكتب">
         </td>`;
     }
 
@@ -2787,7 +2787,7 @@ async function validateBeforeSave(rawData) {
       .map(r => r.office)
   )];
   if (invalidOffices.length > 0) {
-    alert(`⚠️ الأسماء التالية غير موجودة في قائمة الشركات:\n${invalidOffices.join('\n')}\nبرجاء الاختيار من القائمة أو إضافتها من خلال صفحة الشركات.`);
+    alert(`⚠️ الأسماء التالية غير موجودة في قائمة المكاتب:\n${invalidOffices.join('\n')}\nبرجاء الاختيار من القائمة أو إضافتها من خلال صفحة المكاتب.`);
     return false;
   }
 
@@ -2795,7 +2795,7 @@ async function validateBeforeSave(rawData) {
     .filter(r => r._type !== 'separator')
     .filter(r => !r.office || !r.loading || !r.taktik);
   if (missingOfficeInfo.length > 0) {
-    alert('⚠️ يجب اختيار الشركة ومكان التحميل والجهة لكل صف قبل الحفظ.');
+    alert('⚠️ يجب اختيار المكتب ومكان التحميل والجهة لكل صف قبل الحفظ.');
     return false;
   }
 

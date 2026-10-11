@@ -381,7 +381,7 @@ async function _resolveReceiptPaymentTargets(row, { tx } = {}) {
 
   const officeName = String(row.office || '').trim();
   if (!officeName) {
-    throw new Error('[FinancialService] cannot post payment: row has no company (اسم الشركة).');
+    throw new Error('[FinancialService] cannot post payment: row has no office (اسم المكتب).');
   }
   const offices = tx
     ? await tx.findByFields('offices', { name: officeName })
