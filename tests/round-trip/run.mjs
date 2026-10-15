@@ -153,8 +153,8 @@ ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.t
   'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
 ok(!/name:\s*'counters'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
-ok(DATABASE_SRC.includes('const DB_VERSION = 16;'),
-  'schema bumped to v16 for the approved Dashboard Capital Treasury store');
+ok(DATABASE_SRC.includes('const DB_VERSION = 17;'),
+  'schema bumped to v17 for the approved data-preserving v16 lifecycle release');
 ok(/name\s*:\s*'mainCapitalTreasury'/.test(DATABASE_SRC)
    && /name\s*:\s*'by_username'/.test(DATABASE_SRC)
    && /name\s*:\s*'by_type'/.test(DATABASE_SRC)

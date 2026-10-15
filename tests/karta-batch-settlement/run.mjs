@@ -217,7 +217,7 @@ ok(FINANCIAL_SRC.includes('async function createKartaSettlement(username, data)'
   && FINANCIAL_SRC.includes('async function updateKartaSettlement(username, data)')
   && FINANCIAL_SRC.includes('async function createKartaSettlementBatch(username, driverId, rowIds)'),
   'existing single-row Karta settlement APIs remain alongside the batch API');
-ok(DATABASE_SRC.includes('const DB_VERSION = 16;')
+ok(DATABASE_SRC.includes('const DB_VERSION = 17;')
   && !DATABASE_SRC.includes('batch_id')
   && !DATABASE_SRC.includes('batches'),
   'batch_id is ledger metadata only; no DB version, store, or index was added');

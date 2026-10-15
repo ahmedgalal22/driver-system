@@ -49,8 +49,8 @@ await ClientRepository.saveVehicle(V1, { username: U });
 await ClientRepository.saveVehicle(V2, { username: U });
 
 console.log('\n— no schema/store or standalone Treasury regression —');
-ok(DB_SRC.includes('const DB_VERSION = 16;') && !DB.STORES.maintenance && !/name\s*:\s*'maintenance'/.test(DB_SRC),
-  'maintenance adds no IndexedDB store and leaves the approved DB version unchanged');
+ok(DB_SRC.includes('const DB_VERSION = 17;') && !DB.STORES.maintenance && !/name\s*:\s*'maintenance'/.test(DB_SRC),
+  'maintenance adds no IndexedDB store and retains the approved DB schema');
 ok(!existsSync('./treasury.js') && !existsSync('./services/treasuryRepository.js')
    && !ENTITIES_SRC.includes('treasuryPage') && !FINANCIAL_SRC.includes('treasury:changed'),
   'maintenance does not restore a standalone Treasury subsystem');

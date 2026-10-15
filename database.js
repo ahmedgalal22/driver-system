@@ -31,14 +31,14 @@ const DB = (() => {
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
   const DB_NAME    = 'Operating System';
-  const DB_VERSION = 16;             // v16: Dashboard Capital Treasury (mainCapitalTreasury) restored (clean reset); v15: Load Prices master-data store added (clean reset); v14: standalone Treasury (treasury store) removed; v13: receipt-numbering system removed — receipts rely on the internal UUID id only
+  const DB_VERSION = 17;             // v17: first data-preserving lifecycle release; canonical v16 schema is validated in place.
 
   /**
-   * STORES schema.
+   * Frozen source contract for the only supported in-place migration: v16 → v17.
    * Each entry: { name, keyPath, autoIncrement, indexes }
    * indexes: [{ name, keyPath, options }]
    */
-  const STORES = {
+  const V16_SCHEMA = {
 
     users: {
       name: 'users',
@@ -182,10 +182,121 @@ const DB = (() => {
 
   };
 
+  // v17 intentionally retains the v16 logical schema. Future versions must add
+  // their own explicit source/target contracts rather than mutating this one.
+  const STORES = V16_SCHEMA;
+
   // ─── INTERNAL STATE ──────────────────────────────────────────────────────────
 
   let _db = null; // IDBDatabase instance
   let _readyPromise = null; // single source of truth for readiness
+
+  // ─── SCHEMA LIFECYCLE ────────────────────────────────────────────────────────
+
+  function _same_key_path(actual, expected) {
+    if (Array.isArray(actual) || Array.isArray(expected)) {
+      return Array.isArray(actual)
+        && Array.isArray(expected)
+        && actual.length === expected.length
+        && actual.every((part, index) => part === expected[index]);
+    }
+    return actual === expected;
+  }
+
+  function _schema_error(message) {
+    return new Error(`[DB:migration] ${message}`);
+  }
+
+  function _create_schema_for_fresh_database(db, schema) {
+    for (const storeDef of Object.values(schema)) {
+      const store = db.createObjectStore(storeDef.name, {
+        keyPath       : storeDef.keyPath,
+        autoIncrement : storeDef.autoIncrement,
+      });
+      for (const { name, keyPath, options } of (storeDef.indexes || [])) {
+        store.createIndex(name, keyPath, options || {});
+      }
+    }
+  }
+
+  function _validate_store_definition(upgradeTx, storeDef) {
+    const store = upgradeTx.objectStore(storeDef.name);
+    if (!_same_key_path(store.keyPath, storeDef.keyPath)) {
+      throw _schema_error(
+        `Store "${storeDef.name}" keyPath is incompatible; expected ${JSON.stringify(storeDef.keyPath)}.`
+      );
+    }
+    if (store.autoIncrement !== Boolean(storeDef.autoIncrement)) {
+      throw _schema_error(
+        `Store "${storeDef.name}" autoIncrement is incompatible; expected ${Boolean(storeDef.autoIncrement)}.`
+      );
+    }
+
+    const expectedIndexes = new Map((storeDef.indexes || []).map(indexDef => [indexDef.name, indexDef]));
+    for (const indexDef of expectedIndexes.values()) {
+      if (!store.indexNames.contains(indexDef.name)) {
+        throw _schema_error(`Store "${storeDef.name}" is missing required index "${indexDef.name}".`);
+      }
+      const index = store.index(indexDef.name);
+      const expectedOptions = indexDef.options || {};
+      if (!_same_key_path(index.keyPath, indexDef.keyPath)
+        || index.unique !== Boolean(expectedOptions.unique)
+        || index.multiEntry !== Boolean(expectedOptions.multiEntry)) {
+        throw _schema_error(
+          `Index "${storeDef.name}.${indexDef.name}" is incompatible with the frozen v16 contract.`
+        );
+      }
+    }
+
+    // Extra indexes can alter write constraints or query behavior. Preserve them
+    // untouched and stop instead of silently accepting, deleting, or repairing.
+    for (const indexName of Array.from(store.indexNames)) {
+      if (!expectedIndexes.has(indexName)) {
+        throw _schema_error(
+          `Store "${storeDef.name}" has unsupported extra index "${indexName}"; no data was changed.`
+        );
+      }
+    }
+  }
+
+  /**
+   * v16 → v17 is deliberately validation-only. It must not create, delete,
+   * clear, or rewrite stores, indexes, or records.
+   */
+  function migrateV16ToV17(db, upgradeTx) {
+    const expectedStores = new Set(Object.values(V16_SCHEMA).map(storeDef => storeDef.name));
+    for (const storeDef of Object.values(V16_SCHEMA)) {
+      if (!db.objectStoreNames.contains(storeDef.name)) {
+        throw _schema_error(`Missing required v16 store "${storeDef.name}"; no data was changed.`);
+      }
+      _validate_store_definition(upgradeTx, storeDef);
+    }
+
+    // Unknown stores do not change canonical-store write constraints. Leave them
+    // intact and visible for assessment; do not delete or recreate them.
+    const extras = Array.from(db.objectStoreNames).filter(name => !expectedStores.has(name));
+    if (extras.length > 0) {
+      console.warn(`[DB:migration] Preserving unsupported extra object store(s): ${extras.join(', ')}.`);
+    }
+  }
+
+  function _run_upgrade(event) {
+    const db = event.target.result;
+    const upgradeTx = event.target.transaction;
+    const oldVersion = event.oldVersion;
+
+    if (oldVersion === 0) {
+      _create_schema_for_fresh_database(db, STORES);
+      return null;
+    }
+    if (oldVersion === 16) {
+      migrateV16ToV17(db, upgradeTx);
+      return null;
+    }
+    throw _schema_error(
+      `Unsupported source schema version ${oldVersion}. No data was changed; use a compatible build and assess migration support.`
+    );
+  }
 
   // ─── INIT ────────────────────────────────────────────────────────────────────
 
@@ -200,49 +311,50 @@ const DB = (() => {
       if (_db) return resolve(_db);
 
       const request = indexedDB.open(DB_NAME, DB_VERSION);
+      let settled = false;
+      let upgradeFailure = null;
 
       request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-
-        // Schema policy: no migration, no legacy compatibility (clean reset).
-        // Drop every existing object store, then create the current STORES set.
-        // Any previously persisted data (e.g. removed header fields) is purged
-        // by the reset itself on version bump.
-        const existingNames = Array.from(db.objectStoreNames);
-        for (const name of existingNames) {
-          db.deleteObjectStore(name);
+        try {
+          _run_upgrade(event);
+        } catch (err) {
+          upgradeFailure = err instanceof Error ? err : _schema_error(String(err));
+          try { event.target.transaction.abort(); } catch (_) {}
         }
-
-        Object.values(STORES).forEach((storeDef) => {
-          const store = db.createObjectStore(storeDef.name, {
-            keyPath       : storeDef.keyPath,
-            autoIncrement : storeDef.autoIncrement,
-          });
-          (storeDef.indexes || []).forEach(({ name, keyPath, options }) => {
-            store.createIndex(name, keyPath, options || {});
-          });
-        });
       };
 
       request.onsuccess = (event) => {
-        _db = event.target.result;
+        const openedDb = event.target.result;
+        if (settled) {
+          // A blocked request can succeed later, after its caller has already
+          // received an actionable error. Do not revive that failed init path.
+          openedDb.close();
+          return;
+        }
 
+        _db = openedDb;
         _db.onversionchange = () => {
           _db.close();
           _db = null;
-          console.warn('[DB] Database version changed — connection closed.');
+          _readyPromise = null;
+          console.warn('[DB] Database version changed — connection closed. Reload this tab after the upgrade completes.');
         };
 
+        settled = true;
         resolve(_db);
       };
 
-      request.onerror   = () => {
+      request.onerror = () => {
+        if (settled) return;
+        settled = true;
         _readyPromise = null;
-        reject(_wrap_error('init', request.error));
+        reject(upgradeFailure || _wrap_error('init', request.error));
       };
       request.onblocked = () => {
+        if (settled) return;
+        settled = true;
         _readyPromise = null;
-        reject(new Error('[DB] Open blocked by another tab.'));
+        reject(new Error('[DB] Upgrade blocked by another Karta tab or window. Close other tabs/windows using this database, then reload or retry.'));
       };
     });
 

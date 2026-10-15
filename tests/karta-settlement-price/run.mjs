@@ -211,9 +211,9 @@ ok(!ENTITIES_SRC.includes('data-action="open-karta-settlement"')
 ok(FINANCIAL_SRC.includes('updateDriverKartaSettlementPrice')
   && !FINANCIAL_SRC.includes('is_settled'),
   'price persistence remains a receipt-row patch with settlement status derived from active ledger records');
-ok(DATABASE_SRC.includes('const DB_VERSION = 16;')
+ok(DATABASE_SRC.includes('const DB_VERSION = 17;')
   && !DATABASE_SRC.includes('driver_settlement_price'),
-  'no IndexedDB version, store, index, or schema definition change was required');
+  'no Karta-specific store, index, or schema definition change was required');
 
 console.log(failures === 0
   ? '\n✅ ALL KARTA-SETTLEMENT-PRICE ASSERTIONS PASSED'

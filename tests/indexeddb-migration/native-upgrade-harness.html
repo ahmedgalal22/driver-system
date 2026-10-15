@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Karta IndexedDB v16 → v17 native migration harness</title>
+  <style>
+    body { font: 14px/1.45 system-ui, sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+    .warning { border: 2px solid #b42318; background: #fff3f2; padding: 1rem; border-radius: .5rem; }
+    button { padding: .65rem 1rem; font-weight: 700; cursor: pointer; }
+    pre { background: #111827; color: #e5e7eb; padding: 1rem; border-radius: .5rem; overflow: auto; white-space: pre-wrap; }
+    .pass { color: #166534; } .fail { color: #b42318; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Native IndexedDB v16 → v17 migration harness</h1>
+  <div class="warning">
+    <strong>Disposable profile only.</strong> This harness uses the production database name
+    <code>Operating System</code> and deletes/reseeds it repeatedly. Run only from a dedicated
+    disposable browser profile and disposable origin. Never use an operator profile or an origin
+    that contains Karta data.
+  </div>
+  <p><label><input id="confirm" type="checkbox"> I confirm this is a disposable browser profile and origin.</label></p>
+  <button id="run" type="button">Run native migration checks</button>
+  <pre id="log" aria-live="polite">Awaiting confirmation.</pre>
+
+<script type="module">
+const DB_NAME = 'Operating System';
+const TARGET_VERSION = 17;
+const USER = 'migration-harness';
+const logEl = document.getElementById('log');
+const runButton = document.getElementById('run');
+const confirmBox = document.getElementById('confirm');
+let failures = 0;
+
+const SCHEMA = {
+  users: { keyPath: 'id', autoIncrement: true, indexes: [
+    ['by_username', 'username', { unique: true }], ['by_deleted', 'deleted_at', {}],
+  ] },
+  vehicles: { keyPath: 'id', autoIncrement: true, indexes: [
+    ['by_plate', 'plate', {}], ['by_office', 'office_id', {}], ['by_deleted', 'deleted_at', {}],
+  ] },
+  vehicle_ledger: { keyPath: 'id', autoIncrement: true, indexes: [
+    ['by_vehicle', 'vehicle_id', {}], ['by_reference_id', 'reference_id', {}],
+    ['by_reference_type', 'reference_type', {}], ['by_effect', 'effect', {}],
+    ['by_type', 'type', {}], ['by_is_reversed', 'is_reversed', {}],
+    ['by_ref_active', ['reference_id', 'is_reversed'], {}], ['by_deleted', 'deleted_at', {}],
+  ] },
+  offices: { keyPath: 'id', autoIncrement: true, indexes: [
+    ['by_name', 'name', { unique: true }], ['by_deleted', 'deleted_at', {}],
+  ] },
+  loadPrices: { keyPath: 'id', autoIncrement: false, indexes: [
+    ['by_canonical_route', 'canonical_route', { unique: true }], ['by_deleted', 'deleted_at', {}],
+  ] },
+  receipts: { keyPath: 'id', autoIncrement: false, indexes: [['by_deleted', 'deleted_at', {}]] },
+  vehicleOwners: { keyPath: 'id', autoIncrement: false, indexes: [
+    ['by_username', 'username', {}], ['by_name', 'name', {}], ['by_deleted', 'deleted_at', {}],
+  ] },
+  drivers: { keyPath: 'id', autoIncrement: true, indexes: [
+    ['by_username', 'username', {}], ['by_name', 'name', {}], ['by_phone', 'phone', {}], ['by_deleted', 'deleted_at', {}],
+  ] },
+  receipt_rows: { keyPath: 'row_id', autoIncrement: false, indexes: [
+    ['by_receipt', 'receipt_id', {}], ['by_driver', 'driver_id', {}],
+    ['by_vehicle', 'vehicle_id', {}], ['by_receipt_driver', ['receipt_id', 'driver_id'], {}],
+  ] },
+  mainCapitalTreasury: { keyPath: 'id', autoIncrement: false, indexes: [
+    ['by_username', 'username', {}], ['by_type', 'type', {}], ['by_deleted', 'deleted_at', {}],
+  ] },
+};
+
+function write(message, kind = '') {
+  const line = `${kind ? `[${kind}] ` : ''}${message}`;
+  logEl.textContent += `\n${line}`;
+  console[kind === 'FAIL' ? 'error' : 'log'](line);
+}
+function assert(condition, message) {
+  if (!condition) { failures++; write(message, 'FAIL'); throw new Error(message); }
+  write(message, 'PASS');
+}
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+  });
+}
+function transactionDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('Transaction aborted'));
+    tx.onerror = () => reject(tx.error || new Error('Transaction failed'));
+  });
+}
+function keyPathEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b)
+    && a.length === b.length && a.every((item, index) => item === b[index]);
+  return a === b;
+}
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') return Object.keys(value).sort().reduce((out, key) => {
+    out[key] = canonical(value[key]); return out;
+  }, {});
+  return value;
+}
+function canonicalJson(value) { return JSON.stringify(canonical(value)); }
+function createSchema(db) {
+  for (const [name, def] of Object.entries(SCHEMA)) {
+    const store = db.createObjectStore(name, { keyPath: def.keyPath, autoIncrement: def.autoIncrement });
+    for (const [indexName, keyPath, options] of def.indexes) store.createIndex(indexName, keyPath, options);
+  }
+}
+function openRaw(version, upgrade) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, version);
+    request.onupgradeneeded = event => upgrade?.(event.target.result, event.target.transaction, event);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Open failed'));
+    request.onblocked = () => reject(new Error('Raw open blocked'));
+  });
+}
+function deleteDisposableDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error('Delete failed'));
+    request.onblocked = () => reject(new Error('Delete blocked: a harness connection is still open'));
+  });
+}
+async function seedV16({ extraStore = false, extraIndex = false, wrongRequiredIndex = false } = {}) {
+  const db = await openRaw(16, (target, upgradeTx) => {
+    createSchema(target);
+    if (extraStore) target.createObjectStore('legacy_extra', { keyPath: 'id' });
+    if (extraIndex) upgradeTx.objectStore('vehicles').createIndex('unexpected_index', 'owner_id');
+    if (wrongRequiredIndex) {
+      const store = upgradeTx.objectStore('vehicles');
+      store.deleteIndex('by_office');
+      store.createIndex('by_office', 'owner_id');
+    }
+  });
+  const now = 1700000000000;
+  const audit = { username: USER, created_at: now, created_by: USER, updated_at: now, updated_by: USER, deleted_at: null };
+  const records = {
+    users: [{ ...audit, id: 1, password_hash: 'fixture', role: 'admin' }],
+    vehicleOwners: [{ ...audit, id: 'owner-1', name: 'Fixture Owner' }],
+    offices: [{ ...audit, id: 2, name: 'Fixture Office', phone: null }],
+    vehicles: [{ ...audit, id: 10, plate: 'FIX-10', owner_id: 'owner-1', owner_name: 'Fixture Owner', office_id: 2 }],
+    drivers: [{ ...audit, id: 20, name: 'Fixture Driver', phone: '0100' }],
+    receipts: [{ ...audit, id: 'receipt-1', receipt_date: '2026-01-15', client_id: 'owner-1', client_type: 'owner', client_name: 'Fixture Owner', total: 11500 }],
+    receipt_rows: [{ ...audit, row_id: 'row-1', receipt_id: 'receipt-1', vehicle_id: 10, vehicle_plate: 'FIX-10', owner_id: 'owner-1', driver_id: 20, driver_name: 'Fixture Driver', office: 'Fixture Office', net: 10000, sarf: 1500, advance: 0, driver_price: 0, driver_settlement_price: 2500, payment_status: 'paid' }],
+    loadPrices: [{ ...audit, id: 'route-1', loading: 'طنطا', destination: 'القاهرة', canonical_route: 'طنطا|القاهره', price: 12500 }],
+    mainCapitalTreasury: [{ ...audit, id: 'capital-1', type: 'deposit', amount: 50000, note: 'Fixture capital', date: '2026-01-15' }],
+    vehicle_ledger: [
+      { ...audit, id: 100, owner_id: '2', client_id: '2', client_type: 'office', vehicle_id: null, type: 'withdraw', amount: 11500, reference_type: 'receipt_row_company_charge', reference_id: 'row-1', effect: 'receipt_row_company_charge', date: '2026-01-15', applied_at: '2026-01-15T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 101, owner_id: '2', client_id: '2', client_type: 'office', vehicle_id: null, type: 'deposit', amount: 11500, reference_type: 'receipt_row_payment_company', reference_id: 'row-1', effect: 'receipt_row_payment_company', date: '2026-01-15', applied_at: '2026-01-15T10:01:00+02:00', is_reversed: false },
+      { ...audit, id: 102, owner_id: 'owner-1', client_id: '10', client_type: 'vehicle', vehicle_id: 10, type: 'deposit', amount: 10000, reference_type: 'receipt_row_payment_vehicle', reference_id: 'row-1', effect: 'receipt_row_payment_vehicle', date: '2026-01-15', applied_at: '2026-01-15T10:01:00+02:00', is_reversed: false },
+      { ...audit, id: 103, owner_id: 'owner-1', client_id: '10', client_type: 'vehicle', vehicle_id: 10, type: 'withdraw', amount: 2000, reference_type: 'manual_vehicle_balance', reference_id: 'manual-vehicle-1', effect: 'manual_vehicle_balance', date: '2026-01-16', applied_at: '2026-01-16T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 104, owner_id: '2', client_id: '2', client_type: 'office', vehicle_id: null, type: 'withdraw', amount: 500, reference_type: 'manual_office_balance', reference_id: 'manual-office-1', effect: 'manual_office_balance', date: '2026-01-16', applied_at: '2026-01-16T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 105, owner_id: '20', driver_id: 20, client_type: 'driver', vehicle_id: null, type: 'deposit', amount: 3000, reference_type: 'manual_driver_balance', reference_id: 'manual-driver-1', effect: 'manual_driver_balance', date: '2026-01-16', applied_at: '2026-01-16T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 106, owner_id: 20, client_type: 'driver', vehicle_id: 10, type: 'driver_karta_payment', amount: -2500, price: 2500, reference_type: 'receipt_row', reference_id: 'row-1', date: '2026-01-17', applied_at: '2026-01-17T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 107, owner_id: 'owner-1', client_id: 'owner-1', client_type: 'owner', vehicle_id: 10, type: 'withdraw', amount: 2500, reference_type: 'receipt_row', reference_id: 'row-1', effect: 'karta_settlement_charge', date: '2026-01-17', applied_at: '2026-01-17T10:00:00+02:00', is_reversed: false },
+      { ...audit, id: 108, owner_id: 'owner-1', client_id: '10', client_type: 'vehicle', vehicle_id: 10, type: 'deposit', amount: 777, reference_type: 'fixture_reversed', reference_id: 'reversed-1', effect: 'fixture_reversed', date: '2026-01-18', applied_at: '2026-01-18T10:00:00+02:00', is_reversed: true, reversed_at: '2026-01-18T11:00:00+02:00', reversed_by: USER, deleted_at: now + 1 },
+    ],
+  };
+  if (extraStore) records.legacy_extra = [{ id: 'extra-1', value: 'preserve me' }];
+  const storeNames = Object.keys(records);
+  const tx = db.transaction(storeNames, 'readwrite');
+  for (const [storeName, rows] of Object.entries(records)) {
+    const store = tx.objectStore(storeName);
+    for (const row of rows) store.put(row);
+  }
+  await transactionDone(tx);
+  return db;
+}
+async function snapshot(db) {
+  const stores = Array.from(db.objectStoreNames).sort();
+  const tx = db.transaction(stores, 'readonly');
+  const out = {};
+  for (const name of stores) {
+    const store = tx.objectStore(name);
+    const indexes = Array.from(store.indexNames).sort().map(indexName => {
+      const index = store.index(indexName);
+      return { name: indexName, keyPath: index.keyPath, unique: index.unique, multiEntry: index.multiEntry };
+    });
+    const rows = await requestResult(store.getAll());
+    out[name] = {
+      keyPath: store.keyPath,
+      autoIncrement: store.autoIncrement,
+      indexes,
+      records: rows.map(canonical).sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b))),
+    };
+  }
+  await transactionDone(tx);
+  return canonical(out);
+}
+function assertCanonicalSchema(snapshotValue) {
+  assert(Object.keys(snapshotValue).filter(name => name !== 'legacy_extra').length === 10, 'complete canonical ten-store schema exists');
+  for (const [name, def] of Object.entries(SCHEMA)) {
+    const actual = snapshotValue[name];
+    assert(!!actual, `store ${name} exists`);
+    assert(keyPathEqual(actual.keyPath, def.keyPath) && actual.autoIncrement === def.autoIncrement, `store contract preserved: ${name}`);
+    assert(actual.indexes.length === def.indexes.length, `index count preserved: ${name}`);
+    for (const [indexName, keyPath, options] of def.indexes) {
+      const index = actual.indexes.find(candidate => candidate.name === indexName);
+      assert(!!index && keyPathEqual(index.keyPath, keyPath)
+        && index.unique === Boolean(options.unique) && index.multiEntry === Boolean(options.multiEntry), `index contract preserved: ${name}.${indexName}`);
+    }
+  }
+}
+async function importDatabase(caseName) {
+  return import(`../../database.js?nativeMigrationCase=${encodeURIComponent(caseName)}-${Date.now()}-${Math.random()}`);
+}
+async function initWithUpgradeCapture(DB) {
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const events = [];
+  indexedDB.open = (...args) => {
+    const request = originalOpen(...args);
+    request.addEventListener('upgradeneeded', event => events.push({ oldVersion: event.oldVersion, newVersion: event.newVersion }));
+    return request;
+  };
+  try { await DB.init(); }
+  finally { indexedDB.open = originalOpen; }
+  return events;
+}
+async function closeAndDelete(db) {
+  try { db?.close(); } catch (_) {}
+  await deleteDisposableDatabase();
+}
+async function testFreshCreation() {
+  await deleteDisposableDatabase();
+  const { DB } = await importDatabase('fresh');
+  await DB.init();
+  const value = await snapshot(DB._db);
+  assertCanonicalSchema(value);
+  await closeAndDelete(DB._db);
+}
+async function testCanonicalUpgrade() {
+  await deleteDisposableDatabase();
+  const seeded = await seedV16();
+  const before = await snapshot(seeded);
+  seeded.close();
+  const { DB } = await importDatabase('canonical');
+  const events = await initWithUpgradeCapture(DB);
+  assert(events.some(event => event.oldVersion === 16 && event.newVersion === 17), 'native upgrade reports oldVersion 16 and newVersion 17');
+  const after = await snapshot(DB._db);
+  assert(canonicalJson(before) === canonicalJson(after), 'all raw records, keys, flags, cents, relationships, stores, and indexes are unchanged');
+  assert(after.vehicle_ledger.records.every(entry => Number.isInteger(entry.amount)), 'ledger amounts remain integer cents');
+  assert(after.mainCapitalTreasury.records[0].id === 'capital-1' && after.mainCapitalTreasury.records[0].amount === 50000, 'mainCapitalTreasury record remains unchanged');
+  assert(after.vehicle_ledger.records.some(entry => entry.reference_id === 'row-1' && entry.effect === 'receipt_row_company_charge'), 'company charge relationship survives');
+  assert(after.vehicle_ledger.records.some(entry => entry.reference_id === 'row-1' && entry.effect === 'receipt_row_payment_company'), 'company payment relationship survives');
+  assert(after.vehicle_ledger.records.some(entry => entry.reference_id === 'row-1' && entry.effect === 'receipt_row_payment_vehicle'), 'vehicle payment relationship survives');
+  assert(after.vehicle_ledger.records.some(entry => entry.is_reversed === true && entry.deleted_at !== null), 'reversed and soft-deleted audit entry survives');
+
+  // Read the preserved fixture through the existing production projections.
+  const { FinancialService } = await import(`../../financial.js?nativeMigrationProjection=${Date.now()}-${Math.random()}`);
+  const [vehicle, office, driver, kartas] = await Promise.all([
+    FinancialService.rebuildVehicleBalance(10),
+    FinancialService.getOfficeBalance(2),
+    FinancialService.getDriverBalance(20),
+    FinancialService.getDriverKartas(20),
+  ]);
+  assert(vehicle.balance === 55, 'preserved vehicle projection remains 55.00');
+  assert(office.balance === -5, 'preserved office projection remains -5.00');
+  assert(driver.balance === 30, 'preserved driver projection remains 30.00');
+  assert(kartas.length === 1 && kartas[0].status === 'settled', 'preserved Karta settlement pair remains settled');
+
+  // A separate later upgrade proves that v17 connections receive versionchange
+  // and close before a subsequent disposable cleanup.
+  const upgrader = await openRaw(18, () => {});
+  assert(DB._db === null, 'versionchange closes the v17 migration connection');
+  upgrader.close();
+  await deleteDisposableDatabase();
+}
+async function testExtraStore() {
+  await deleteDisposableDatabase();
+  const seeded = await seedV16({ extraStore: true });
+  seeded.close();
+  const { DB } = await importDatabase('extra-store');
+  await DB.init();
+  const value = await snapshot(DB._db);
+  assert(value.legacy_extra.records.length === 1 && value.legacy_extra.records[0].value === 'preserve me', 'extra object store is preserved unchanged');
+  await closeAndDelete(DB._db);
+}
+async function assertUpgradeRejects(options, label) {
+  await deleteDisposableDatabase();
+  const seeded = await seedV16(options);
+  const before = await snapshot(seeded);
+  seeded.close();
+  const { DB } = await importDatabase(label);
+  let error = null;
+  try { await DB.init(); } catch (err) { error = err; }
+  assert(!!error && /migration|unsupported|index/i.test(error.message), `${label} rejects with actionable migration error`);
+  const raw = await openRaw();
+  assert(raw.version === 16, `${label} leaves database at v16`);
+  const after = await snapshot(raw);
+  assert(canonicalJson(before) === canonicalJson(after), `${label} leaves schema and records unchanged after rollback`);
+  await closeAndDelete(raw);
+}
+async function testUnsupportedSourceVersion() {
+  await deleteDisposableDatabase();
+  const legacy = await openRaw(15, target => target.createObjectStore('legacy', { keyPath: 'id' }));
+  const tx = legacy.transaction('legacy', 'readwrite');
+  tx.objectStore('legacy').put({ id: 'legacy-1', value: 'must survive' });
+  await transactionDone(tx);
+  legacy.close();
+  const { DB } = await importDatabase('unsupported-v15');
+  let error = null;
+  try { await DB.init(); } catch (err) { error = err; }
+  assert(!!error && /Unsupported source schema version 15/.test(error.message), 'unsupported v15 rejects with actionable error');
+  const raw = await openRaw();
+  assert(raw.version === 15 && (await requestResult(raw.transaction('legacy').objectStore('legacy').get('legacy-1'))).value === 'must survive', 'unsupported v15 data remains unchanged');
+  await closeAndDelete(raw);
+}
+async function testBlockedUpgrade() {
+  await deleteDisposableDatabase();
+  const blocker = await seedV16();
+  const { DB } = await importDatabase('blocked');
+  let error = null;
+  try { await DB.init(); } catch (err) { error = err; }
+  assert(!!error && /blocked.*Karta tab|Close other tabs/i.test(error.message), 'blocked upgrade returns actionable error');
+  assert(blocker.version === 16, 'blocked connection retains original v16 database while open');
+  blocker.close();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  const current = await openRaw();
+  assert(current.version === 17, 'pending blocked upgrade completes only after blocker closes');
+  await closeAndDelete(current);
+}
+async function run() {
+  if (!confirmBox.checked) { write('Confirmation is required.', 'FAIL'); return; }
+  failures = 0;
+  logEl.textContent = `Origin: ${location.origin}\nDatabase: ${DB_NAME}\n`;
+  try {
+    await testFreshCreation();
+    await testExtraStore();
+    await assertUpgradeRejects({ wrongRequiredIndex: true }, 'incompatible-required-index');
+    await assertUpgradeRejects({ extraIndex: true }, 'extra-canonical-index');
+    await testUnsupportedSourceVersion();
+    await testBlockedUpgrade();
+    await testCanonicalUpgrade();
+    write(failures === 0 ? 'All native migration checks passed.' : `${failures} check(s) failed.`, failures ? 'FAIL' : 'PASS');
+  } catch (error) {
+    write(error?.stack || error?.message || String(error), 'FAIL');
+  }
+}
+runButton.addEventListener('click', run);
+</script>
+</body>
+</html>

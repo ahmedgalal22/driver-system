@@ -1,7 +1,9 @@
-// idb-shim.mjs — minimal, faithful IndexedDB subset sufficient for database.js.
-// Implements: indexedDB.open (with onupgradeneeded), object stores with
-// keyPath/autoIncrement, unique ConstraintError, indexes with getAll,
-// single & multi-store transactions with oncomplete/onabort semantics.
+// idb-shim.mjs — minimal IndexedDB subset sufficient for current Node regressions.
+// It models fresh-database creation only, including oldVersion/newVersion for
+// that event. It does not model browser database upgrades, blocked requests,
+// versionchange, or upgrade rollback; native-browser tests own those concerns.
+// Implements object stores with keyPath/autoIncrement, unique ConstraintError,
+// indexes with getAll, and single & multi-store transaction semantics.
 
 function keyOf(def, record) { return record?.[def.keyPath]; }
 function idxVal(kp, record) { return Array.isArray(kp) ? kp.map(k => record[k]) : record[kp]; }
@@ -163,7 +165,11 @@ export function installIDB() {
         const isNew = !db;
         if (isNew) { db = new FakeDB(name); _dbs.set(name, db); }
         req.result = db;
-        if (isNew) queueMicrotask(() => req.onupgradeneeded && req.onupgradeneeded({ target: req }));
+        if (isNew) queueMicrotask(() => req.onupgradeneeded && req.onupgradeneeded({
+          target: req,
+          oldVersion: 0,
+          newVersion: _version,
+        }));
         return db;
       });
       return req;

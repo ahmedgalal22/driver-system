@@ -41,8 +41,8 @@ function materialize(source, name, bindings) {
 await DB.init();
 
 console.log('\n— schema and exclusion contract —');
-ok(DB_SRC.includes('const DB_VERSION = 16;') && !!DB.STORES.mainCapitalTreasury,
-  'v16 defines the Dashboard-only mainCapitalTreasury store');
+ok(DB_SRC.includes('const DB_VERSION = 17;') && !!DB.STORES.mainCapitalTreasury,
+  'v17 retains the Dashboard-only mainCapitalTreasury store');
 ok(DB.STORES.mainCapitalTreasury.keyPath === 'id'
    && DB.STORES.mainCapitalTreasury.autoIncrement === false
    && DB.STORES.mainCapitalTreasury.indexes.some(i => i.name === 'by_username')
