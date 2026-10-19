@@ -17,6 +17,8 @@ class FakeRequest {
     this.result = undefined; this.error = null;
     if (tx) tx._pending++;
     queueMicrotask(() => {
+      // Native IndexedDB cancels pending requests when a transaction aborts.
+      if (tx?._settled) return;
       try {
         this.result = executor();
         const h = this.onsuccess;
@@ -48,6 +50,9 @@ class FakeIndex {
 
 class FakeStore {
   constructor(def) { this.def = def; this.name = def.name; this.records = new Map(); this.auto = 0; this.indexDefs = new Map(); this._tx = null; }
+  get keyPath() { return this.def.keyPath; }
+  get autoIncrement() { return this.def.autoIncrement; }
+  get indexNames() { return new FakeStoreNameList(...this.indexDefs.keys()); }
   _withTx(tx) { this._tx = tx; return this; } // single sequential tx at a time — safe
   createIndex(name, keyPath, options = {}) { this.indexDefs.set(name, { name, keyPath, options }); }
   index(name) {
@@ -57,6 +62,19 @@ class FakeStore {
   }
   get(id)   { return new FakeRequest(() => { const r = this.records.get(id); return r ? structuredClone(r) : undefined; }, this._tx); }
   getAll()  { return new FakeRequest(() => [...this.records.values()].map(v => structuredClone(v)), this._tx); }
+  getAllKeys() { return new FakeRequest(() => [...this.records.keys()].map(v => structuredClone(v)), this._tx); }
+  _assertUniqueIndexes(record, key) {
+    for (const def of this.indexDefs.values()) {
+      if (!def.options?.unique) continue;
+      const value = idxVal(def.keyPath, record);
+      if (value === undefined) continue;
+      for (const [otherKey, other] of this.records) {
+        if (otherKey !== key && eq(idxVal(def.keyPath, other), value)) {
+          throw new FakeError('ConstraintError', `ConstraintError: unique index ${def.name}`);
+        }
+      }
+    }
+  }
   add(rec)  {
     return new FakeRequest(() => {
       const r = structuredClone(rec);
@@ -66,13 +84,7 @@ class FakeStore {
         key = ++this.auto; r[this.def.keyPath] = key;
       } else if (this.def.autoIncrement && typeof key === 'number' && key > this.auto) this.auto = key;
       if (this.records.has(key)) throw new FakeError('ConstraintError', `ConstraintError: duplicate key ${key} in ${this.name}`);
-      // unique index enforcement
-      for (const def of this.indexDefs.values()) {
-        if (!def.options?.unique) continue;
-        const v = idxVal(def.keyPath, r);
-        if (v === undefined) continue;
-        for (const other of this.records.values()) if (eq(idxVal(def.keyPath, other), v)) throw new FakeError('ConstraintError', `ConstraintError: unique index ${def.name}`);
-      }
+      this._assertUniqueIndexes(r, key);
       this.records.set(key, r);
       return key;
     }, this._tx);
@@ -81,11 +93,16 @@ class FakeStore {
     return new FakeRequest(() => {
       const r = structuredClone(rec);
       let key = keyOf(this.def, r);
-      if (key == null) { if (!this.def.autoIncrement) throw new FakeError('DataError', 'no key'); key = ++this.auto; r[this.def.keyPath] = key; }
+      if (key == null) {
+        if (!this.def.autoIncrement) throw new FakeError('DataError', 'no key');
+        key = ++this.auto; r[this.def.keyPath] = key;
+      } else if (this.def.autoIncrement && typeof key === 'number' && key > this.auto) this.auto = key;
+      this._assertUniqueIndexes(r, key);
       this.records.set(key, r);
       return key;
     }, this._tx);
   }
+  clear()  { return new FakeRequest(() => { this.records.clear(); return undefined; }, this._tx); }
   delete(id){ return new FakeRequest(() => { this.records.delete(id); return undefined; }, this._tx); }
 }
 
@@ -136,7 +153,7 @@ class FakeTx {
 }
 
 class FakeDB {
-  constructor(name) { this.name = name; this.stores = new Map(); this.objectStoreNames = new FakeStoreNameList(); this.onversionchange = null; }
+  constructor(name, version) { this.name = name; this.version = version; this.stores = new Map(); this.objectStoreNames = new FakeStoreNameList(); this.onversionchange = null; }
   createObjectStore(name, opts) {
     const s = new FakeStore({ name, keyPath: opts.keyPath, autoIncrement: !!opts.autoIncrement });
     this.stores.set(name, s); this.objectStoreNames.push(name);
@@ -163,7 +180,7 @@ export function installIDB() {
       const req = new FakeRequest(() => {
         let db = _dbs.get(name);
         const isNew = !db;
-        if (isNew) { db = new FakeDB(name); _dbs.set(name, db); }
+        if (isNew) { db = new FakeDB(name, _version); _dbs.set(name, db); }
         req.result = db;
         if (isNew) queueMicrotask(() => req.onupgradeneeded && req.onupgradeneeded({
           target: req,
