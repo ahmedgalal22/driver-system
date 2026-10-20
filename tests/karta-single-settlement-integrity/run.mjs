@@ -47,9 +47,21 @@ async function createRow(row) {
   return row;
 }
 
+// Karta legs are exactly the production namespace (financial.js
+// _activeKartaSettlementLegs): reference_type 'receipt_row' carrying the
+// driver payment type or the vehicle charge effect. The receipt-creation
+// deposit (receipt_row_vehicle_balance) shares reference_id but is a
+// separate namespace and must never be counted as a settlement leg.
+const isKartaLeg = (entry) => entry.reference_type === 'receipt_row'
+  && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge');
+const isVehicleCreation = (entry) => entry.reference_type === 'receipt_row_vehicle_balance'
+  && entry.effect === 'receipt_row_vehicle_balance';
 const activeLegs = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId))
   .filter(entry => entry.is_reversed === false && entry.deleted_at === null
-    && entry.reference_type === 'receipt_row');
+    && isKartaLeg(entry));
+const activeCreation = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId))
+  .filter(entry => entry.is_reversed === false && entry.deleted_at === null
+    && isVehicleCreation(entry));
 const ledgerSnapshot = async () => JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true }));
 const vehicleCents = async (vehicleId) => Math.round((await FinancialService.rebuildVehicleBalance(vehicleId)).balance * 100);
 
@@ -127,6 +139,11 @@ ok(await rejects(() => FinancialService.createKartaSettlement(U, {
 console.log('\n— authoritative successful settlement and return identity —');
 const VALID = await createRow(mkRow({ vehicle: V1, kartano: 'VALID' }));
 const driverBalanceBefore = await FinancialService.getDriverBalance(DRIVER_A.id);
+const vehicleBeforeValidSettlement = await vehicleCents(V1.id);
+const validCreation = await activeCreation(VALID.row_id);
+ok(validCreation.length === 1 && validCreation[0].type === 'deposit' && validCreation[0].amount === 1000
+  && validCreation[0].vehicle_id === V1.id,
+  'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for the VALID row');
 const created = await FinancialService.createKartaSettlement(U, {
   row_id: VALID.row_id, driver_id: DRIVER_A.id, vehicle_id: V1.id, amount: 50,
   date: '2026-10-01', note: 'تسوية صحيحة',
@@ -143,9 +160,9 @@ ok(validLegs.length === 2 && validDriverLeg && validVehicleLeg
   && validDriverLeg.amount === -5000 && validDriverLeg.price === 5000
   && validVehicleLeg.amount === 5000 && validVehicleLeg.type === 'withdraw',
   'successful settlement writes exactly one authoritative driver/vehicle pair');
-ok((await vehicleCents(V1.id)) === -5000
+ok((await vehicleCents(V1.id)) === vehicleBeforeValidSettlement - 5000
   && (await FinancialService.getDriverBalance(DRIVER_A.id)).balance === driverBalanceBefore.balance,
-  'vehicle decreases once while the existing Driver Balance projection remains unchanged');
+  'vehicle decreases exactly once by the settlement amount (delta from the shared-vehicle creation baseline) while the Driver Balance projection remains unchanged');
 
 before = await ledgerSnapshot();
 ok(await rejects(() => FinancialService.createKartaSettlement(U, {
@@ -183,8 +200,10 @@ ok(await rejects(() => FinancialService.createKartaSettlement(U, {
 ok((await ledgerSnapshot()) === before, 'duplicate-state rejection writes nothing');
 
 console.log('\n— atomic update and reversal —');
-const balanceBeforeUpdate = await vehicleCents(V1.id);
 const UPDATE_ROW = await createRow(mkRow({ vehicle: V1, kartano: 'UPDATE' }));
+// Baseline AFTER this row's creation deposit: settlement update/reversal
+// must net to zero against it, with the creation deposit itself untouched.
+const balanceAfterUpdateRowCreation = await vehicleCents(V1.id);
 await FinancialService.createKartaSettlement(U, {
   row_id: UPDATE_ROW.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 });
@@ -194,22 +213,29 @@ const updated = await FinancialService.updateKartaSettlement(U, {
   amount: 80, date: '2026-10-02', note: 'تعديل صحيح',
 });
 const allUpdateLegs = await DB.getByIndex('vehicle_ledger', 'by_reference_id', UPDATE_ROW.row_id);
-const newUpdateLegs = allUpdateLegs.filter(entry => entry.is_reversed === false);
+const newUpdateLegs = allUpdateLegs.filter(entry => entry.is_reversed === false
+  && entry.deleted_at === null && isKartaLeg(entry));
+const updateRowCreationAfterUpdate = await activeCreation(UPDATE_ROW.row_id);
 ok(updated.settlement_reference_id === UPDATE_ROW.row_id
   && oldUpdateLegs.every(entry => allUpdateLegs.find(saved => saved.id === entry.id)?.is_reversed === true)
   && newUpdateLegs.length === 2
   && newUpdateLegs.every(entry => entry.vehicle_id === V1.id)
-  && newUpdateLegs.find(entry => entry.effect === 'karta_settlement_charge')?.amount === 8000,
-  'update reverses old pair and writes a corrected pair using the row vehicle');
+  && newUpdateLegs.find(entry => entry.effect === 'karta_settlement_charge')?.amount === 8000
+  && updateRowCreationAfterUpdate.length === 1,
+  'update reverses old Karta pair and writes a corrected pair using the row vehicle, leaving the creation deposit active');
 ok(await rejects(() => FinancialService.updateKartaSettlement(U, {
   row_id: UPDATE_ROW.row_id, driver_id: DRIVER_A.id, vehicle_id: V2.id,
   amount: 90, date: '2026-10-02',
 })), 'update rejects caller attempt to move charge to another vehicle');
 await FinancialService.reverseKartaSettlement(U, UPDATE_ROW.row_id);
 const reversedUpdateLegs = await DB.getByIndex('vehicle_ledger', 'by_reference_id', UPDATE_ROW.row_id);
-ok(reversedUpdateLegs.every(entry => entry.is_reversed === true && entry.deleted_at === null)
-  && (await vehicleCents(V1.id)) === balanceBeforeUpdate,
-  'reversal marks both active corrected legs reversed, retains history, and restores that settlement balance');
+const reversedUpdateKarta = reversedUpdateLegs.filter(isKartaLeg);
+const reversedUpdateCreation = reversedUpdateLegs.filter(isVehicleCreation);
+ok(reversedUpdateKarta.length === 4
+  && reversedUpdateKarta.every(entry => entry.is_reversed === true && entry.deleted_at === null)
+  && reversedUpdateCreation.length === 1 && reversedUpdateCreation[0].is_reversed === false
+  && (await vehicleCents(V1.id)) === balanceAfterUpdateRowCreation,
+  'reversal marks the corrected Karta pair reversed (all Karta history retained), keeps the creation deposit active while the row lives, and restores the post-creation balance');
 
 console.log('\n— partial reversal is surfaced, not silently hidden —');
 const PARTIAL_REVERSE = await createRow(mkRow({ kartano: 'PARTIAL-REVERSE' }));

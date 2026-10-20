@@ -25,6 +25,15 @@ const rejects = async (fn) => {
     return true;
   }
 };
+// Namespace filters mirror financial.js (_activeKartaSettlementLegs vs the
+// separate receipt_row_vehicle_balance creation namespace).
+const VEHICLE_CREATION = 'receipt_row_vehicle_balance';
+const isKartaLeg = (entry) => entry.reference_type === 'receipt_row'
+  && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge');
+const isVehicleCreation = (entry) => entry.reference_type === VEHICLE_CREATION
+  && entry.effect === VEHICLE_CREATION;
+const activeCreationFor = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId))
+  .filter((entry) => isVehicleCreation(entry) && entry.is_reversed === false && entry.deleted_at === null);
 
 const FINANCIAL_SRC = readFileSync('./financial.js', 'utf8');
 const ENTITIES_SRC = readFileSync('./_src/entities.js', 'utf8');
@@ -99,6 +108,10 @@ ok(initialAProjection.length === 2
   && initialAProjection.find(row => row.row_id === ROW_A_SETTLED.row_id)?.driver_settlement_price === 12.34
   && initialAProjection.find(row => row.row_id === ROW_A_UNSETTLED.row_id)?.driver_settlement_price === null,
   'Driver A reads only its Karta rows with decimalized persistent prices and unsettled status');
+const initialCreations = await Promise.all([ROW_A_SETTLED, ROW_A_UNSETTLED, ROW_B]
+  .map(row => activeCreationFor(row.row_id)));
+ok(initialCreations.every(entries => entries.length === 1 && entries[0].type === 'deposit' && entries[0].amount === 1000),
+  'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for each of the three rows');
 
 console.log('\n— blank, zero, decimal, and isolated patch validation —');
 const untouchedFields = {
@@ -154,15 +167,19 @@ ok((await DB.getById('receipt_rows', ROW_B.row_id)).driver_settlement_price === 
 ok(rawDecimal.vehicle_id === V2.id && rawDecimal.vehicle_plate === V2.plate,
   'settlement-price patch preserves vehicle_id and vehicle_plate exactly');
 const ledgerBeforeSettlement = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
+const v1BalanceBeforePriceOnly = (await FinancialService.rebuildVehicleBalance(V1.id)).balance;
+const v2BalanceBeforePriceOnly = (await FinancialService.rebuildVehicleBalance(V2.id)).balance;
 await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, 201);
 const ledgerAfterPriceOnly = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
 ok(JSON.stringify(ledgerAfterPriceOnly) === JSON.stringify(ledgerBeforeSettlement),
   'price-only update creates and changes no vehicle_ledger movement');
-ok((await FinancialService.rebuildVehicleBalance(V1.id)).balance === 0
-  && (await FinancialService.rebuildVehicleBalance(V2.id)).balance === 0,
-  'price-only update does not change either Vehicle Balance');
+ok(v1BalanceBeforePriceOnly === 10 && v2BalanceBeforePriceOnly === 20
+  && (await FinancialService.rebuildVehicleBalance(V1.id)).balance === v1BalanceBeforePriceOnly
+  && (await FinancialService.rebuildVehicleBalance(V2.id)).balance === v2BalanceBeforePriceOnly,
+  'price-only update does not change either Vehicle Balance (baselines are the creation deposits: V1 one row, V2 two rows)');
 
 console.log('\n— settlement status derives from existing active ledger effects —');
+const v1BalanceBeforeSettlement = (await FinancialService.rebuildVehicleBalance(V1.id)).balance;
 await FinancialService.createKartaSettlement(U, {
   row_id: ROW_A_SETTLED.row_id,
   driver_id: DRIVER_A.id,
@@ -175,17 +192,19 @@ const afterSettlementA = await FinancialService.getDriverKartas(DRIVER_A.id);
 const settledProjection = afterSettlementA.find(row => row.row_id === ROW_A_SETTLED.row_id);
 const unsettledProjection = afterSettlementA.find(row => row.row_id === ROW_A_UNSETTLED.row_id);
 const activeSettlementLegs = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', ROW_A_SETTLED.row_id))
-  .filter(entry => entry.is_reversed === false);
+  .filter(entry => entry.is_reversed === false && entry.deleted_at === null && isKartaLeg(entry));
+const settledRowCreation = await activeCreationFor(ROW_A_SETTLED.row_id);
 ok(settledProjection.status === 'settled'
   && unsettledProjection.status === 'unsettled'
   && afterSettlementA.length === 2,
   'active driver_karta_payment marks exactly its row settled while the Driver All dataset includes both rows');
 ok(activeSettlementLegs.length === 2
   && activeSettlementLegs.some(entry => entry.type === 'driver_karta_payment' && entry.amount === -5000)
-  && activeSettlementLegs.some(entry => entry.effect === 'karta_settlement_charge' && entry.amount === 5000),
-  'existing Karta Settlement still creates its unchanged two financial ledger legs');
-ok((await FinancialService.rebuildVehicleBalance(V1.id)).balance === -50,
-  'existing Karta Settlement keeps its unchanged Vehicle Balance withdrawal behavior');
+  && activeSettlementLegs.some(entry => entry.effect === 'karta_settlement_charge' && entry.amount === 5000)
+  && settledRowCreation.length === 1,
+  'existing Karta Settlement still creates its unchanged two Karta legs, distinct from the row creation deposit');
+ok((await FinancialService.rebuildVehicleBalance(V1.id)).balance === v1BalanceBeforeSettlement - 50,
+  'existing Karta Settlement keeps its unchanged Vehicle Balance withdrawal behavior (exactly -50.00 delta)');
 
 const ledgerBeforeSettledPriceEdit = await DB.getByIndex('vehicle_ledger', 'by_reference_id', ROW_A_SETTLED.row_id);
 await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_SETTLED.row_id, 333.33);

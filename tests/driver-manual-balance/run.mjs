@@ -164,6 +164,13 @@ ok((await directRows()).every(entry => entry.vehicle_id === null)
   'every direct Driver history row remains vehicle_id:null with no Vehicle Balance impact');
 
 console.log('\n— existing Karta Settlement remains isolated —');
+// Namespace filters mirror financial.js (_activeKartaSettlementLegs vs the
+// separate receipt_row_vehicle_balance creation namespace).
+const isKartaLeg = (entry) => entry.reference_type === 'receipt_row'
+  && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge');
+const isVehicleCreation = (entry) => entry.reference_type === 'receipt_row_vehicle_balance'
+  && entry.effect === 'receipt_row_vehicle_balance';
+const vehicleBeforeKartaReceiptCents = await vehicleBalanceCents();
 const kartaRow = {
   _type: 'data',
   row_id: uuid(),
@@ -189,6 +196,12 @@ await FinancialService.createReceipt(U, {
   total: 10,
   rows: [kartaRow],
 });
+const vehicleAfterReceiptCents = await vehicleBalanceCents();
+const kartaRowCreation = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', kartaRow.row_id))
+  .filter(entry => isVehicleCreation(entry) && entry.is_reversed === false && entry.deleted_at === null);
+ok(kartaRowCreation.length === 1 && kartaRowCreation[0].type === 'deposit'
+  && kartaRowCreation[0].amount === 1000 && vehicleAfterReceiptCents === vehicleBeforeKartaReceiptCents + 1000,
+  'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for the Karta row');
 await FinancialService.createKartaSettlement(U, {
   row_id: kartaRow.row_id,
   driver_id: DRIVER.id,
@@ -198,14 +211,14 @@ await FinancialService.createKartaSettlement(U, {
   note: 'تسوية مستقلة',
 });
 const kartaLegs = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', kartaRow.row_id))
-  .filter(entry => entry.is_reversed === false);
+  .filter(entry => entry.is_reversed === false && entry.deleted_at === null && isKartaLeg(entry));
 ok(kartaLegs.length === 2
   && kartaLegs.some(entry => entry.type === 'driver_karta_payment' && entry.amount === -1000)
   && kartaLegs.some(entry => entry.effect === 'karta_settlement_charge' && entry.type === 'withdraw' && entry.amount === 1000),
-  'existing Karta Settlement still posts its unchanged two-leg ledger contract');
-ok((await vehicleBalanceCents()) === -1000
+  'existing Karta Settlement still posts its unchanged two-leg Karta contract (distinct from the creation deposit)');
+ok((await vehicleBalanceCents()) === vehicleAfterReceiptCents - 1000
   && (await FinancialService.getDriverBalance(DRIVER.id)).balance === 0,
-  'existing Karta behavior remains separate from direct Driver Balance movements');
+  'existing Karta behavior remains separate from direct Driver Balance movements (vehicle delta exactly -10.00, driver direct balance untouched)');
 
 console.log('\n— UI and scope fingerprints —');
 ok(ENTITIES_SRC.includes('FinancialService.createManualDriverBalanceEntry(username, data)')

@@ -6,6 +6,7 @@ installIDB();
 const { DB } = await import('./database.js');
 const { FinancialService } = await import('./financial.js');
 const { LoadPriceRepository } = await import('./services/loadPriceRepository.js');
+const { ClientRepository } = await import('./services/clientRepository.js');
 const { canonicalRouteKey } = await import('./services/routeNameNorm.js');
 
 const U = 'load-prices-tester';
@@ -22,6 +23,15 @@ const INDEX_SRC = readFileSync('./_src/index.html', 'utf8');
 const APP_SRC = readFileSync('./_src/app.js', 'utf8');
 
 await DB.init();
+
+// Receipt creation resolves each row vehicle and posts its net deposit to
+// that authoritative vehicle (receipt_row_vehicle_balance), so the fixture
+// vehicle must be a registered vehicle record — same contract as the
+// write-path / receipt-row-vehicle-creation harnesses.
+await ClientRepository.saveVehicle(
+  { id: 'vehicle-1', username: U, plate: '111 أ ب', owner_id: 'owner-1', owner_name: 'مالك اختبار' },
+  { username: U },
+);
 
 const mkRow = (over = {}) => ({
   _type: 'data',
@@ -49,7 +59,22 @@ const mkReceipt = (rows) => ({
   rows,
 });
 const routes = async () => DB.getAll('loadPrices');
-const ledgerCount = async () => (await DB.getAll('vehicle_ledger')).length;
+// Ledger isolation is now checked BY NAMESPACE: receipt creation itself
+// legitimately posts exactly one receipt_row_vehicle_balance deposit (net)
+// per live row. Route discovery must add NOTHING beyond those entries.
+const VEHICLE_CREATION = 'receipt_row_vehicle_balance';
+const isVehicleCreation = (entry) => entry.reference_type === VEHICLE_CREATION
+  && entry.effect === VEHICLE_CREATION;
+const ledgerHistory = async () => DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
+const activeCreationFor = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId))
+  .filter((entry) => isVehicleCreation(entry) && entry.is_reversed === false && entry.deleted_at === null);
+const ledgerIsCreationOnly = async () => {
+  const history = await ledgerHistory();
+  const liveRows = await DB.getAll('receipt_rows');
+  if (!history.every(isVehicleCreation)) return false;
+  const activeByRow = await Promise.all(liveRows.map((row) => activeCreationFor(row.row_id)));
+  return activeByRow.every((entries) => entries.length === 1);
+};
 
 console.log('\n— page and schema contract —');
 ok(DB_SRC.includes('const DB_VERSION = 17;') && DB.STORES.loadPrices,
@@ -71,8 +96,10 @@ await FinancialService.createReceipt(U, mkReceipt([r1]));
 let all = await routes();
 ok(all.length === 1 && all[0].loading === 'الإسكندرية' && all[0].destination === 'دمنهور' && all[0].price === 0,
   'new receipt route creates exactly one readable Load Price record at price zero');
-ok((await ledgerCount()) === 0,
-  'route discovery is master-data only and creates no financial ledger movement');
+const r1Creation = await activeCreationFor(r1.row_id);
+ok(r1Creation.length === 1 && r1Creation[0].type === 'deposit' && r1Creation[0].amount === 1000
+  && r1Creation[0].vehicle_id === 'vehicle-1' && (await ledgerHistory()).length === 1,
+  'route discovery is master-data only: the sole ledger entry is the receipt-creation vehicle deposit (net = 10.00)');
 
 const duplicate = mkRow({ loading: 'اسكندريه', destination: ' دمنهور ' });
 await FinancialService.createReceipt(U, mkReceipt([duplicate]));
@@ -115,8 +142,8 @@ ok(recreated && recreated.id !== damanhurRoute.id && recreated.price === 0 && au
   'deleted route is automatically recreated at price zero while the older record remains audited');
 
 console.log('\n— route/financial isolation —');
-ok((await ledgerCount()) === 0,
-  'route records do not affect vehicle, company, driver, payment-status, or Karta ledgers');
+ok(await ledgerIsCreationOnly(),
+  'route records add no company, driver, payment-status, or Karta movements: every ledger entry is a receipt-creation vehicle deposit, exactly one active per live row');
 
 console.log(failures === 0
   ? '\n✅ ALL LOAD-PRICES ASSERTIONS PASSED'

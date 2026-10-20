@@ -66,6 +66,21 @@ async function createRows(rows) {
 
 const activeByRow = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId))
   .filter(entry => entry.is_reversed === false && entry.deleted_at === null);
+// Namespace filters mirror financial.js: batch/single Karta legs are
+// reference_type 'receipt_row' + driver_karta_payment / karta_settlement_charge
+// (_activeKartaSettlementLegs, batch skip logic); the receipt-creation
+// deposit (receipt_row_vehicle_balance) shares reference_id but is never a
+// settlement leg and never carries a batch_id.
+const isKartaLeg = (entry) => entry.reference_type === 'receipt_row'
+  && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge');
+const isVehicleCreation = (entry) => entry.reference_type === 'receipt_row_vehicle_balance'
+  && entry.effect === 'receipt_row_vehicle_balance';
+const activeKartaByRow = async (rowId) => (await activeByRow(rowId)).filter(isKartaLeg);
+const activeCreationByRow = async (rowId) => (await activeByRow(rowId)).filter(isVehicleCreation);
+const hasExactlyOneCreation = async (rowId) => {
+  const entries = await activeCreationByRow(rowId);
+  return entries.length === 1 && entries[0].type === 'deposit' && entries[0].amount === 1000 && !entries[0].batch_id;
+};
 const batchChargeEntries = async (vehicleId, refs) => (await DB.getByIndex('vehicle_ledger', 'by_vehicle', vehicleId))
   .filter(entry => entry.is_reversed === false
     && entry.effect === 'karta_settlement_charge'
@@ -79,24 +94,33 @@ const BLANK = mkRow({ vehicle: VB, price: null, kartano: 'B-BLANK' });
 const C = mkRow({ vehicle: VC, price: 300, kartano: 'C-300' });
 await createRows([A, B, BLANK, C]);
 const driverBefore = await FinancialService.getDriverBalance(DRIVER_A.id);
+const basicBeforeVA = await vehicleCents(VA.id);
+const basicBeforeVB = await vehicleCents(VB.id);
+const basicBeforeVC = await vehicleCents(VC.id);
+ok(basicBeforeVA === 1000 && basicBeforeVB === 2000 && basicBeforeVC === 1000
+  && (await Promise.all([A, B, BLANK, C].map(row => hasExactlyOneCreation(row.row_id)))).every(Boolean),
+  'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for each batch fixture row');
 const basic = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [A.row_id, B.row_id, BLANK.row_id, C.row_id]);
 ok(basic.success === true && basic.settled_count === 2 && basic.total === 800
   && basic.affected_vehicle_count === 2 && basic.batch_id,
   'batch settles exactly the positive-price rows with total 800 across two vehicles');
-ok(new Set([...await activeByRow(A.row_id), ...await activeByRow(C.row_id)].map(entry => entry.batch_id)).size === 1
-  && (await activeByRow(A.row_id)).every(entry => entry.batch_id === basic.batch_id)
-  && (await activeByRow(C.row_id)).every(entry => entry.batch_id === basic.batch_id),
-  'every created batch ledger entry shares one batch_id');
-ok((await activeByRow(A.row_id)).length === 2 && (await activeByRow(C.row_id)).length === 2
-  && (await activeByRow(B.row_id)).length === 0 && (await activeByRow(BLANK.row_id)).length === 0,
-  'positive rows receive two legs each while zero and blank rows receive no movement');
-ok((await activeByRow(A.row_id)).every(entry => entry.reference_id === A.row_id)
-  && (await activeByRow(C.row_id)).every(entry => entry.reference_id === C.row_id),
+ok(new Set([...await activeKartaByRow(A.row_id), ...await activeKartaByRow(C.row_id)].map(entry => entry.batch_id)).size === 1
+  && (await activeKartaByRow(A.row_id)).every(entry => entry.batch_id === basic.batch_id)
+  && (await activeKartaByRow(C.row_id)).every(entry => entry.batch_id === basic.batch_id)
+  && (await activeCreationByRow(A.row_id)).every(entry => !entry.batch_id)
+  && (await activeCreationByRow(C.row_id)).every(entry => !entry.batch_id),
+  'every Karta leg created by the batch shares one batch_id, while receipt-creation entries stay outside the batch namespace');
+ok((await activeKartaByRow(A.row_id)).length === 2 && (await activeKartaByRow(C.row_id)).length === 2
+  && (await activeKartaByRow(B.row_id)).length === 0 && (await activeKartaByRow(BLANK.row_id)).length === 0
+  && (await hasExactlyOneCreation(B.row_id)) && (await hasExactlyOneCreation(BLANK.row_id)),
+  'positive rows receive two Karta legs each while zero and blank rows receive no Karta movement (creation deposits only)');
+ok((await activeKartaByRow(A.row_id)).every(entry => entry.reference_id === A.row_id)
+  && (await activeKartaByRow(C.row_id)).every(entry => entry.reference_id === C.row_id),
   'each Karta leg keeps reference_id equal to its own row_id');
-ok((await vehicleCents(VA.id)) === -50000
-  && (await vehicleCents(VB.id)) === 0
-  && (await vehicleCents(VC.id)) === -30000,
-  'vehicle A withdraws 500, vehicle B remains unchanged, and vehicle C withdraws 300');
+ok((await vehicleCents(VA.id)) === basicBeforeVA - 50000
+  && (await vehicleCents(VB.id)) === basicBeforeVB
+  && (await vehicleCents(VC.id)) === basicBeforeVC - 30000,
+  'vehicle A withdraws 500, vehicle B remains unchanged by the batch, and vehicle C withdraws 300 (deltas from creation baselines)');
 ok((await FinancialService.getDriverBalance(DRIVER_A.id)).balance === driverBefore.balance,
   'batch driver_karta_payment legs do not alter the Driver Balance projection');
 const afterBasicProjection = await FinancialService.getDriverKartas(DRIVER_A.id);
@@ -134,8 +158,10 @@ const alreadyLegsBefore = await activeByRow(ALREADY.row_id);
 const mixed = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [ALREADY.row_id, FRESH.row_id]);
 ok(mixed.settled_count === 1 && mixed.skipped_row_ids.includes(ALREADY.row_id)
   && (await activeByRow(ALREADY.row_id)).length === alreadyLegsBefore.length
-  && (await activeByRow(FRESH.row_id)).length === 2,
-  'already-settled Karta is skipped and only the fresh Karta is settled');
+  && (await activeKartaByRow(ALREADY.row_id)).length === 2
+  && (await activeKartaByRow(FRESH.row_id)).length === 2
+  && (await hasExactlyOneCreation(FRESH.row_id)),
+  'already-settled Karta is skipped and only the fresh Karta is settled (no duplicated Karta legs; creation deposits untouched)');
 
 console.log('\n— atomic validation guards —');
 const VALID = mkRow({ vehicle: VA, price: 500, kartano: 'VALID-WITH-BAD' });
@@ -155,8 +181,9 @@ const beforeMissingFailure = await DB.getAll('vehicle_ledger', {}, { includeDele
 ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [VALID.row_id, MISSING_VEHICLE.row_id])),
   'positive-price row without vehicle rejects the entire batch');
 ok(JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true })) === JSON.stringify(beforeMissingFailure)
-  && (await activeByRow(VALID.row_id)).length === 0,
-  'missing-vehicle validation leaves no partial settlement for the valid row');
+  && (await activeKartaByRow(VALID.row_id)).length === 0
+  && (await hasExactlyOneCreation(VALID.row_id)),
+  'missing-vehicle validation leaves no partial settlement for the valid row (only its earlier creation deposit remains)');
 
 const NEGATIVE = mkRow({ vehicle: VB, price: 10, kartano: 'NEGATIVE' });
 await createRows([NEGATIVE]);
@@ -171,15 +198,17 @@ const DUPLICATE = mkRow({ vehicle: VB, price: 100, kartano: 'DUPLICATE' });
 await createRows([DUPLICATE]);
 ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [DUPLICATE.row_id, DUPLICATE.row_id])),
   'duplicate row_id input is rejected before batch writes');
-ok((await activeByRow(DUPLICATE.row_id)).length === 0,
-  'duplicate input rejection leaves the Karta unsettled');
+ok((await activeKartaByRow(DUPLICATE.row_id)).length === 0
+  && (await hasExactlyOneCreation(DUPLICATE.row_id)),
+  'duplicate input rejection leaves the Karta unsettled (creation deposit only, no Karta legs)');
 
 const OTHER_DRIVER = mkRow({ driver: DRIVER_B, vehicle: VB, price: 150, kartano: 'OTHER-DRIVER' });
 await createRows([OTHER_DRIVER]);
 ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [OTHER_DRIVER.row_id])),
   'selected driver cannot settle another driver’s Karta');
-ok((await activeByRow(OTHER_DRIVER.row_id)).length === 0,
-  'driver-isolation rejection creates no movement for the other driver');
+ok((await activeKartaByRow(OTHER_DRIVER.row_id)).length === 0
+  && (await hasExactlyOneCreation(OTHER_DRIVER.row_id)),
+  'driver-isolation rejection creates no Karta movement for the other driver (creation deposit only)');
 
 console.log('\n— simulated ledger write failure rolls back the entire batch —');
 const FAIL_A = mkRow({ vehicle: VA, price: 100, kartano: 'FAIL-A' });
@@ -199,9 +228,10 @@ ledgerStore.add = originalAdd;
 ok(writeFailed && attemptedAdds >= 2,
   'simulated failure occurs after the first batch ledger write is attempted');
 ok(JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true })) === JSON.stringify(allLedgerBeforeWriteFailure)
-  && (await activeByRow(FAIL_A.row_id)).length === 0
-  && (await activeByRow(FAIL_B.row_id)).length === 0,
-  'transaction rollback leaves no partial batch settlement after a write failure');
+  && (await activeKartaByRow(FAIL_A.row_id)).length === 0
+  && (await activeKartaByRow(FAIL_B.row_id)).length === 0
+  && (await hasExactlyOneCreation(FAIL_A.row_id)) && (await hasExactlyOneCreation(FAIL_B.row_id)),
+  'transaction rollback leaves no partial batch settlement after a write failure (pre-existing creation deposits intact)');
 
 console.log('\n— UI, single-row, and schema regression contracts —');
 ok(ENTITIES_SRC.includes('FinancialService.createKartaSettlementBatch(')

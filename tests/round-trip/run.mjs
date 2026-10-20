@@ -345,9 +345,13 @@ console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE C — What is actually persisted (REAL FinancialService.createReceipt)
 // ════════════════════════════════════════════════════════════════════════════
-// The receipt-created company charge resolves the persisted row company.
+// The receipt-created company charge resolves the persisted row company,
+// and the receipt-created vehicle balance resolves the persisted row
+// vehicle — both master records must exist (registered-vehicle contract,
+// identical seeding to the write-path harness).
 await DB.init();
 await DB.add('offices', { id: crypto.randomUUID(), username: U, name: 'شركة الأمل', phone: null }, { username: U });
+await DB.add('vehicles', { id: 'veh-1', username: U, plate: 'أ ب ج 1234', owner_id: 'owner-1', owner_name: 'مالك الاختبار' }, { username: U });
 console.log('\n══ STAGE C — persisted IndexedDB records (REAL FinancialService) ══');
 const createRes = await FinancialService.createReceipt(U, servicePayload);
 const rid = createRes.receipt.id;
@@ -396,7 +400,26 @@ ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 92000 && pA.sa
    `KEPT: money in cents (driver_price=${pA.driver_price}, advance=${pA.advance}, net=${pA.net}, sarf=${pA.sarf})`);
 const ledger = await DB.getByIndex('vehicle_ledger', 'by_reference_id', rid);
 ok(ledger.length === 0,
-   `REMOVED-CONTRACT (Net Due phase): createReceipt writes ZERO ledger entries — no due leg exists (got ${ledger.length})`);
+   `REMOVED-CONTRACT (Net Due phase): ZERO ledger entries keyed by the receipt (header) id — no due leg exists (got ${ledger.length}); creation effects key by row_id instead`);
+// Creation-side effects (approved accounting): each persisted row posts
+// exactly one active vehicle deposit equal to its net, plus one office
+// creation withdrawal of net+sarf — asserted explicitly per namespace.
+const creationByRow = await Promise.all(persistedRows.map(async (r) => {
+  const es = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', r.row_id))
+    .filter(e => e.is_reversed === false && e.deleted_at === null);
+  return {
+    vehicle: es.filter(e => e.reference_type === 'receipt_row_vehicle_balance' && e.effect === 'receipt_row_vehicle_balance'),
+    company: es.filter(e => e.reference_type === 'receipt_row_company_charge' && e.effect === 'receipt_row_company_charge'),
+    total: es.length,
+    row: r,
+  };
+}));
+ok(creationByRow.every(({ vehicle, row }) => vehicle.length === 1 && vehicle[0].type === 'deposit'
+    && vehicle[0].amount === row.net && vehicle[0].vehicle_id === 'veh-1'),
+   'CREATION-CONTRACT: each persisted row posts exactly one active receipt_row_vehicle_balance deposit equal to its net cents to veh-1');
+ok(creationByRow.every(({ company, total, row }) => company.length === 1 && company[0].type === 'withdraw'
+    && company[0].amount === row.net + row.sarf && company[0].vehicle_id === null && total === 2),
+   'CREATION-CONTRACT: each persisted row posts exactly one active receipt_row_company_charge withdrawal of net+sarf cents (and no other active ledger entry)');
 
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE D — What ReceiptReadRepository returns (REAL)

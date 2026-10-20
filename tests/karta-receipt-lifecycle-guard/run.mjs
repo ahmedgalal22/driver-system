@@ -63,6 +63,17 @@ const activeKarta = async (rowId) => (await DB.getByIndex('vehicle_ledger', 'by_
     && entry.deleted_at === null
     && entry.reference_type === 'receipt_row'
     && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge'));
+// History is verified PER NAMESPACE: Karta legs (receipt_row namespace) are
+// reversed by the Karta reversal; the receipt-creation deposit
+// (receipt_row_vehicle_balance) is reversed only by the receipt lifecycle
+// itself (row-replacing update / eligible delete), never deleted.
+const isKartaLeg = (entry) => entry.reference_type === 'receipt_row'
+  && (entry.type === 'driver_karta_payment' || entry.effect === 'karta_settlement_charge');
+const isVehicleCreation = (entry) => entry.reference_type === 'receipt_row_vehicle_balance'
+  && entry.effect === 'receipt_row_vehicle_balance';
+const historyByRow = async (rowId) => DB.getByIndex('vehicle_ledger', 'by_reference_id', rowId);
+const activeCreation = async (rowId) => (await historyByRow(rowId))
+  .filter(entry => isVehicleCreation(entry) && entry.is_reversed === false && entry.deleted_at === null);
 
 async function settleSingle(row) {
   return FinancialService.createKartaSettlement(U, {
@@ -156,21 +167,33 @@ await settleSingle(REVERSE_UPDATE);
 await FinancialService.reverseKartaSettlement(U, REVERSE_UPDATE.row_id);
 const REVERSE_UPDATE_NEW = mkRow({ kartano: 'REVERSE-UPDATE-NEW' });
 await FinancialService.updateReceipt(U, reverseUpdateReceipt.receipt.id, payload([REVERSE_UPDATE_NEW]));
-const reversedUpdateHistory = await DB.getByIndex('vehicle_ledger', 'by_reference_id', REVERSE_UPDATE.row_id);
-ok(reversedUpdateHistory.length === 2 && reversedUpdateHistory.every(entry => entry.is_reversed === true)
+const reversedUpdateHistory = await historyByRow(REVERSE_UPDATE.row_id);
+const reversedUpdateKarta = reversedUpdateHistory.filter(isKartaLeg);
+const reversedUpdateCreation = reversedUpdateHistory.filter(isVehicleCreation);
+const replacementCreation = await activeCreation(REVERSE_UPDATE_NEW.row_id);
+ok(reversedUpdateHistory.length === 3
+  && reversedUpdateKarta.length === 2 && reversedUpdateKarta.every(entry => entry.is_reversed === true)
+  && reversedUpdateCreation.length === 1 && reversedUpdateCreation.every(entry => entry.is_reversed === true)
+  && reversedUpdateHistory.every(entry => entry.deleted_at === null)
   && (await DB.getById('receipt_rows', REVERSE_UPDATE_NEW.row_id))
+  && replacementCreation.length === 1 && replacementCreation[0].amount === 1000
   && (await activeKarta(REVERSE_UPDATE.row_id)).length === 0,
-  'explicit Karta reversal permits receipt update with no stale active pair');
+  'explicit Karta reversal permits receipt update with no stale active pair (Karta legs reversed by Karta reversal; replaced row creation deposit reversed once by the update, replacement row funded once; history retained)');
 
 const REVERSE_DELETE = mkRow({ kartano: 'REVERSE-DELETE' });
 const reverseDeleteReceipt = await createReceipt([REVERSE_DELETE]);
 await settleSingle(REVERSE_DELETE);
 await FinancialService.reverseKartaSettlement(U, REVERSE_DELETE.row_id);
 await FinancialService.deleteReceipt(U, reverseDeleteReceipt.receipt.id);
-const reversedDeleteHistory = await DB.getByIndex('vehicle_ledger', 'by_reference_id', REVERSE_DELETE.row_id);
-ok(reversedDeleteHistory.length === 2 && reversedDeleteHistory.every(entry => entry.is_reversed === true)
+const reversedDeleteHistory = await historyByRow(REVERSE_DELETE.row_id);
+const reversedDeleteKarta = reversedDeleteHistory.filter(isKartaLeg);
+const reversedDeleteCreation = reversedDeleteHistory.filter(isVehicleCreation);
+ok(reversedDeleteHistory.length === 3
+  && reversedDeleteKarta.length === 2 && reversedDeleteKarta.every(entry => entry.is_reversed === true)
+  && reversedDeleteCreation.length === 1 && reversedDeleteCreation.every(entry => entry.is_reversed === true)
+  && reversedDeleteHistory.every(entry => entry.deleted_at === null)
   && (await DB.getById('receipts', reverseDeleteReceipt.receipt.id)) === null,
-  'explicit Karta reversal permits receipt delete while audit settlement legs remain reversed');
+  'explicit Karta reversal permits receipt delete while audit history remains: Karta legs and the creation deposit each reversed exactly once, none deleted');
 
 console.log('\n— partial/corrupt Karta evidence blocks both lifecycle operations —');
 const PARTIAL_UPDATE = mkRow({ kartano: 'PARTIAL-UPDATE' });

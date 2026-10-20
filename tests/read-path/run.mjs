@@ -34,6 +34,14 @@ const uuid = () => crypto.randomUUID();
 const officeA = await DB.add('offices', { name: 'شركة أ' }, { username: U });
 const officeB = await DB.add('offices', { name: 'شركة ب' }, { username: U });
 
+// Receipt creation resolves each row vehicle and posts its net deposit to
+// that authoritative vehicle (receipt_row_vehicle_balance), so every
+// fixture vehicle must be a registered vehicle record — identical seeding
+// to the proven write-path harness (tests/write-path/run.mjs).
+for (const [id, plate] of [['veh-1', '111 أ ب'], ['veh-2', '222 ج د'], ['veh-3', '333 هـ و'], ['veh-9', '999 ز ح']]) {
+  await DB.add('vehicles', { id, username: U, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' }, { username: U });
+}
+
 const row1 = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
   vehicle_id: 'veh-1', vehicle_plate: '111 أ ب', driver_id: null,
   driver_price: 11, advance: 5, loading: 'طنطا', destination: 'القاهرة',
@@ -83,6 +91,16 @@ ok(liveRows.every(r => 'kartano' in r && 'date' in r && 'driver_name' in r && 't
   'contract is structural: user-entered slots persisted (kartano/date/driver_name/type/weight/weight2/deficit/weightTotal/officeAmount/discount/add/row_order); UI-vocabulary aliases (office_amount/noloon/taktik/_type) still never persisted');
 ok((await ReceiptReadRepository.getReceiptRowsByReceipt(R2)).length === 0,
   'deleted receipt R2 → 0 live rows (rows soft-deleted with header)');
+// Authoritative creation contract behind the read data: every live row
+// carries exactly one active vehicle-creation deposit equal to its net.
+const creationPerLiveRow = await Promise.all(liveRows.map(async (r) =>
+  (await DB.getByIndex('vehicle_ledger', 'by_reference_id', r.row_id))
+    .filter(e => e.reference_type === 'receipt_row_vehicle_balance'
+      && e.effect === 'receipt_row_vehicle_balance'
+      && e.is_reversed === false && e.deleted_at === null
+      && e.type === 'deposit' && e.amount === r.net && e.vehicle_id === r.vehicle_id)));
+ok(creationPerLiveRow.every(entries => entries.length === 1),
+  'creation contract: each live R1 row has exactly one active receipt_row_vehicle_balance deposit equal to its persisted net');
 
 // ─── EXTRACTED VERBATIM: dashboard.js:89-106 (_loadReceiptRowsProjection) ──
 async function _loadReceiptRowsProjection(receipts) {
