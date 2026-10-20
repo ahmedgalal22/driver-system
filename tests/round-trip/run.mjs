@@ -153,12 +153,17 @@ ok(!/keyPath:\s*'receipt_number'/.test(DATABASE_SRC) && !/name:\s*'by_number'/.t
   'REMOVED-CONTRACT (schema): receipts.by_number unique index dropped');
 ok(!/name:\s*'counters'/.test(DATABASE_SRC),
   'REMOVED-CONTRACT (schema): entire counters store dropped — no receipt counter exists');
-ok(DATABASE_SRC.includes('const DB_VERSION = 14;'),
-  'schema bumped to v14 — clean reset purges removed Treasury stores (treasury / mainCapitalTreasury)');
-ok(!/name:\s*'treasury'/.test(DATABASE_SRC) && !/name:\s*'mainCapitalTreasury'/.test(DATABASE_SRC),
-  'REMOVED-CONTRACT (Treasury phase, schema): treasury + mainCapitalTreasury object stores dropped — no Treasury store exists');
+ok(DATABASE_SRC.includes('const DB_VERSION = 17;'),
+  'schema bumped to v17 for the approved data-preserving v16 lifecycle release');
+ok(/name\s*:\s*'mainCapitalTreasury'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_username'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_type'/.test(DATABASE_SRC)
+   && /name\s*:\s*'by_deleted'/.test(DATABASE_SRC),
+  'APPROVED-CONTRACT (Dashboard Capital Treasury): mainCapitalTreasury store and its historical indexes exist');
+ok(!/name:\s*'treasury'/.test(DATABASE_SRC),
+  'EXCLUSION-CONTRACT: the removed standalone treasury store remains absent');
 ok(!/by_entry_type|by_account_type|entry_type|account_type/.test(DATABASE_SRC),
-  'REMOVED-CONTRACT (Treasury phase, schema): treasury-only indexes (by_entry_type / by_account_type) and their keyPaths dropped with the store');
+  'EXCLUSION-CONTRACT: standalone-Treasury-only indexes remain absent');
 
 // ══ Treasury (الخزنة) phase — PERMANENT removal census (production sources) ══
 for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', ALLRECEIPTS_SRC], ['financial.js', FINANCIAL_SRC]]) {
@@ -167,7 +172,7 @@ for (const [label, src] of [['receipts.js', RECEIPTS_SRC], ['allReceipts.js', AL
     `REMOVED-CONTRACT (Treasury phase): ${label} carries ZERO Treasury references (store key / change event / repository / page init)`);
 }
 ok(FINANCIAL_SRC.includes("LEDGER   : 'vehicle_ledger'"),
-  'KEEP-CONTRACT: financial.js driver/salfa financials still write exclusively to vehicle_ledger');
+  'KEEP-CONTRACT: retained driver and settlement financials still write exclusively to vehicle_ledger');
 
 // ══ Vehicle Identity phase — اسم المركبة permanently removed; number-keyed ══
 const ENTITIES_SRC = readFileSync('./_src/entities.js', 'utf8');
@@ -340,6 +345,9 @@ console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload
 // ════════════════════════════════════════════════════════════════════════════
 // STAGE C — What is actually persisted (REAL FinancialService.createReceipt)
 // ════════════════════════════════════════════════════════════════════════════
+// The receipt-created company charge resolves the persisted row company.
+await DB.init();
+await DB.add('offices', { id: crypto.randomUUID(), username: U, name: 'شركة الأمل', phone: null }, { username: U });
 console.log('\n══ STAGE C — persisted IndexedDB records (REAL FinancialService) ══');
 const createRes = await FinancialService.createReceipt(U, servicePayload);
 const rid = createRes.receipt.id;

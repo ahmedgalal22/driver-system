@@ -7,12 +7,22 @@ import { AuthModule }  from './auth.js';
 import { initReceiptPage } from './receipts.js';
 import { initAllReceiptsPage } from './allReceipts.js';
 import { attachOwnersPageListeners, loadOwners } from './entities.js';
-import { attachOfficesPageListeners, initOfficesPage, loadOffices } from './offices.js';
+import { OfficesModule, attachOfficesPageListeners, initOfficesPage, loadOffices } from './offices.js';
 import { initHomePage } from './home.js';
 import { initSidebarLayout } from './sidebarLayout.js';
 import { initDashboardPage } from './dashboard.js';
+import { initLoadPricesPage, loadLoadPrices } from './loadPrices.js';
 import './entities.js';
 import { DateUtils } from './dateUtils.js';
+import {
+  createBackupSnapshot,
+  createExclusiveOperationGuard,
+  parseBackupJson,
+  serializeBackupSnapshot,
+  validateBackupSnapshot,
+  restoreAndVerifyBackup,
+  BackupRestoreError,
+} from './services/backupService.js';
 
 const LAST_PAGE_KEY = 'financial_last_page';
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
@@ -26,6 +36,7 @@ const PAGE_MAP = {
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
   officeDetailsPage: 'officeDetailsPage',
+  loadPrices: 'loadPricesPage',
 };
 const PAGE_KEY_NORMALIZE = {
   homePage: 'homePage',
@@ -39,6 +50,7 @@ const PAGE_KEY_NORMALIZE = {
   driverDetailsPage: 'driverDetailsPage',
   officesPage: 'officesPage',
   officeDetailsPage: 'officeDetailsPage',
+  loadPrices: 'loadPrices',
 };
 
 function _readLastPage() {
@@ -116,6 +128,9 @@ async function showPage(pageName) {
   if (pageName === 'allReceipts' || targetId === 'allReceiptsPage') {
     await initAllReceiptsPage();
   }
+  if (pageName === 'loadPrices' || targetId === 'loadPricesPage') {
+    await loadLoadPrices();
+  }
   if (pageName === 'dashboardPage' || targetId === 'dashboardPage') {
     if (role === 'admin') {
       await initDashboardPage();
@@ -172,6 +187,7 @@ async function boot() {
     _bindLogout();
     initReceiptPage();
     await initAllReceiptsPage();
+    initLoadPricesPage();
     initOfficesPage();
     attachOwnersPageListeners();
     attachOfficesPageListeners();
@@ -180,8 +196,17 @@ async function boot() {
     let restored = false;
 
     if (lastPage === 'officeDetailsPage' && ctx?.officeId && typeof window.showOfficeDetails === 'function') {
-      await window.showOfficeDetails(ctx.officeId);
-      restored = true;
+      // Session state can outlive an office deleted in another session, a clean
+      // database reset, or a backup import. Validate the saved id before
+      // invoking the strict Office Details entry point, which must still throw
+      // for an explicit invalid navigation.
+      const office = await OfficesModule.getOfficeDetails(ctx.officeId);
+      if (office) {
+        await window.showOfficeDetails(ctx.officeId);
+        restored = true;
+      } else {
+        sessionStorage.removeItem(LAST_PAGE_CTX_KEY);
+      }
     } else if (lastPage === 'ownerDetailsPage' && ctx?.ownerId && typeof window.showOwnerDetails === 'function') {
       await window.showOwnerDetails(ctx.ownerId, ctx.ownerType || 'owner');
       restored = true;
@@ -237,182 +262,193 @@ boot();
 const BACKUP_DATE_KEY = 'karta_last_backup_date';
 const BACKUP_REMINDER_DISMISSED_KEY = 'karta_backup_reminder_dismissed';
 const BACKUP_REMINDER_DAYS = 7;
-
-/**
- * Export full backup — reads ALL stores (including soft-deleted records)
- * and saves as a timestamped JSON file.
- */
-async function _exportFullBackup() {
-  try {
-    const allStores = Object.keys(DB.STORES);
-    const backup = {
-      _meta: {
-        version: 1,
-        exportedAt: DateUtils.nowLocal(),
-        exportedBy: window.__APP_CONTEXT__?.username || 'unknown',
-        storeNames: allStores,
-      },
-      stores: {},
-    };
-
-    for (const storeName of allStores) {
-      // Read ALL records including soft-deleted (dump uses includeDeleted-like full scan)
-      const { store } = _openReadTx(storeName);
-      backup.stores[storeName] = await _idbGetAll(store);
-    }
-
-    const json = JSON.stringify(backup, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const filename = `karta-backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.json`;
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-
-    // Track backup date
-    localStorage.setItem(BACKUP_DATE_KEY, DateUtils.toLocalDateTime(now));
-    localStorage.removeItem(BACKUP_REMINDER_DISMISSED_KEY);
-    _hideBackupReminder();
-
-    alert(`✅ تم تصدير النسخة الاحتياطية بنجاح\n${filename}`);
-  } catch (err) {
-    console.error('[Backup] Export failed:', err);
-    alert(`❌ فشل تصدير النسخة الاحتياطية\n${err.message || 'خطأ غير معروف'}`);
-  }
-}
-
-// Internal helpers to read directly from IndexedDB without DB.dump()
-// (DB.dump() is localhost-only; these work in production)
-function _openReadTx(storeName) {
-  const db = _getDbInstance();
-  const tx = db.transaction(storeName, 'readonly');
-  return { tx, store: tx.objectStore(storeName) };
-}
+const _backupOperationGuard = createExclusiveOperationGuard();
 
 function _getDbInstance() {
-  // Access the internal DB instance via DB.init() promise resolution
-  // Since boot() already called DB.init(), the DB is ready
   return DB._db || (function() { throw new Error('DB not initialized'); })();
 }
 
-function _idbGetAll(store) {
-  return new Promise((resolve, reject) => {
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+function _setBackupControlsDisabled(disabled) {
+  const exportBtn = document.getElementById('exportBackupBtn');
+  const importBtn = document.getElementById('importBackupBtn');
+  if (exportBtn) exportBtn.disabled = disabled;
+  if (importBtn) importBtn.disabled = disabled;
+}
+
+function _beginBackupOperation() {
+  if (!_backupOperationGuard.tryAcquire()) return false;
+  _setBackupControlsDisabled(true);
+  return true;
+}
+
+function _endBackupOperation() {
+  _backupOperationGuard.release();
+  _setBackupControlsDisabled(false);
+}
+
+function _backupCanonicalStoreNames() {
+  return Object.keys(DB.STORES).sort();
+}
+
+function _downloadBackup(json) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const filename = `karta-backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.json`;
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(blob);
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  setTimeout(() => { URL.revokeObjectURL(anchor.href); anchor.remove(); }, 1000);
+  return filename;
 }
 
 /**
- * Import full backup — validates JSON, confirms with user, then replaces
- * all store contents atomically.
+ * Export a complete format-v2 snapshot of every active native object store.
+ * The browser download remains external to IndexedDB; this only confirms the
+ * file was prepared and download was requested.
+ */
+async function _exportFullBackup() {
+  if (!_beginBackupOperation()) return;
+  try {
+    const db = _getDbInstance();
+    const snapshot = await createBackupSnapshot(db, {
+      canonicalStoreNames: _backupCanonicalStoreNames(),
+      exportedAt: DateUtils.nowLocal(),
+      exportedBy: window.__APP_CONTEXT__?.username || 'unknown',
+    });
+    // Validate the exact JSON representation that will be downloaded. This
+    // rejects values that JSON would omit or transform before any download is requested.
+    const { json } = serializeBackupSnapshot(db, snapshot, {
+      canonicalStoreNames: _backupCanonicalStoreNames(),
+    });
+    const filename = _downloadBackup(json);
+
+    localStorage.setItem(BACKUP_DATE_KEY, DateUtils.toLocalDateTime(new Date()));
+    localStorage.removeItem(BACKUP_REMINDER_DISMISSED_KEY);
+    _hideBackupReminder();
+    alert(`✅ تم تجهيز النسخة الاحتياطية للتنزيل\n${filename}\n\nتأكد من اكتمال تنزيل المتصفح قبل المتابعة.`);
+  } catch (err) {
+    console.error('[Backup] Export failed:', err);
+    alert(`❌ فشل تصدير النسخة الاحتياطية\n${err.message || 'خطأ غير معروف'}`);
+  } finally {
+    _endBackupOperation();
+  }
+}
+
+function _restoreSummary(backup) {
+  const totalRecords = Object.values(backup._meta.recordCounts)
+    .reduce((sum, count) => sum + count, 0);
+  return {
+    storeCount: backup._meta.storeNames.length,
+    totalRecords,
+    exportDate: backup._meta.exportedAt
+      ? new Date(backup._meta.exportedAt).toLocaleString('ar-EG')
+      : 'غير معروف',
+  };
+}
+
+/**
+ * Parse and validate a full format-v2 backup before asking for confirmation or
+ * opening a destructive transaction. A rejected file never clears current data.
+ */
+function _showRestoreFailure(err) {
+  console.error('[Backup] Restore failed:', err);
+  if (err instanceof BackupRestoreError && err.phase === 'verification') {
+    alert('⚠️ اكتملت معاملة الاستعادة لكن فشل التحقق اللاحق.\n\nتوقف عن استخدام التطبيق، أعد تحميل الصفحة، واحفظ الحالة الحالية للتحقيق. لم يتم عرض نجاح للاستعادة.');
+    return;
+  }
+  alert(`❌ فشلت أو أُلغيت معاملة الاستعادة\n${err?.message || 'خطأ غير معروف'}\n\nلم يتم عرض نجاح للاستعادة. يجب أن تعيد IndexedDB البيانات السابقة عند إلغاء المعاملة.`);
+}
+
+/**
+ * Parse and validate a full format-v2 backup before asking for confirmation or
+ * opening a destructive transaction. The exclusive guard starts before the
+ * picker so competing imports cannot both reach a restore transaction.
  */
 async function _importFullBackup() {
+  if (!_beginBackupOperation()) return;
+
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json';
   input.style.display = 'none';
   document.body.appendChild(input);
 
+  let changeStarted = false;
+  const releaseCancelledPicker = () => {
+    setTimeout(() => {
+      if (changeStarted) return;
+      input.remove();
+      _endBackupOperation();
+    }, 250);
+  };
+  window.addEventListener('focus', releaseCancelledPicker, { once: true });
+
   input.addEventListener('change', async () => {
+    changeStarted = true;
     const file = input.files?.[0];
     input.remove();
-    if (!file) return;
+    if (!file) {
+      _endBackupOperation();
+      return;
+    }
 
+    let backup;
+    let validated;
+    let summary;
     try {
       const text = await file.text();
-      let backup;
-      try {
-        backup = JSON.parse(text);
-      } catch {
-        alert('❌ الملف غير صالح — ليس بصيغة JSON صحيحة');
-        return;
-      }
-
-      // Validate structure
-      if (!backup?._meta?.version || !backup?.stores || typeof backup.stores !== 'object') {
-        alert('❌ الملف ليس نسخة احتياطية صالحة من نظام Karta');
-        return;
-      }
-
-      const storeNames = Object.keys(backup.stores);
-      const knownStores = Object.keys(DB.STORES);
-      const unknownStores = storeNames.filter(s => !knownStores.includes(s));
-      if (unknownStores.length > 0) {
-        alert(`❌ الملف يحتوي على بيانات غير معروفة: ${unknownStores.join(', ')}`);
-        return;
-      }
-
-      // Count records
-      let totalRecords = 0;
-      for (const store of storeNames) {
-        if (!Array.isArray(backup.stores[store])) {
-          alert(`❌ بيانات المتجر "${store}" غير صالحة`);
-          return;
-        }
-        totalRecords += backup.stores[store].length;
-      }
-
-      const exportDate = backup._meta.exportedAt
-        ? new Date(backup._meta.exportedAt).toLocaleString('ar-EG')
-        : 'غير معروف';
-
-      // Double confirmation
-      const msg = `⚠️ هل أنت متأكد من استيراد هذه النسخة الاحتياطية؟\n\n` +
-        `📅 تاريخ النسخة: ${exportDate}\n` +
-        `📦 عدد الجداول: ${storeNames.length}\n` +
-        `📊 عدد السجلات: ${totalRecords}\n\n` +
-        `⚠️ سيتم حذف جميع البيانات الحالية واستبدالها بالنسخة الاحتياطية.\n` +
-        `⚠️ يُنصح بإنشاء نسخة احتياطية من البيانات الحالية أولاً.\n\n` +
-        `هل تريد المتابعة؟`;
-
-      if (!confirm(msg)) return;
-      if (!confirm('⚠️ تأكيد نهائي: سيتم حذف جميع البيانات الحالية. هل أنت متأكد؟')) return;
-
-      // Perform import — clear all stores then write backup data
+      backup = parseBackupJson(text);
       const db = _getDbInstance();
-      const storesToImport = storeNames.filter(s => db.objectStoreNames.contains(s));
-
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(storesToImport, 'readwrite');
-        let done = false;
-
-        tx.onerror = () => { if (!done) { done = true; reject(tx.error); } };
-        tx.onabort = () => { if (!done) { done = true; reject(new Error('Transaction aborted')); } };
-        tx.oncomplete = () => { if (!done) { done = true; resolve(); } };
-
-        try {
-          for (const storeName of storesToImport) {
-            const store = tx.objectStore(storeName);
-            // Clear all existing records
-            store.clear();
-            // Write all backup records
-            const records = backup.stores[storeName];
-            for (const record of records) {
-              store.put(record);
-            }
-          }
-        } catch (err) {
-          try { tx.abort(); } catch (_) {}
-          if (!done) { done = true; reject(err); }
-        }
+      validated = validateBackupSnapshot(db, backup, {
+        canonicalStoreNames: _backupCanonicalStoreNames(),
       });
-
-      alert('✅ تم استيراد النسخة الاحتياطية بنجاح!\nسيتم إعادة تحميل الصفحة...');
-      window.location.reload();
-
+      summary = _restoreSummary(backup);
     } catch (err) {
-      console.error('[Backup] Import failed:', err);
-      alert(`❌ فشل استيراد النسخة الاحتياطية\n${err.message || 'خطأ غير معروف'}`);
+      console.error('[Backup] Validation failed:', err);
+      alert(`❌ لم يتم استيراد النسخة الاحتياطية\n${err.message || 'ملف النسخة غير صالح'}\nلم يتم تغيير أي بيانات.`);
+      _endBackupOperation();
+      return;
     }
+
+    const message = `⚠️ النسخة الاحتياطية اجتازت التحقق الأولي\n\n`
+      + `📅 تاريخ النسخة: ${summary.exportDate}\n`
+      + `📦 عدد الجداول: ${summary.storeCount}\n`
+      + `📊 عدد السجلات: ${summary.totalRecords}\n\n`
+      + `⚠️ سيتم استبدال جميع الجداول النشطة في عملية واحدة.\n`
+      + `⚠️ أغلق أي تبويبات أخرى لنظام Karta قبل المتابعة.\n\n`
+      + `هل تريد المتابعة؟`;
+    if (!confirm(message)) {
+      _endBackupOperation();
+      return;
+    }
+    if (!confirm('⚠️ تأكيد نهائي: سيتم استبدال جميع البيانات الحالية بالنسخة التي تم التحقق منها. هل أنت متأكد؟')) {
+      _endBackupOperation();
+      return;
+    }
+
+    try {
+      await restoreAndVerifyBackup(_getDbInstance(), validated);
+    } catch (err) {
+      _showRestoreFailure(err);
+      _endBackupOperation();
+      return;
+    }
+
+    alert('✅ تم استيراد النسخة الاحتياطية والتحقق منها بنجاح!\nسيتم إعادة تحميل الصفحة...');
+    _endBackupOperation();
+    window.location.reload();
   });
 
-  input.click();
+  try {
+    input.click();
+  } catch (err) {
+    input.remove();
+    _endBackupOperation();
+    throw err;
+  }
 }
 
 /**

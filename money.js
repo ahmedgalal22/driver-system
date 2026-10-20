@@ -104,6 +104,7 @@ const FIELDS = Object.freeze([
   'deposit_total',
   'withdraw_total',
   'price', // karta settlement price (Driver Details) — stored in cents
+  'driver_settlement_price', // persistent Driver Details Karta settlement price — stored in cents
 ]);
 
 /**

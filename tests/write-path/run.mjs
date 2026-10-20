@@ -15,6 +15,16 @@ let failures = 0;
 const ok = (cond, label) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`); if (!cond) failures++; };
 const uuid = () => crypto.randomUUID();
 
+// Receipt creation now resolves the row company before its atomic company-side
+// charge is written, so all fixture companies must exist as active offices.
+await DB.init();
+for (const name of ['شركة أ', 'شركة ب', 'شركة ج']) {
+  await DB.add('offices', { id: uuid(), username: U, name, phone: null }, { username: U });
+}
+for (const [id, plate] of [['veh-1', '111 أ ب'], ['veh-2', '222 ج د'], ['veh-3', '333 هـ و']]) {
+  await DB.add('vehicles', { id, username: U, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' }, { username: U });
+}
+
 function makePayload(over = {}) {
   const client_id = over.client_id || 'owner-1';
   return {
@@ -37,7 +47,9 @@ function makePayload(over = {}) {
 
 const rowsOf = async (id, includeDeleted = false) =>
   DB.findByFields('receipt_rows', { receipt_id: id }, { includeDeleted });
-const ledgerOf = async (id) => DB.getByIndex('vehicle_ledger', 'by_reference_id', id);
+const ledgerOfRows = async rows => (await Promise.all(
+  rows.map(row => DB.getByIndex('vehicle_ledger', 'by_reference_id', row.row_id))
+)).flat();
 
 // ─── STEP 1: createReceipt ───────────────────────────────────────────────────
 console.log('\n— STEP 1: createReceipt (header + 2 rows + ledger) —');
@@ -46,7 +58,7 @@ const createRes = await FinancialService.createReceipt(U, p1);
 const rid = createRes.receipt.id;
 const header1 = await DB.getById('receipts', rid);
 const rows1 = await rowsOf(rid);
-const ledger1 = await ledgerOf(rid);
+const ledger1 = await ledgerOfRows(rows1);
 ok(!!header1 && header1.username === U, 'receipt header persisted with username');
 ok(header1.total === 115000 && header1.net_due === undefined && header1.previous_balance === undefined && header1.paid === undefined && header1.payout_status === undefined
   && header1.account_type === undefined && header1.shipping_number === undefined && header1.company_info === undefined
@@ -54,14 +66,16 @@ ok(header1.total === 115000 && header1.net_due === undefined && header1.previous
   `header money in cents; net_due/previous_balance/paid/payout_status/account_type/shipping_number/company_info/receipt_number NOT persisted (total=${header1.total})`);
 ok(rows1.length === 2, `exactly 2 receipt_rows persisted (got ${rows1.length})`);
 ok(rows1.every(r => r.receipt_id === rid && typeof r.driver_price === 'number'), 'rows carry receipt_id FK + cents money');
-ok(ledger1.length === 0,
-  `REMOVED-CONTRACT (Net Due phase): createReceipt writes ZERO ledger entries (got ${ledger1.length})`);
+ok(ledger1.length === 4
+  && ledger1.filter(entry => entry.reference_type === 'receipt_row_company_charge').length === 2
+  && ledger1.filter(entry => entry.reference_type === 'receipt_row_vehicle_balance').length === 2,
+  `createReceipt writes one company and one vehicle creation entry per row (got ${ledger1.length})`);
 
 const lz = await FinancialService.createReceipt(U, makePayload({
   total: 100,
   rows: [ { ...makePayload().rows[0], net: 100 } ],
 })).then(r => r.receipt.id);
-ok((await ledgerOf(lz)).length === 0, 'REMOVED-CONTRACT (Net Due phase): second receipt also emits zero ledger entries');
+ok((await ledgerOfRows(await rowsOf(lz))).length === 2, 'second receipt emits its company and vehicle creation entries');
 const before = (await DB.getAll('receipts', { username: U })).length;
 ok(before === 2, `2 receipts visible after two creates (got ${before})`);
 
@@ -80,7 +94,7 @@ const updRes = await FinancialService.updateReceipt(U, rid, p1u);
 const header2 = await DB.getById('receipts', rid);
 const rows2 = await rowsOf(rid);
 const rows2All = await rowsOf(rid, true);
-const ledger2 = await ledgerOf(rid);
+const ledger2 = await ledgerOfRows(rows2);
 ok(header2.total === 180000 && header2.net_due === undefined && header2.net_total === undefined && header2.previous_balance === undefined && header2.paid === undefined && header2.payout_status === undefined
   && header2.account_type === undefined && header2.shipping_number === undefined && header2.company_info === undefined
   && header2.receipt_number === undefined,
@@ -88,7 +102,9 @@ ok(header2.total === 180000 && header2.net_due === undefined && header2.net_tota
 ok(rows2.length === 3, `rows replaced: exactly 3 live rows (got ${rows2.length}) — NO duplication`);
 ok(rows2.every(r => !oldRowIds.includes(r.row_id)), 'old row_ids gone from live set (fresh ids)');
 ok(rows2All.length === 5, `audit trail: 2 old rows soft-deleted retained (got ${rows2All.length})`);
-ok(ledger2.length === 0, `REMOVED-CONTRACT (Net Due phase): zero ledger entries after update (got ${ledger2.length})`);
+ok(ledger2.length === 6
+  && ledger2.filter(entry => entry.reference_type === 'receipt_row_vehicle_balance').length === 3,
+  `updated receipt rows retain one company and one vehicle creation entry each (got ${ledger2.length})`);
 ok(!!updRes.receipt && updRes.receipt.total === 1800, 'updateReceipt returns decimalized updated receipt');
 
 // ─── STEP 3: updateReceipt with minimal payload still succeeds ───────────────
@@ -105,7 +121,9 @@ ok(delRes.deleted === true && delRes.reversed === undefined, `REMOVED-CONTRACT (
 ok((await DB.getById('receipts', rid)) === null, 'deleted receipt no longer readable (getById → null)');
 ok((await rowsOf(rid)).length === 0, 'all rows of deleted receipt excluded from live reads');
 ok((await rowsOf(rid, true)).length === 7, `deleted rows retained as soft-deleted audit records (2+3+2 across create+2 edits, got ${(await rowsOf(rid, true)).length})`);
-ok((await ledgerOf(rid)).length === 0, 'REMOVED-CONTRACT (Net Due phase): ledger holds no entries for this receipt at all');
+const deletedLedger = await ledgerOfRows(await rowsOf(rid, true));
+ok(deletedLedger.length > 0 && deletedLedger.every(entry => entry.is_reversed === true),
+  'deleted receipt retains only reversed creation-side ledger audit entries');
 const remaining = await DB.getAll('receipts', { username: U });
 ok(remaining.length === 1 && remaining[0].id === lz, 'second receipt unaffected');
 

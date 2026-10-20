@@ -4,7 +4,9 @@
  */
 
 import { AuthModule } from './auth.js';
+import { FinancialService } from './financial.js';
 import { Money } from './money.js';
+import { DateUtils } from './dateUtils.js';
 import { calculateWeightTotal } from './services/financialCalculator.js';
 import { OfficeRepository } from './services/officeRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
@@ -471,9 +473,10 @@ const OfficesModule = Object.freeze({
 let _searchQuery = '';
 let _editingOfficeId = null;
 let _editingOfficeDraft = null;
-let _activeDetailsTab = 'hamola';
+let _activeDetailsTab = 'balance';
 let _detailsOfficeId = null;
 let _hamolaEditId = null;
+let _officeBalanceEntryType = 'deposit';
 const LAST_PAGE_CTX_KEY = 'financial_last_page_ctx';
 
 function _requireSession() {
@@ -507,38 +510,26 @@ function _renderListShell() {
 
       <!-- العنوان والأزرار -->
       <div class="flex items-center justify-between flex-wrap gap-3 mb-6">
-        <h2 class="text-2xl font-bold text-gray-800 mb-0">إدارة الشركات</h2>
+        <h2 class="text-2xl font-bold text-gray-800 mb-0">إدارة المكاتب</h2>
         <div class="flex gap-2">
-          <button type="button" data-action="office-add" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:10px;padding:8px 18px;font-weight:700;font-size:0.875rem;cursor:pointer;font-family:inherit;transition:box-shadow 0.2s;">➕ إضافة شركة</button>
-        </div>
-      </div>
-
-      <!-- بطاقات الملخص -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-        <div style="background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:12px;padding:16px;color:#fff;">
-          <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">عدد الشركات</p>
-          <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalCount">0</p>
-        </div>
-        <div style="background:linear-gradient(135deg,#10b981,#059669);border-radius:12px;padding:16px;color:#fff;">
-          <p style="font-size:0.75rem;opacity:0.9;margin:0 0 4px;">إجمالي الوزن</p>
-          <p style="font-size:1.5rem;font-weight:800;margin:0;" id="officeTotalWeight">0.00</p>
+          <button type="button" data-action="office-add" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;border-radius:10px;padding:8px 18px;font-weight:700;font-size:0.875rem;cursor:pointer;font-family:inherit;transition:box-shadow 0.2s;">➕ إضافة مكتب</button>
         </div>
       </div>
 
       <!-- شريط البحث -->
       <div class="mb-6">
-        <input id="officeSearch" type="text" class="input" placeholder="🔍 ابحث عن شركة..." style="border-radius:12px;padding:10px 16px 10px 40px;" />
+        <input id="officeSearch" type="text" class="input" placeholder="🔍 ابحث عن مكتب..." style="border-radius:12px;padding:10px 16px 10px 40px;" />
       </div>
 
       <!-- قائمة الشركات -->
       <div style="margin-bottom:8px;">
-        <h3 class="text-lg font-bold text-gray-800 mb-3">قائمة الشركات</h3>
+        <h3 class="text-lg font-bold text-gray-800 mb-3">قائمة المكاتب</h3>
       </div>
       <div class="table-wrapper overflow-x-auto">
         <table class="table">
           <thead style="background:linear-gradient(135deg,#1e3a8a,#2563eb);">
             <tr>
-              <th style="color:#fff;">اسم الشركة</th>
+              <th style="color:#fff;">اسم المكتب</th>
               <th style="color:#fff;">رقم الهاتف</th>
               <th style="color:#fff;">إجمالي الوزن</th>
               <th style="color:#fff;">إجراءات</th>
@@ -594,7 +585,7 @@ function _renderOfficeModal() {
 function _renderOfficeModalRow() {
   return `
     <tr>
-      <td><input type="text" class="input input-sm office-modal-name" placeholder="اسم الشركة" /></td>
+      <td><input type="text" class="input input-sm office-modal-name" placeholder="اسم المكتب" /></td>
       <td><input type="text" class="input input-sm office-modal-phone" placeholder="الهاتف" /></td>
       <td><button type="button" data-action="office-modal-remove-row" class="btn btn-secondary btn-sm">حذف</button></td>
     </tr>
@@ -625,7 +616,7 @@ function _renderDetailsShell(office) {
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:200px;">
           <div style="width:40px;height:40px;border-radius:50%;background:#22c55e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.125rem;flex-shrink:0;">🏢</div>
           <div>
-            <p style="font-size:0.6875rem;color:#6b7280;margin:0;">اسم الشركة</p>
+            <p style="font-size:0.6875rem;color:#6b7280;margin:0;">اسم المكتب</p>
             <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${office.name}</p>
           </div>
         </div>
@@ -640,7 +631,7 @@ function _renderDetailsShell(office) {
 
       <!-- التبويبات -->
       <div style="display:flex;border-bottom:2px solid #e5e7eb;margin-bottom:20px;" role="tablist">
-        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد الشركة</button>
+        <button type="button" data-tab="balance" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'balance' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'balance' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'balance' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'balance' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">💰 رصيد المكتب</button>
         <button type="button" data-tab="hamola" style="padding:12px 20px;border:none;border-bottom:3px solid ${_activeDetailsTab === 'hamola' ? '#1f2937' : 'transparent'};background:${_activeDetailsTab === 'hamola' ? '#f3f4f6' : 'transparent'};color:${_activeDetailsTab === 'hamola' ? '#1f2937' : '#9ca3af'};font-weight:${_activeDetailsTab === 'hamola' ? '700' : '500'};font-size:0.9375rem;cursor:pointer;font-family:inherit;transition:all 0.2s;">🚚 تفاصيل الحمولة</button>
       </div>
 
@@ -727,12 +718,51 @@ function _renderHamolaTable(rows) {
   `;
 }
 
-// ── رصيد الشركة tab — UI-ONLY restoration ──────────────────────────────────
-// Exact pre-removal renderer kept verbatim. It is fed an EMPTY entry list on
-// purpose: the balance/ledger/deposit functionality remains removed. The tab
-// therefore shows its placeholder card (الرصيد الحالي = 0.00), the original
-// 5-column empty table («لا توجد حركات»), and the original 💰 إيداع / سحب
-// button — which has NO handler and performs NO action.
+// ── رصيد الشركة tab — existing company ledger projection ───────────────────
+// The renderer preserves the existing layout. Its entries come from the
+// read-only FinancialService office projection, including receipt-row-payment
+// company legs and explicit manual office movements.
+async function _resolveOfficeBalanceReferences(entries) {
+  const receiptRowIds = [...new Set((entries || [])
+    .filter(entry => (entry.reference_type === 'receipt_row_company_charge'
+      || entry.reference_type === 'receipt_row_payment_company')
+      && entry.reference_id)
+    .map(entry => String(entry.reference_id)))];
+
+  const rows = await Promise.all(receiptRowIds.map(async (rowId) => {
+    try { return await ReceiptRepository.getRowById(rowId); } catch (_) { return null; }
+  }));
+  const kartanoByRowId = new Map(rows
+    .filter(row => row?.row_id && String(row.kartano || '').trim())
+    .map(row => [String(row.row_id), String(row.kartano).trim()]));
+
+  return (entries || []).map(entry => {
+    const referenceType = String(entry.reference_type || '');
+    const kartano = kartanoByRowId.get(String(entry.reference_id || ''));
+
+    if (referenceType === 'receipt_row_company_charge') {
+      return {
+        ...entry,
+        reference_display: kartano ? `إضافة كارتة: ${kartano}` : 'إضافة كارتة',
+      };
+    }
+    if (referenceType === 'receipt_row_payment_company') {
+      return {
+        ...entry,
+        reference_display: kartano ? `صرف كارتة: ${kartano}` : 'صرف كارتة',
+      };
+    }
+    if (referenceType === 'manual_office_balance') {
+      const note = String(entry.note || '').trim();
+      return {
+        ...entry,
+        reference_display: note ? `حركة يدوية: ${note}` : 'حركة يدوية',
+      };
+    }
+    return { ...entry, reference_display: 'حركة مالية' };
+  });
+}
+
 function _renderOfficeBalance(entries) {
   function entryDate(entry) {
     return entry.date || entry.applied_at || entry.created_at || '';
@@ -750,6 +780,10 @@ function _renderOfficeBalance(entries) {
     if (entry.type === 'deposit') return Math.abs(amount);
     if (entry.type === 'withdraw') return -Math.abs(amount);
     return amount;
+  }
+
+  function entryReferenceLabel(entry) {
+    return _text(entry.reference_display || 'حركة مالية');
   }
 
   const sorted = entries.slice().sort((a, b) => {
@@ -778,7 +812,7 @@ function _renderOfficeBalance(entries) {
         <td>${entryTypeLabel(entry)}</td>
         <td>${delta < 0 ? '-' : ''}${_fmt(Math.abs(delta))}</td>
         <td>${_fmt(balance)}</td>
-        <td>${_text(entry.reference_number || entry.reference_id || '-')}</td>
+        <td>${entryReferenceLabel(entry)}</td>
       </tr>
     `).join('')
     : `<tr><td colspan="5" class="text-center text-muted p-4">لا توجد حركات</td></tr>`;
@@ -790,7 +824,8 @@ function _renderOfficeBalance(entries) {
         <p class="text-2xl font-bold ${currentClass}">${_fmt(currentBalance)}</p>
       </div>
       <div class="flex gap-2">
-        <button type="button" data-action="office-deposit-open" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع / سحب</button>
+        <button type="button" data-action="open-office-balance-entry" data-entry-type="deposit" style="background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💰 إيداع رصيد</button>
+        <button type="button" data-action="open-office-balance-entry" data-entry-type="withdraw" style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">💸 سحب رصيد</button>
       </div>
     </div>
     <div class="table-wrapper">
@@ -821,11 +856,6 @@ async function loadOffices() {
   if (searchEl) searchEl.value = _searchQuery || '';
 
   const summary = await OfficesModule.getOfficeSummary();
-  const totalCountEl = document.getElementById('officeTotalCount');
-  const totalWeightEl = document.getElementById('officeTotalWeight');
-
-  if (totalCountEl) totalCountEl.textContent = String(summary.total_offices || 0);
-  if (totalWeightEl) totalWeightEl.textContent = _fmt(summary.total_weight);
 
   const tbody = document.getElementById('officesTableBody');
   if (!tbody) return;
@@ -876,8 +906,8 @@ async function loadOffices() {
   }).join('') || `<tr><td colspan="4" class="text-center text-muted p-6">
     <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:24px;">
       <div style="width:64px;height:64px;background:#e2e8f0;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2rem;">🏢</div>
-      <p style="font-weight:700;color:#64748b;margin:0;">لا يوجد شركات</p>
-      <p style="font-size:0.8125rem;color:#94a3b8;margin:0;">ابدأ بإضافة الشركات من الزر أعلاه</p>
+      <p style="font-weight:700;color:#64748b;margin:0;">لا يوجد مكاتب</p>
+      <p style="font-size:0.8125rem;color:#94a3b8;margin:0;">ابدأ بإضافة المكاتب من الزر أعلاه</p>
     </div>
   </td></tr>`;
 }
@@ -887,6 +917,9 @@ async function showOfficeDetails(id) {
   if (!session) return;
   if (!id) throw new Error('[offices-page] office id is required');
 
+  // Opening any company's details starts from the Company Balance tab. Tab
+  // selection is still retained while the current details view stays open.
+  _activeDetailsTab = 'balance';
   _detailsOfficeId = String(id);
   const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
   if (!office) throw new Error('Office not found');
@@ -911,9 +944,9 @@ async function _renderDetailsContent(office) {
   if (!content) return;
 
   if (_activeDetailsTab === 'balance') {
-    // UI-only tab: placeholder card + empty ledger table — no ledger reads,
-    // no balance computation (the feature itself remains removed).
-    content.innerHTML = _renderOfficeBalance([]);
+    const balanceData = await FinancialService.getOfficeBalance(office.id);
+    const displayEntries = await _resolveOfficeBalanceReferences(balanceData.entries);
+    content.innerHTML = _renderOfficeBalance(displayEntries);
     return;
   }
 
@@ -933,6 +966,99 @@ function _openOfficeModal() {
 
 function _closeOfficeModal() {
   document.getElementById('officeModal')?.classList.add('hidden');
+}
+
+function _ensureOfficeBalanceEntryModal() {
+  if (document.getElementById('officeBalanceEntryModal')) return;
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div id="officeBalanceEntryModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-bold" id="officeBalanceEntryTitle">حركة رصيد للشركة</h3>
+          <button type="button" data-action="close-office-balance-entry" class="btn btn-secondary btn-sm">إغلاق</button>
+        </div>
+        <div class="grid gap-3 mb-4">
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryAmount">المبلغ <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryAmount" type="number" step="0.01" min="0" class="input input-sm" placeholder="0.00">
+          </div>
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryDate">التاريخ <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryDate" type="date" class="input input-sm">
+          </div>
+          <div>
+            <label class="label mb-1" for="officeBalanceEntryNote">السبب / ملاحظة <span class="text-red-500">*</span></label>
+            <input id="officeBalanceEntryNote" type="text" class="input input-sm" placeholder="اكتب سبب الحركة">
+          </div>
+        </div>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-action="close-office-balance-entry" class="btn btn-secondary btn-sm">إلغاء</button>
+          <button type="button" data-action="save-office-balance-entry" class="btn btn-primary btn-sm">💾 حفظ</button>
+        </div>
+        <div id="officeBalanceEntryMsg" class="field-msg-inline field-msg-inline--error mt-3" role="alert"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(div.firstElementChild);
+}
+
+function _openOfficeBalanceEntryModal(entryType) {
+  if (!_detailsOfficeId) return;
+  _ensureOfficeBalanceEntryModal();
+  _officeBalanceEntryType = entryType === 'withdraw' ? 'withdraw' : 'deposit';
+
+  const modal = document.getElementById('officeBalanceEntryModal');
+  const title = document.getElementById('officeBalanceEntryTitle');
+  const amount = document.getElementById('officeBalanceEntryAmount');
+  const date = document.getElementById('officeBalanceEntryDate');
+  const note = document.getElementById('officeBalanceEntryNote');
+  const msg = document.getElementById('officeBalanceEntryMsg');
+
+  if (title) title.textContent = _officeBalanceEntryType === 'deposit' ? 'إيداع رصيد للمكتب' : 'سحب رصيد من المكتب';
+  if (amount) amount.value = '';
+  if (date) date.value = DateUtils.todayLocal();
+  if (note) note.value = '';
+  if (msg) { msg.textContent = ''; msg.classList.remove('is-visible'); }
+  modal?.classList.remove('hidden');
+}
+
+function _closeOfficeBalanceEntryModal() {
+  document.getElementById('officeBalanceEntryModal')?.classList.add('hidden');
+}
+
+async function _saveOfficeBalanceEntry() {
+  const amount = parseFloat(document.getElementById('officeBalanceEntryAmount')?.value) || 0;
+  const date = document.getElementById('officeBalanceEntryDate')?.value || '';
+  const note = document.getElementById('officeBalanceEntryNote')?.value?.trim() || '';
+  const msg = document.getElementById('officeBalanceEntryMsg');
+
+  if (amount <= 0 || !date || !note) {
+    if (msg) {
+      msg.textContent = amount <= 0 ? '❌ المبلغ يجب أن يكون أكبر من صفر'
+        : !date ? '❌ التاريخ مطلوب'
+        : '❌ السبب / الملاحظة مطلوبة';
+      msg.classList.add('is-visible');
+    }
+    return;
+  }
+
+  try {
+    await FinancialService.createManualOfficeBalanceEntry(_moduleSessionUsername(), {
+      office_id: _detailsOfficeId,
+      entry_type: _officeBalanceEntryType,
+      amount,
+      date,
+      note,
+    });
+    _closeOfficeBalanceEntryModal();
+    await showOfficeDetails(_detailsOfficeId);
+  } catch (err) {
+    if (msg) {
+      msg.textContent = err.message || 'حدث خطأ أثناء حفظ حركة الرصيد';
+      msg.classList.add('is-visible');
+    }
+  }
 }
 
 function _openHamolaModal(title, row = null) {
@@ -1000,6 +1126,20 @@ function attachOfficesPageListeners() {
 
   document.addEventListener('click', async (e) => {
     const target = e.target;
+
+    const openOfficeBalanceEntry = target.closest('[data-action="open-office-balance-entry"]');
+    if (openOfficeBalanceEntry) {
+      _openOfficeBalanceEntryModal(openOfficeBalanceEntry.dataset.entryType);
+      return;
+    }
+    if (target.closest('[data-action="close-office-balance-entry"]')) {
+      _closeOfficeBalanceEntryModal();
+      return;
+    }
+    if (target.closest('[data-action="save-office-balance-entry"]')) {
+      await _saveOfficeBalanceEntry();
+      return;
+    }
 
     if (target.closest('[data-action="office-add"]')) {
       _openOfficeModal();
@@ -1071,7 +1211,7 @@ function attachOfficesPageListeners() {
     if (target.closest('[data-action="office-delete"]')) {
       const id = target.closest('[data-id]')?.dataset.id;
       if (!id) return;
-      if (!confirm('هل أنت متأكد من حذف الشركة؟')) return;
+      if (!confirm('هل أنت متأكد من حذف المكتب؟')) return;
       await OfficesModule.deleteOffice(id);
       await loadOffices();
       return;
@@ -1083,7 +1223,7 @@ function attachOfficesPageListeners() {
     }
 
     if (target.closest('[data-action="office-back"]')) {
-      _activeDetailsTab = 'hamola';
+      _activeDetailsTab = 'balance';
       _detailsOfficeId = null;
       if (typeof window.showPage === 'function') await window.showPage('officesPage');
       return;
@@ -1096,7 +1236,7 @@ function attachOfficesPageListeners() {
           const { printHTML, buildPrintDocument } = await import('./printEngine.js');
           const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
           printHTML(buildPrintDocument({
-            title: 'طباعة تفاصيل الشركة',
+            title: 'طباعة تفاصيل المكتب',
             body: '<h2 style="text-align:center;color:#0f766e;margin-bottom:12px;">' + (office?.name || '') + '</h2>' + content.innerHTML,
             orientation: 'portrait',
           }), { id: 'office-print-iframe' });
@@ -1167,6 +1307,12 @@ function attachOfficesPageListeners() {
 
 
   window.addEventListener('offices:changed', () => {
+    loadOffices();
+  });
+
+  window.addEventListener('receipt-financial:changed', () => {
+    // Company balance remains the existing ledger projection; reload only after
+    // the receipt payment transaction has committed.
     loadOffices();
   });
 }

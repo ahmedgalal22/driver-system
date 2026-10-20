@@ -33,6 +33,7 @@ function createFilterState() {
     global: '',
     owner: '',
     company: '',
+    driver: '',
     date: '',
     vehicle: '',
     karta: '',
@@ -239,6 +240,7 @@ function hasActiveRowFilters(filters) {
     String(filters.global || '').trim()
     || String(filters.owner || '').trim()
     || String(filters.company || '').trim()
+    || String(filters.driver || '').trim()
     || String(filters.vehicle || '').trim()
     || String(filters.karta || '').trim()
     || String(filters.type || '').trim()
@@ -249,6 +251,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
   const global = String(filters.global || '').trim().toLowerCase();
   const owner = String(filters.owner || '').trim().toLowerCase();
   const company = String(filters.company || '').trim().toLowerCase();
+  const driver = String(filters.driver || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
@@ -258,7 +261,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
     if (global && hay.includes(global)) return true;
     if (vehicle && rowContains(row.vehicleName, vehicle)) return true;
     // If only record-level filters are active (number), show separators
-    if (!global && !owner && !company && !vehicle && !karta && !typeFilter) return true;
+    if (!global && !owner && !company && !driver && !vehicle && !karta && !typeFilter) return true;
     return false;
   }
 
@@ -272,6 +275,7 @@ function rowMatchesReceiptFilters(row, record, filters) {
   if (global && !hay.includes(global)) return false;
   if (owner && !rowContains(row.owner_name, owner) && !rowContains(record.owner_name || record.client_name, owner)) return false;
   if (company && !rowContains(row.office, company) && !rowContains(record.company_name, company)) return false;
+  if (driver && !rowContains(row.data || row.driver, driver)) return false;
   if (vehicle && !rowContains(row.car || row.carNo || row.vehicle_plate, vehicle)) return false;
   if (karta && !rowContains(row.kartano || row.kartaNo || row.karta, karta)) return false;
   if (typeFilter && !rowContains(row.type, typeFilter)) return false;
@@ -310,6 +314,7 @@ function getReceiptCardsFiltered() {
   const global = String(filters.global || '').trim().toLowerCase();
   const owner = String(filters.owner || '').trim().toLowerCase();
   const company = String(filters.company || '').trim().toLowerCase();
+  const driver = String(filters.driver || '').trim().toLowerCase();
   const vehicle = String(filters.vehicle || '').trim().toLowerCase();
   const karta = String(filters.karta || '').trim().toLowerCase();
   const typeFilter = String(filters.type || '').trim().toLowerCase();
@@ -340,6 +345,7 @@ function getReceiptCardsFiltered() {
       if (global && !haystack.includes(global)) return false;
       if (owner && !rowContains(record.owner_name || record.client_name, owner) && !rows.some((row) => rowContains(row.owner_name, owner))) return false;
       if (company && !rowContains(record.company_name, company) && !rows.some((row) => rowContains(row.office, company))) return false;
+      if (driver && !rows.some((row) => rowContains(row.data || row.driver, driver))) return false;
       if (vehicle && !rowContains(record.vehicle_id, vehicle) && !rows.some((row) => rowContains(row.carNo || row.car || row.vehicle_plate, vehicle))) return false;
       if (karta && !rows.some((row) => rowContains(row.kartaNo || row.kartano || row.karta, karta))) return false;
       if (typeFilter && !rows.some((row) => rowContains(row.type, typeFilter))) return false;
@@ -363,6 +369,8 @@ function summarizeReceipts(records) {
       acc.weight += sumVisibleRowWeight(rows);
       acc.noloon += sumVisibleRowField(rows, 'noloon');
       acc.ohda += sumVisibleRowField(rows, 'ohda');
+      acc.net += sumVisibleRowField(rows, 'net');
+      acc.sarf += sumVisibleRowField(rows, 'sarf');
       return acc;
     }
 
@@ -374,10 +382,12 @@ function summarizeReceipts(records) {
     dataRows.forEach((row) => {
       acc.noloon += toNumber(row.noloon);
       acc.ohda += toNumber(row.ohda);
+      acc.net += toNumber(row.net);
+      acc.sarf += toNumber(row.sarf);
     });
     acc.weight += sumVisibleRowWeight(visible);
     return acc;
-  }, { count: 0, weight: 0, noloon: 0, ohda: 0 });
+  }, { count: 0, weight: 0, noloon: 0, ohda: 0, net: 0, sarf: 0 });
 }
 
 
@@ -439,7 +449,10 @@ function renderReceiptsControls() {
         <input data-filter-tab="receipts" data-filter-key="owner" type="text" value="${esc(f.owner)}" placeholder="صاحب المركبة" list="receiptOwnersDatalist" />
       </label>
       <label>
-        <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم الشركة" list="receiptCompaniesDatalist" />
+        <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم المكتب" list="receiptCompaniesDatalist" />
+      </label>
+      <label>
+        <input data-filter-tab="receipts" data-filter-key="driver" type="text" value="${esc(f.driver)}" placeholder="اسم السائق" list="receiptDriversDatalist" />
       </label>
       <label>
         <input data-filter-tab="receipts" data-filter-key="vehicle" type="text" value="${esc(f.vehicle)}" placeholder="رقم المركبة" list="receiptVehiclesDatalist" />
@@ -469,6 +482,7 @@ function renderReceiptsControls() {
     </div>
     <datalist id="receiptOwnersDatalist"></datalist>
     <datalist id="receiptCompaniesDatalist"></datalist>
+    <datalist id="receiptDriversDatalist"></datalist>
     <datalist id="receiptVehiclesDatalist"></datalist>
     <datalist id="receiptKartasDatalist"></datalist>
   `;
@@ -484,6 +498,8 @@ function renderSummaryCards(_tab, _preFiltered) {
         ${summaryCard('⚖️ إجمالي الوزن', fmtMoney(sums.weight), 'summary-card--green')}
         ${summaryCard('🚛 إجمالي النولون', fmtMoney(sums.noloon), 'summary-card--cyan')}
         ${summaryCard('🏦 إجمالي العهدة', fmtMoney(sums.ohda), 'summary-card--emerald')}
+        ${summaryCard('💜 إجمالي الصافي', fmtMoney(sums.net), 'summary-card--violet')}
+        ${summaryCard('🟠 إجمالي الصرف', fmtMoney(sums.sarf), 'summary-card--orange')}
       </div>
     `;
   const container = document.getElementById('receiptsSummaryContainer');
@@ -620,6 +636,7 @@ function renderDatalists() {
   const receipts = STATE.receipts;
   setDatalist('receiptOwnersDatalist', receipts.map((r) => r.owner_name || r.client_name).filter(Boolean));
   setDatalist('receiptCompaniesDatalist', receipts.map((r) => r.company_name).filter(Boolean));
+  setDatalist('receiptDriversDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.data || row.driver)).filter(Boolean));
   setDatalist('receiptVehiclesDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.car || row.carNo || row.vehicle_plate)).filter(Boolean));
   setDatalist('receiptKartasDatalist', receipts.flatMap((r) => getReceiptRows(r).map((row) => row.kartaNo)).filter(Boolean));}
 
@@ -1087,7 +1104,7 @@ function _receiptPrintBuildHeader(record) {
       </div>
       <div class="print-header-info" style="margin-top:4px;">
         <span>صاحب المركبة: <strong>${ownerName}</strong></span>
-        ${companyName ? `<span>الشركة: <strong>${companyName}</strong></span>` : ''}
+        ${companyName ? `<span>المكتب: <strong>${companyName}</strong></span>` : ''}
       </div>
     </div>`;
 }
@@ -1288,21 +1305,26 @@ async function printCurrentView(tab = 'receipts') {
 }
 
 /**
- * _handleToggleRowPayment(btn) — row payment status chip (الحالة column).
- * Flips the persisted row state via the atomic domain transition; the
- * financial posting/reversal is created inside FinancialService — the page
- * never mutates balances directly. Loud failure stays visible (alert),
- * and the page re-reads from persisted state afterwards either way.
+ * _handleRowPaymentStatusChange(select) — explicit row payment-status choice.
+ * The select only supplies the requested paid/unpaid value; FinancialService
+ * remains the sole owner of the atomic posting/reversal state transition.
  */
-async function _handleToggleRowPayment(btn) {
+async function _handleRowPaymentStatusChange(select) {
   const username = getSessionUsername();
   if (!username) return;
-  const rowId = btn.dataset.rowId;
-  const target = btn.dataset.targetStatus === 'paid' ? 'paid' : 'unpaid';
+  const rowId = select.dataset.rowId;
+  const target = select.value === 'paid' ? 'paid' : 'unpaid';
   if (!rowId) return;
-  btn.disabled = true;
+  select.disabled = true;
   try {
-    await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+    const result = await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+    if (result.changed) {
+      // FinancialService is DOM-free. Notify read models only after its
+      // transaction committed and include authoritative affected identities.
+      window.dispatchEvent(new CustomEvent('receipt-financial:changed', { detail: result }));
+      // Existing dashboard/all-receipts consumers already use this domain event.
+      window.dispatchEvent(new CustomEvent('receipts:changed', { detail: result }));
+    }
   } catch (err) {
     alert(err?.message || '❌ تعذر تحديث حالة الصرف');
   }
@@ -1421,16 +1443,19 @@ function bindPageEvents() {
         _exportReceiptsToExcel();
         return;
       }
-      if (action === 'toggle-row-payment') {
-        await _handleToggleRowPayment(actionBtn);
-        return;
-      }
     }
 
     const recordAction = event.target.closest('[data-id][data-action]');
     if (recordAction) {
       await handleCardAction(recordAction.dataset.action, recordAction.dataset.id, recordAction.closest('[data-kind]')?.dataset.kind || 'receipts');
       return;
+    }
+  });
+
+  page.addEventListener('change', async (event) => {
+    const statusSelect = event.target.closest('select[data-action="set-row-payment-status"]');
+    if (statusSelect) {
+      await _handleRowPaymentStatusChange(statusSelect);
     }
   });
 

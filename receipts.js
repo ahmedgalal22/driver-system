@@ -104,7 +104,7 @@ function _normalizeRow(row) {
   if (row._type === ROW_TYPES.SEPARATOR) {
     return {
       ...row,
-      _rowId      : row._rowId || _uuid(),
+      _rowId      : row._rowId || row.row_id || _uuid(),
       _type       : ROW_TYPES.SEPARATOR,
       vehicleName : normalizeOptionalString(row.vehicleName),
       subtotal    : Number(row.subtotal) || 0,
@@ -116,7 +116,8 @@ function _normalizeRow(row) {
 
   return {
     ...row,
-    _rowId       : row._rowId || _uuid(),
+    // Preserve the persisted row lifecycle identity on ordinary receipt edits.
+    _rowId       : row._rowId || row.row_id || _uuid(),
     _type        : row._type  || ROW_TYPES.DATA,
     owner_id     : row.owner_id != null ? String(row.owner_id).trim() : null,
     owner_name   : normalizeOptionalString(row.owner_name),
@@ -180,7 +181,7 @@ function _normalize(rawData) {
 // The frozen persisted ReceiptRow contract (FinancialService._buildReceiptRowEntities)
 // stores exactly:
 //   { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate,
-//     driver_price(cents), loading, destination, office,
+//     driver_price(cents), driver_settlement_price(cents), loading, destination, office,
 //     advance(cents), net(cents), sarf(cents), kartano, date, driver_name,
 //     weight, weight2, deficit, weightTotal, type,
 //     officeAmount(cents), discount(cents), add(cents), row_order }
@@ -217,6 +218,11 @@ function _persistedRowToUiShape(row, driverName = '') {
     kartano     : row.kartano ?? '',
     date        : row.date    ?? '',
     driver_id   : row.driver_id ?? null,               // row's driver link (authoritative)
+    // Hidden form-carried value: preserves the Driver Details settlement price
+    // if the receipt itself is opened and re-saved. It is not receipt نولون.
+    driver_settlement_price: row.driver_settlement_price === null || row.driver_settlement_price === undefined
+      ? null
+      : Money.toDecimal(row.driver_settlement_price),
     data        : row.driver_name || driverName || '', // persisted display denorm; driver_id map = fallback
     car         : row.vehicle_plate || '',
     weight      : row.weight  ?? '',
@@ -468,7 +474,7 @@ const COL_DEFS = [
   // index: 8
   { key: 'weightTotal',  label: 'الوزن',              cls: 'receipt-weight-total', type: 'number', minW: '60px',  printHide: false, readonly: true },
   // index: 9  ← اسم الشركة (office) — مخفي في الطباعة (Feature 4)
-  { key: 'office',       label: 'اسم الشركة',         cls: 'receipt-office',       type: 'text',   minW: '90px',  printHide: true  },
+  { key: 'office',       label: 'اسم المكتب',         cls: 'receipt-office',       type: 'text',   minW: '90px',  printHide: true  },
   // index: 10
   { key: 'loading',      label: 'التحميل',             cls: 'receipt-loading',      type: 'text',   minW: '85px',  printHide: false },
   // index: 11
@@ -696,11 +702,15 @@ function renderReceiptSnapshotDataRow(row) {
 
     if (col.key === 'payment_status') {
       const isPaid = getSnapshotCellRawValue(row, col) === 'paid';
-      const chipLabel = isPaid ? 'تم صرفه' : 'لم يتم صرفه';
-      const chipStyle = `border:none;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;background:${isPaid ? '#dcfce7' : '#f3f4f6'};color:${isPaid ? '#15803d' : '#6b7280'};`;
+      const statusLabel = isPaid ? 'تم صرفه' : 'لم يتم صرفه';
+      // Status is deliberately changed only through an explicit option choice,
+      // never by clicking a toggle chip. The color retains the prior paid /
+      // unpaid distinction while the existing domain state machine owns all
+      // posting and reversal behavior.
+      const selectStyle = `border:none;border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;background:${isPaid ? '#dcfce7' : '#f3f4f6'};color:${isPaid ? '#15803d' : '#6b7280'};`;
       return `<td class="px-1 py-1 text-center${printClass}">${row.row_id != null
-        ? `<button type="button" data-action="toggle-row-payment" data-row-id="${_snapshotEsc(row.row_id)}" data-target-status="${isPaid ? 'unpaid' : 'paid'}" style="${chipStyle}">${chipLabel}</button>`
-        : chipLabel}</td>`;
+        ? `<select data-action="set-row-payment-status" data-row-id="${_snapshotEsc(row.row_id)}" aria-label="حالة الصرف" style="${selectStyle}"><option value="unpaid"${isPaid ? '' : ' selected'}>لم يتم صرفه</option><option value="paid"${isPaid ? ' selected' : ''}>تم صرفه</option></select>`
+        : statusLabel}</td>`;
     }
 
     return `<td class="px-1 py-1 text-${align}${printClass}${cellClass}">${formatSnapshotCellValue(row, col)}</td>`;
@@ -1216,9 +1226,10 @@ async function loadOfficesForReceipt() {
 // UI: a lightweight CUSTOM dropdown (see below) suggests drivers — the native
 // <datalist> was replaced: it can't open on focus/click, can't be styled, and
 // its keyboard filtering varies across browsers. The cache below is the single
-// suggestion source; selection still commits the driver NAME as text and the
-// authoritative driver_id is resolved from the store at save time. Unknown
-// names trigger the quick-create prompt at save (never a silent persist).
+// suggestion source; selection commits the driver NAME as text and retains its
+// stable id on the input for in-form identity updates. Manual text is still
+// resolved from the store at save time. Unknown names trigger the quick-create
+// prompt at save (never a silent persist).
 
 // Each entry carries its PRE-NORMALIZED form (built once here, reused on every
 // keystroke — no per-keystroke name re-normalization). norm.text is the
@@ -1276,15 +1287,48 @@ async function _receiptLoadDriverOptions() {
   }
 }
 
-/** Reload drivers from the store into the cache; drop stale row picks. */
-async function _receiptRefreshDriverOptions() {
+/**
+ * Reload drivers from the store into the existing receipt autocomplete cache.
+ * A renamed driver is updated only on form rows carrying that driver's stable
+ * selection id; display-name equality is intentionally never used as identity.
+ */
+async function _receiptRefreshDriverOptions({ driverId = '' } = {}) {
   await _receiptLoadDriverOptions();
   const names = new Set(_receiptDriversCache.map(d => d.name.trim()));
+  const driversById = new Map(_receiptDriversCache.map(d => [String(d.id), d]));
+  const changedDriverId = String(driverId || '');
   document.querySelectorAll('#receiptTableBody .receipt-data').forEach(el => {
-    // Mirrors the old select behavior: a driver deleted from the store can no
-    // longer stay selected — the row falls back to «— بدون سائق —».
+    const selectedDriverId = String(el.dataset.driverId || '');
+    if (selectedDriverId) {
+      const selectedDriver = driversById.get(selectedDriverId);
+      // Mirrors the old select behavior: a deleted driver can no longer stay
+      // selected — the row falls back to «— بدون سائق —».
+      if (!selectedDriver) {
+        el.value = '';
+        delete el.dataset.driverId;
+      } else if (changedDriverId && selectedDriverId === changedDriverId) {
+        el.value = selectedDriver.name;
+      }
+      return;
+    }
+    // A manually typed, non-selected value keeps the prior autocomplete
+    // behavior: only currently known driver names remain after a refresh.
     if (el.value.trim() && !names.has(el.value.trim())) el.value = '';
   });
+  if (_driverAC.open && _driverAC.input) {
+    _driverAC.items = _driverACRankedItems(_driverAC.input.value);
+    _driverAC.active = -1;
+    _driverACRender();
+    _driverACPosition();
+  }
+}
+
+/** Clear an autocomplete selection as soon as its displayed input is edited. */
+function _clearReceiptDriverSelectionOnInput(input) {
+  const selectedDriverId = String(input?.dataset?.driverId || '');
+  if (!selectedDriverId) return;
+  const selectedDriver = _receiptDriversCache.find(d => String(d.id) === selectedDriverId);
+  if (!selectedDriver || input.value !== selectedDriver.name) delete input.dataset.driverId;
 }
 
 /** Display name of the driver picked on a form row ('' when none picked). */
@@ -1477,7 +1521,8 @@ function _driverACMove(delta) {
 function _driverACCommit(item) {
   if (!item || !_driverAC.input) { _driverACClose(); return; }
   const input = _driverAC.input;
-  input.value = item.d.name; // text only — id resolved at save (name → id)
+  input.value = item.d.name;
+  input.dataset.driverId = String(item.d.id); // stable in-form selection identity
   _driverACClose();
   input.focus();
 }
@@ -1566,7 +1611,10 @@ async function _promptCreateDriverForRow(row, driverName) {
   // Auto-select the newly created driver on this row, close the popup, and let
   // the save continue — the user never has to reopen the autocomplete.
   const input = row.querySelector('.receipt-data');
-  if (input) input.value = String(record.name || driverName);
+  if (input) {
+    input.value = String(record.name || driverName);
+    input.dataset.driverId = String(record.id);
+  }
   _driverACClose();
   return record;
 }
@@ -1688,7 +1736,7 @@ function _buildRowHTML() {
         <td class="px-1 py-1 text-center${printClass}">
           <input type="text" list="officesList"
             class="${col.cls} w-full px-1 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none"
-            placeholder="الشركة">
+            placeholder="المكتب">
         </td>`;
     }
 
@@ -1835,8 +1883,13 @@ function fillFromPreviousRow(newRow) {
     const prevRow = dataRows[dataRows.length - 2];
     const carEl   = newRow.querySelector('.receipt-car');
     const dataEl  = newRow.querySelector('.receipt-data');
-    if (carEl)   carEl.value   = prevRow.querySelector('.receipt-car')?.value   || '';
-    if (dataEl)  dataEl.value  = prevRow.querySelector('.receipt-data')?.value  || '';
+    const prevDataEl = prevRow.querySelector('.receipt-data');
+    if (carEl) carEl.value = prevRow.querySelector('.receipt-car')?.value || '';
+    if (dataEl) {
+      dataEl.value = prevDataEl?.value || '';
+      if (prevDataEl?.dataset.driverId) dataEl.dataset.driverId = prevDataEl.dataset.driverId;
+      else delete dataEl.dataset.driverId;
+    }
   }
 }
 
@@ -2082,12 +2135,14 @@ function fillColumnDown(colIndex) {
   // Find the last row that has a value in this column
   let sourceRowIdx = -1;
   let sourceVal = '';
+  let sourceInp = null;
   for (let i = rows.length - 1; i >= 0; i--) {
     const cell = [...rows[i].querySelectorAll('td')][colIndex];
-    const inp = cell?.querySelector('input, select'); // driver column is a select
+    const inp = cell?.querySelector('input, select');
     if (inp && inp.value.trim() !== '') {
       sourceRowIdx = i;
       sourceVal = inp.value;
+      sourceInp = inp;
       break;
     }
   }
@@ -2102,6 +2157,10 @@ function fillColumnDown(colIndex) {
   const nextInp = nextCell?.querySelector('input, select');
   if (nextInp) {
     nextInp.value = sourceVal;
+    if (sourceInp?.classList.contains('receipt-data')) {
+      if (sourceInp.dataset.driverId) nextInp.dataset.driverId = sourceInp.dataset.driverId;
+      else delete nextInp.dataset.driverId;
+    }
     nextInp.dispatchEvent(new Event('input'));
   }
 }
@@ -2608,6 +2667,9 @@ async function collectReceiptRows() {
 
     receiptRows.push({
       _type        : 'data',
+      // Existing edit rows retain their immutable lifecycle ID; new form rows
+      // intentionally omit it and receive a new UUID during normalization.
+      ...(row.dataset.rowId ? { row_id: row.dataset.rowId } : {}),
       payment_status: row.dataset.paymentStatus === 'paid' ? 'paid' : 'unpaid',
       owner_id     : String(finalOwner.id),
       owner_name   : finalOwner.name,
@@ -2725,7 +2787,7 @@ async function validateBeforeSave(rawData) {
       .map(r => r.office)
   )];
   if (invalidOffices.length > 0) {
-    alert(`⚠️ الأسماء التالية غير موجودة في قائمة الشركات:\n${invalidOffices.join('\n')}\nبرجاء الاختيار من القائمة أو إضافتها من خلال صفحة الشركات.`);
+    alert(`⚠️ الأسماء التالية غير موجودة في قائمة المكاتب:\n${invalidOffices.join('\n')}\nبرجاء الاختيار من القائمة أو إضافتها من خلال صفحة المكاتب.`);
     return false;
   }
 
@@ -2733,7 +2795,7 @@ async function validateBeforeSave(rawData) {
     .filter(r => r._type !== 'separator')
     .filter(r => !r.office || !r.loading || !r.taktik);
   if (missingOfficeInfo.length > 0) {
-    alert('⚠️ يجب اختيار الشركة ومكان التحميل والجهة لكل صف قبل الحفظ.');
+    alert('⚠️ يجب اختيار المكتب ومكان التحميل والجهة لكل صف قبل الحفظ.');
     return false;
   }
 
@@ -3123,9 +3185,9 @@ async function loadReceiptForEdit(receiptData) {
     const tr = document.createElement('tr');
     tr.innerHTML = _buildRowHTML();
     tbody.appendChild(tr);
-    // Payment status round-trips invisibly through the form: re-saving an
-    // edited paid row keeps it paid (its posting is reconciled, never lost);
-    // legacy rows without the field default to unpaid.
+    // Preserve immutable row identity and payment state through ordinary edits.
+    // FinancialService applies creation/payment lifecycle reversals separately.
+    tr.dataset.rowId = String(rowData.row_id || '');
     tr.dataset.paymentStatus = rowData.payment_status === 'paid' ? 'paid' : 'unpaid';
 
     // Bridge persisted vocabulary (cents) → UI field values (decimals)
@@ -3137,6 +3199,8 @@ async function loadReceiptForEdit(receiptData) {
     // Driver: restore the NAME from the driver record (id → name, D3) — the
     // same text the old select displayed; unknown/deleted id → «— بدون سائق —».
     setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');
+    const driverInput = tr.querySelector('.receipt-data');
+    if (driverInput && rowData.driver_id != null) driverInput.dataset.driverId = String(rowData.driver_id);
     // receipt-owner removed from table
     setF('receipt-car',           ui.car);
     setF('receipt-weight',        ui.weight);
@@ -3500,6 +3564,7 @@ document.addEventListener('click', function (e) {
   if (_isDriverRowInput(e.target) && !_driverAC.open) _driverACOpen(e.target);
 });
 document.addEventListener('input', function (e) {
+  if (_isDriverRowInput(e.target)) _clearReceiptDriverSelectionOnInput(e.target);
   // Typing re-ranks the suggestion list (normalized: diacritics / tatweel /
   // extra spaces / case ignored) using the pre-normalized cache — O(drivers)
   // cheap string compares per keystroke, no regex re-normalization.
@@ -3514,6 +3579,11 @@ document.addEventListener('keydown', _driverACKeydown, true); // capture: pre-em
 
 window.addEventListener('owners:changed', () => {
   loadClientsList();
+});
+window.addEventListener('drivers:changed', (event) => {
+  _receiptRefreshDriverOptions(event.detail || {}).catch(err => {
+    console.warn('[receipts] driver autocomplete refresh failed', err);
+  });
 });
 window.addEventListener('offices:changed', () => {
   loadOfficesForReceipt();

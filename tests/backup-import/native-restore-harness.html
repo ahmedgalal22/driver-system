@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Karta native backup/restore harness</title>
+  <style>
+    body { font: 14px/1.45 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    .warning { border: 2px solid #b42318; background: #fff3f2; padding: 1rem; border-radius: .5rem; }
+    button { padding: .65rem 1rem; font-weight: 700; cursor: pointer; }
+    pre { background: #111827; color: #e5e7eb; padding: 1rem; border-radius: .5rem; overflow: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Native backup/restore harness</h1>
+  <div class="warning">
+    <strong>Disposable browser profile and origin only.</strong> This page deletes and restores the
+    <code>Operating System</code> database. Never run it against an operator profile or a real Karta origin.
+  </div>
+  <p><label><input id="confirm" type="checkbox"> I confirm this is a disposable profile and origin.</label></p>
+  <button id="run" type="button">Run native restore checks</button>
+  <pre id="log" aria-live="polite">Awaiting confirmation.</pre>
+<script type="module">
+import { DB } from '../../database.js';
+import {
+  createBackupSnapshot,
+  validateBackupSnapshot,
+  restoreValidatedBackup,
+  verifyRestoredBackup,
+} from '../../services/backupService.js';
+
+const NAME = 'Operating System';
+const USER = 'backup-native-test';
+const log = document.getElementById('log');
+let failures = 0;
+const write = (message, kind = '') => {
+  const line = `${kind ? `[${kind}] ` : ''}${message}`;
+  log.textContent += `\n${line}`;
+  console[kind === 'FAIL' ? 'error' : 'log'](line);
+};
+const assert = (condition, message) => {
+  if (!condition) { failures++; write(message, 'FAIL'); throw new Error(message); }
+  write(message, 'PASS');
+};
+const clone = value => JSON.parse(JSON.stringify(value));
+const request = req => new Promise((resolve, reject) => {
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error || new Error('IndexedDB request failed'));
+});
+const txDone = tx => new Promise((resolve, reject) => {
+  tx.oncomplete = resolve;
+  tx.onerror = () => reject(tx.error || new Error('transaction failed'));
+  tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+});
+async function deleteDisposableDatabase() {
+  const req = indexedDB.deleteDatabase(NAME);
+  await request(req);
+}
+async function writeRecords(db, recordsByStore) {
+  const names = Object.keys(recordsByStore);
+  const tx = db.transaction(names, 'readwrite');
+  const done = txDone(tx);
+  const pending = [];
+  for (const [name, records] of Object.entries(recordsByStore)) {
+    const store = tx.objectStore(name);
+    for (const record of records) pending.push(request(store.put(record)));
+  }
+  await Promise.all(pending);
+  await done;
+}
+async function rawSnapshot(db) {
+  const names = Array.from(db.objectStoreNames).sort();
+  const tx = db.transaction(names, 'readonly');
+  const done = txDone(tx);
+  const entries = await Promise.all(names.map(async name => {
+    const store = tx.objectStore(name);
+    const [keys, values] = await Promise.all([request(store.getAllKeys()), request(store.getAll())]);
+    return [name, keys.map((key, index) => ({ key, value: values[index] }))];
+  }));
+  await done;
+  return Object.fromEntries(entries);
+}
+async function run() {
+  if (!document.getElementById('confirm').checked) { write('Confirmation is required.', 'FAIL'); return; }
+  failures = 0;
+  log.textContent = `Origin: ${location.origin}\nDatabase: ${NAME}\n`;
+  try {
+    await deleteDisposableDatabase();
+    await DB.init();
+    const db = DB._db;
+    const canonical = Object.keys(DB.STORES).sort();
+    await writeRecords(db, {
+      users: [{ id: 1, username: USER, password_hash: 'fixture', role: 'admin', deleted_at: null }],
+      receipts: [{ id: 'receipt-1', total: 1000, deleted_at: null }],
+      receipt_rows: [{ row_id: 'row-1', receipt_id: 'receipt-1', deleted_at: null }],
+      vehicle_ledger: [{ id: 1, amount: 1000, type: 'deposit', is_reversed: false, deleted_at: null }],
+      mainCapitalTreasury: [{ id: 'capital-1', amount: 5000, type: 'deposit', deleted_at: null }],
+    });
+
+    const backup = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+    const validated = validateBackupSnapshot(db, clone(backup), { canonicalStoreNames: canonical });
+    assert(backup._meta.formatVersion === 2, 'format v2 export created');
+    assert(backup._meta.storeNames.length === canonical.length, 'every canonical active store exported, including empties');
+
+    await writeRecords(db, { users: [{ id: 1, username: USER, password_hash: 'mutated', role: 'admin', deleted_at: null }] });
+    await restoreValidatedBackup(db, validated);
+    await verifyRestoredBackup(db, validated);
+    const restored = await rawSnapshot(db);
+    assert(restored.users[0].value.password_hash === 'fixture', 'complete restore replaces mutated records');
+    assert(restored.mainCapitalTreasury[0].value.id === 'capital-1', 'capital store preserved by restore');
+
+    const beforeFailure = await rawSnapshot(db);
+    const invalid = clone(backup);
+    invalid.stores.users.push({ key: 2, value: { id: 2, username: USER, password_hash: 'duplicate', role: 'admin', deleted_at: null } });
+    invalid._meta.recordCounts.users++;
+    let failed = null;
+    try { await restoreValidatedBackup(db, validateBackupSnapshot(db, invalid, { canonicalStoreNames: canonical })); }
+    catch (error) { failed = error; }
+    assert(!!failed, 'native unique-index failure rejects restore');
+    assert(JSON.stringify(beforeFailure) === JSON.stringify(await rawSnapshot(db)), 'native failure rolls back all clears and puts');
+
+    db.close();
+    const reopened = await request(indexedDB.open(NAME));
+    const reopenedSnapshot = await rawSnapshot(reopened);
+    assert(JSON.stringify(beforeFailure) === JSON.stringify(reopenedSnapshot), 'close/reopen preserves restored data');
+    reopened.close();
+    write(failures === 0 ? 'All native backup/restore checks passed.' : `${failures} failure(s).`, failures ? 'FAIL' : 'PASS');
+  } catch (error) {
+    write(error?.stack || error?.message || String(error), 'FAIL');
+  }
+}
+document.getElementById('run').addEventListener('click', run);
+</script>
+</body>
+</html>

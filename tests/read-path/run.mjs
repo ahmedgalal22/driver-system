@@ -203,15 +203,17 @@ ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (fixture rows c
 // above is a kept, separate surface (verified by the summary asserts).
 const headerR1 = await ReceiptRepository.getById(R1); // kept for GROUP 5
 
-// loud failure on unknown office — preserved semantics
-await FinancialService.createReceipt(U, hdr({ total: 100,
-  rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
-const badReceipts = await ReceiptRepository.getAll(U);
-const badProjection = await _loadReceiptRowsProjection(badReceipts);
+// An unknown row company now fails before receipt creation so no company charge
+// can be associated with an invented office.
+const receiptCountBeforeUnknown = (await ReceiptRepository.getAll(U)).length;
 let threw = null;
-try { _officeSummaryLoop(badReceipts, badProjection, nameMap, offices); }
-catch (e) { threw = e.message; }
-ok(/\[OfficesService\] unknown office/.test(threw || ''), `unknown-office loud failure preserved ("${threw}")`);
+try {
+  await FinancialService.createReceipt(U, hdr({ total: 100,
+    rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
+} catch (e) { threw = e.message; }
+ok(/unknown office/.test(threw || '')
+  && (await ReceiptRepository.getAll(U)).length === receiptCountBeforeUnknown,
+  `unknown-office receipt creation fails before persistence ("${threw}")`);
 
 // ─── GROUP 4: static assertions on the REAL modified sources ───────────────
 console.log('\n— GROUP 4: static source assertions (real dashboard.js / offices.js text) —');
@@ -237,10 +239,15 @@ ok(!offSrc.includes('_getOfficeCards') && !offSrc.includes('_renderOfficeCards')
   'REMOVED-CONTRACT (كارتات Tab Removal): offices.js carries ZERO details «الكارتات» tab — button/renderer/search/state all deleted');
 ok(!offSrc.includes('receipt_number') && !dashSrc.includes('receipt_number'),
   'census (Receipt Number phase): offices.js / dashboard.js carry ZERO receipt_number references');
-ok(!/treasury|Treasury|الخزنة|capital|Capital|رأس المال/.test(dashSrc) && !offSrc.includes('treasury') && !offSrc.includes('الخزنة'),
-  'census (Treasury phase): dashboard.js / offices.js carry ZERO Treasury references (الخزنة الرئيسية section / capital store / treasury event all deleted)');
-ok(!dashSrc.includes('dashboard-stat-rose') && !dashSrc.includes('المصروفات والمرتبات') && !dashSrc.includes('_renderCapitalTreasury'),
-  'REMOVED-CONTRACT (Treasury phase): dashboard Card 1 «المصروفات والمرتبات» + Capital Treasury section/renderer deleted');
+ok(dashSrc.includes('الخزنة الرئيسية (رأس المال الخاص)')
+    && dashSrc.includes('DashboardRepository')
+    && dashSrc.includes("capital:changed"),
+  'APPROVED-CONTRACT (Dashboard Capital Treasury): embedded capital section, isolated repository boundary, and capital refresh event are present');
+ok(!dashSrc.includes('TreasuryRepository') && !dashSrc.includes('treasury:changed')
+   && !dashSrc.includes('treasuryPage') && !offSrc.includes('treasury') && !offSrc.includes('الخزنة'),
+  'EXCLUSION-CONTRACT: standalone Treasury page/repository/event remains absent; offices remain Treasury-free');
+ok(!dashSrc.includes('dashboard-stat-rose') && !dashSrc.includes('المصروفات والمرتبات'),
+  'EXCLUSION-CONTRACT: Dashboard expense/salary card remains removed while the Capital section is restored');
 ok(dashSrc.includes('إجمالي المكتب') && dashSrc.includes('dashboard-stat-teal'),
   'KEEP-CONTRACT: dashboard Card 2 «إجمالي المكتب» (receipt officeAmount sum) intact');
 

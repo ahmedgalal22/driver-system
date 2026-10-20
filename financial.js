@@ -10,9 +10,9 @@
  * RULE 2  : ALL money operations live here. Zero receipt/ledger writes elsewhere.
  * RULE 3  : Every operation executes inside ONE DB.transaction() call.
  * RULE 4  : update/delete MUST reverse old entries before applying new ones.
- * RULE 10 : receipt-row payment postings (تم صرفه) are durable vehicle_ledger
- *   entries (effect/reference_type 'receipt_row_payment', reference_id = row
- *   UUID); status transitions post/reverse them atomically with the row write.
+ * RULE 10 : receipt-row creation posts one durable vehicle net balance entry;
+ *   payout status posts/reverses the separate company payment namespace only.
+ *   Every entry is linked by reference_id = receipt row UUID.
  * RULE 5  : Every financial record carries { reference_type, reference_id }.
  * RULE 6  : All monetary values are numbers — never strings.
  * RULE 9  : DB stores integers (cents). money.js handles all conversion.
@@ -27,9 +27,12 @@ import { DB } from './database.js';
 import { ClientRepository } from './services/clientRepository.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { OfficeRepository } from './services/officeRepository.js';
+import { LoadPriceRepository } from './services/loadPriceRepository.js';
+import { canonicalizeRoutePlace, canonicalRouteKey, displayRoutePlace } from './services/routeNameNorm.js';
 import { WriteDataSource } from './services/writeDataSource.js';
 import { createPersistenceCommand, PersistenceCommandType } from './services/persistenceCommand.js';
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
+import { LedgerIntegrityDiagnosticService } from './services/ledgerIntegrityDiagnosticService.js';
 import { Money } from './money.js';
 import { DateUtils } from './dateUtils.js';
 
@@ -40,6 +43,28 @@ const STORE = Object.freeze({
   LEDGER   : 'vehicle_ledger',
   OFFICES  : 'offices',
 });
+
+// Manual vehicle movements use the same normalized vehicle_ledger and audit
+// reversal convention as every other financial operation. They are deliberately
+// distinct from receipt-row payments and Karta Settlement.
+const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';
+const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';
+const MANUAL_OFFICE_REF_TYPE = 'manual_office_balance';
+const MANUAL_OFFICE_EFFECT = 'manual_office_balance';
+const MANUAL_DRIVER_REF_TYPE = 'manual_driver_balance';
+const MANUAL_DRIVER_EFFECT = 'manual_driver_balance';
+const RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE = 'receipt_row_company_charge';
+const RECEIPT_ROW_COMPANY_CHARGE_EFFECT = 'receipt_row_company_charge';
+const RECEIPT_ROW_VEHICLE_BALANCE_REF_TYPE = 'receipt_row_vehicle_balance';
+const RECEIPT_ROW_VEHICLE_BALANCE_EFFECT = 'receipt_row_vehicle_balance';
+
+// Receipt-row lifecycle namespaces are deliberately independent. Vehicle net
+// balance is posted once at row creation; payout status owns office payment only.
+const PAYMENT_STATUS = Object.freeze({ UNPAID: 'unpaid', PAID: 'paid' });
+const RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE = 'receipt_row_payment_company';
+const RECEIPT_ROW_PAYMENT_COMPANY_EFFECT = 'receipt_row_payment_company';
+const LEGACY_RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE = 'receipt_row_payment_vehicle';
+const LEGACY_RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT = 'receipt_row_payment_vehicle';
 
 
 // ─── UUID GENERATOR ────────────────────────────────────────────────────────────
@@ -119,7 +144,47 @@ function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
   };
 }
 
-function _buildReceiptRowEntities(validatedRows, receiptId) {
+/**
+ * Normalize the optional Driver Details settlement price. It is deliberately
+ * independent from receipt_rows.driver_price (نولون): null means no intended
+ * settlement amount has been entered; zero remains an explicit valid value.
+ */
+function _normalizeDriverSettlementPrice(value, label = 'driver_settlement_price') {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    return null;
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new Error(`[FinancialService] ${label} must be a numeric value, blank, or null.`);
+  }
+
+  const decimal = Number(value);
+  const cents = Money.toCents(decimal);
+  if (!Number.isFinite(decimal) || !Number.isFinite(cents) || !Number.isInteger(cents)) {
+    throw new Error(`[FinancialService] ${label} must be a finite numeric value.`);
+  }
+  if (cents < 0) {
+    throw new Error(`[FinancialService] ${label} must not be negative.`);
+  }
+  return cents;
+}
+
+/** Validate a stored (already-cents) Driver Karta settlement price. */
+function _readDriverSettlementPriceCents(value, label = 'driver_settlement_price') {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number') {
+    throw new Error(`[FinancialService] persisted ${label} must be numeric integer cents.`);
+  }
+  const cents = value;
+  if (!Number.isFinite(cents) || !Number.isInteger(cents)) {
+    throw new Error(`[FinancialService] persisted ${label} must be finite integer cents.`);
+  }
+  if (cents < 0) {
+    throw new Error(`[FinancialService] persisted ${label} must not be negative.`);
+  }
+  return cents;
+}
+
+function _buildReceiptRowEntities(validatedRows, receiptId, { forceUnpaid = false } = {}) {
   return validatedRows.map(row => ({
     row_id: row.row_id,
     receipt_id: receiptId,
@@ -127,6 +192,7 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     vehicle_id: row.vehicle_id,
     vehicle_plate: row.vehicle_plate || null,
     driver_price: Money.toCents(row.driver_price ?? 0),
+    driver_settlement_price: _normalizeDriverSettlementPrice(row.driver_settlement_price),
     loading: row.loading || null,
     destination: row.destination || null,
     office: row.office || null,
@@ -149,11 +215,13 @@ function _buildReceiptRowEntities(validatedRows, receiptId) {
     discount: Money.toCents(row.discount ?? 0),
     add: Money.toCents(row.add ?? 0),
     row_order: row.row_order ?? null,
-    // payment_status: 'unpaid' | 'paid' — default unpaid; any non-'paid'
-    // value (incl. legacy rows without the field) clamps to 'unpaid'.
-    payment_status: row.payment_status === PAYMENT_STATUS.PAID
-      ? PAYMENT_STATUS.PAID
-      : PAYMENT_STATUS.UNPAID,
+    // New receipt creation is always unpaid. Receipt edits preserve the
+    // explicit row lifecycle status supplied by the persisted edit form.
+    payment_status: forceUnpaid
+      ? PAYMENT_STATUS.UNPAID
+      : row.payment_status === PAYMENT_STATUS.PAID
+        ? PAYMENT_STATUS.PAID
+        : PAYMENT_STATUS.UNPAID,
   }));
 }
 
@@ -238,106 +306,333 @@ function _validate(data) {
 
 // ─── PUBLIC: createReceipt ─────────────────────────────────────────────────────
 
-// ─── RECEIPT ROW PAYMENT POSTINGS (تم صرفه / لم يتم صرفه) ───────────────────
-// Financial effect exists ONLY while a row is paid. One ACTIVE posting set
-// per receipt row UUID, durable in vehicle_ledger:
-//   • vehicle leg — client_type 'vehicle', vehicle_id set (by_vehicle index →
-//     rebuildVehicleBalance), amount = الصافي (row.net, cents)
-//   • company leg — client_type 'office', amount = الصافي + الصرف
-//     (row.net + row.sarf, cents); NO vehicle_id (would double-count in
-//     rebuildVehicleBalance)
-// Reversal = is_reversed:true (project audit convention), never hard delete.
+// ─── RECEIPT-ROW PAYOUT EFFECTS (تم صرفه / لم يتم صرفه) ───────────────
+// Vehicle net balance is a creation-side movement. Payout status owns the
+// office/company payment movement only.
 
-async function _getActivePaymentPostings(rowId) {
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
-  return entries.filter(e =>
-    e.reference_type === PAYMENT_REF_TYPE &&
-    e.effect === PAYMENT_EFFECT &&
-    e.is_reversed === false &&
-    e.deleted_at === null
+function _isActiveLedgerEntry(entry) {
+  return entry?.is_reversed === false && entry?.deleted_at === null;
+}
+
+function _analyzeReceiptPaymentEffects(entries, rowId) {
+  const rowKey = String(rowId || '').trim();
+  const active = (entries || []).filter(entry => _isActiveLedgerEntry(entry)
+    && String(entry.reference_id || '') === rowKey);
+  const companyLegs = active.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE
+    && entry.effect === RECEIPT_ROW_PAYMENT_COMPANY_EFFECT
+  );
+  const legacyVehicleLegs = active.filter(entry =>
+    entry.reference_type === LEGACY_RECEIPT_ROW_PAYMENT_VEHICLE_REF_TYPE
+    && entry.effect === LEGACY_RECEIPT_ROW_PAYMENT_VEHICLE_EFFECT
+  );
+
+  return {
+    state: companyLegs.length === 0 ? 'none' : companyLegs.length === 1 ? 'complete' : 'duplicate',
+    companyLegs,
+    legacyVehicleLegs,
+    activePaymentLegs: companyLegs,
+  };
+}
+
+function _assertNoLegacyReceiptVehiclePaymentEffects(payment, operation, rowId) {
+  if (payment.legacyVehicleLegs.length === 0) return;
+  throw new Error(
+    `[FinancialService:${operation}] receipt row ${rowId} has legacy active vehicle payment effect(s). `
+    + 'No payout-status change was made; reconcile legacy accounting explicitly.'
   );
 }
 
-async function _resolvePaymentTargets(row) {
-  // Guards evaluated BEFORE the write transaction (same race rationale as
-  // createKartaSettlement): unknown/deleted relations fail LOUDLY so nothing
-  // is silently associated with the wrong vehicle or company.
-  const vehicle = await ClientRepository.getVehicleById(String(row.vehicle_id || ''));
-  if (!vehicle || vehicle.deleted_at !== null) {
-    throw new Error('[FinancialService] cannot post payment: vehicle not found for the row.');
+function _assertNoActiveReceiptPaymentEffects(payment, operation, rowId) {
+  _assertNoLegacyReceiptVehiclePaymentEffects(payment, operation, rowId);
+  if (payment.state === 'none') return;
+  throw new Error(
+    `[FinancialService:${operation}] receipt row ${rowId} has ${payment.state} active company payment effects; expected none.`
+  );
+}
+
+function _assertCompleteReceiptPaymentCompanyEffect(payment, operation, row) {
+  _assertNoLegacyReceiptVehiclePaymentEffects(payment, operation, row.row_id);
+  if (payment.state !== 'complete') {
+    throw new Error(
+      `[FinancialService:${operation}] receipt row ${row.row_id} has ${payment.state} active company payment effects; expected one.`
+    );
   }
+
+  const company = payment.companyLegs[0];
+  const netCents = Number(row.net) || 0;
+  const sarfCents = Number(row.sarf) || 0;
+  if (company.type !== 'deposit'
+    || company.vehicle_id !== null
+    || Number(company.amount) !== netCents + sarfCents
+    || String(company.reference_id || '') !== String(row.row_id)) {
+    throw new Error(
+      `[FinancialService:${operation}] receipt row ${row.row_id} has inconsistent active company payment effect.`
+    );
+  }
+}
+
+async function _resolveReceiptPaymentOffice(row, { tx } = {}) {
   const officeName = String(row.office || '').trim();
   if (!officeName) {
-    throw new Error('[FinancialService] cannot post payment: row has no company (اسم الشركة).');
+    throw new Error('[FinancialService] cannot post payment: row has no office (اسم المكتب).');
   }
-  const offices = await OfficeRepository.findByName(officeName);
-  const office = (offices || []).find(o => o && o.deleted_at === null);
+  const offices = tx
+    ? await tx.findByFields('offices', { name: officeName })
+    : await OfficeRepository.findByName(officeName);
+  const office = (offices || []).find(candidate => candidate && candidate.deleted_at === null);
   if (!office) {
     throw new Error(`[FinancialService] unknown office: ${officeName}`);
   }
-  return { vehicle, office };
+  return office;
 }
 
-function _paymentLegPayloads(username, row, targets, receiptDate) {
-  const now = DateUtils.nowLocal();
-  const date = row.date || receiptDate || DateUtils.todayLocal();
-  const netCents  = Number(row.net)  || 0; // persisted rows: already cents
+async function _resolveReceiptVehicle(row, { tx } = {}) {
+  const vehicle = await ClientRepository.getVehicleById(String(row.vehicle_id || ''), { tx });
+  if (!vehicle || vehicle.deleted_at !== null) {
+    throw new Error('[FinancialService] cannot post vehicle balance: vehicle not found for the row.');
+  }
+  return vehicle;
+}
+
+function _receiptPaymentDate(row, receiptDate = null) {
+  return row.date || receiptDate || DateUtils.todayLocal();
+}
+
+function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+  const netCents = Number(row.net) || 0;
   const sarfCents = Number(row.sarf) || 0;
-  const { vehicle, office } = targets;
-  return [
-    { // vehicle leg — الصافي
-      username,
-      owner_id: String(vehicle.owner_id || ''),
-      owner_name: vehicle.owner_name || null,
-      client_id: String(vehicle.id),
-      client_type: 'vehicle',
-      client_name: vehicle.plate || row.vehicle_plate || null,
-      vehicle_id: vehicle.id,
-      vehicle_plate: vehicle.plate || row.vehicle_plate || null,
-      type: 'deposit',
-      effect: PAYMENT_EFFECT,
-      amount: netCents,
-      reference_type: PAYMENT_REF_TYPE,
-      reference_id: String(row.row_id),
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: `صرف كارتة — الصافي (مركبة ${vehicle.plate || row.vehicle_plate || ''})`,
-    },
-    { // company leg — الصافي + الصرف (explicitly NOT just الصافي)
-      username,
-      owner_id: String(office.id),
-      owner_name: office.name || null,
-      client_id: String(office.id),
-      client_type: 'office',
-      client_name: office.name || null,
-      vehicle_id: null, // by_vehicle sums must never see the company leg
-      vehicle_plate: row.vehicle_plate || null,
-      type: 'deposit',
-      effect: PAYMENT_EFFECT,
-      amount: netCents + sarfCents,
-      reference_type: PAYMENT_REF_TYPE,
-      reference_id: String(row.row_id),
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: `صرف كارتة — الصافي + الصرف (${office.name || ''})`,
-    },
-  ];
+  return {
+    username,
+    owner_id: String(office.id),
+    owner_name: office.name || null,
+    client_id: String(office.id),
+    client_type: 'office',
+    client_name: office.name || null,
+    vehicle_id: null,
+    vehicle_plate: row.vehicle_plate || null,
+    type: 'deposit',
+    effect: RECEIPT_ROW_PAYMENT_COMPANY_EFFECT,
+    amount: netCents + sarfCents,
+    reference_type: RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE,
+    reference_id: String(row.row_id),
+    date: _receiptPaymentDate(row, receiptDate),
+    applied_at: appliedAt,
+    is_reversed: false,
+    note: `صرف كارتة — الصافي + الصرف (${office.name || ''})`,
+  };
 }
 
-async function _paymentAddCommands(username, row, receiptDate) {
-  const targets = await _resolvePaymentTargets(row);
-  return _paymentLegPayloads(username, row, targets, receiptDate)
-    .map(payload => createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload }));
+function _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+  const netCents = Number(row.net) || 0;
+  return {
+    username,
+    owner_id: String(vehicle.owner_id || ''),
+    owner_name: vehicle.owner_name || null,
+    client_id: String(vehicle.id),
+    client_type: 'vehicle',
+    client_name: vehicle.plate || row.vehicle_plate || null,
+    vehicle_id: vehicle.id,
+    vehicle_plate: vehicle.plate || row.vehicle_plate || null,
+    type: 'deposit',
+    effect: RECEIPT_ROW_VEHICLE_BALANCE_EFFECT,
+    amount: netCents,
+    reference_type: RECEIPT_ROW_VEHICLE_BALANCE_REF_TYPE,
+    reference_id: String(row.row_id),
+    date: _receiptPaymentDate(row, receiptDate),
+    applied_at: appliedAt,
+    is_reversed: false,
+    note: `إضافة كارتة للمركبة — الصافي (مركبة ${vehicle.plate || row.vehicle_plate || ''})`,
+  };
 }
 
-function _paymentReverseCommands(entries, username) {
+async function _receiptPaymentAddCommands(username, row, receiptDate = null, { tx } = {}) {
+  const office = await _resolveReceiptPaymentOffice(row, { tx });
+  const payload = _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate);
+  return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
+}
+
+async function _receiptRowVehicleBalanceAddCommands(username, row, receiptDate = null, { tx } = {}) {
+  const vehicle = await _resolveReceiptVehicle(row, { tx });
+  const payload = _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDate);
+  return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
+}
+
+function _receiptPaymentReverseCommands(entries, username) {
   const now = DateUtils.nowLocal();
   const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-  return entries.map(e =>
-    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', e.id, { patch: reversePatch })
+  return entries.map(entry =>
+    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
   );
+}
+
+async function _getReceiptPaymentPair(rowId, { tx } = {}) {
+  const entries = tx
+    ? await tx.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId))
+    : await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
+  return _analyzeReceiptPaymentEffects(entries, rowId);
+}
+
+async function _getActiveReceiptRowVehicleBalances(rowId, { tx } = {}) {
+  const entries = tx
+    ? await tx.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId), { includeDeleted: true })
+    : await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
+  return entries.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_VEHICLE_BALANCE_REF_TYPE
+    && entry.effect === RECEIPT_ROW_VEHICLE_BALANCE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+function _assertExactlyOneActiveReceiptRowVehicleBalance(entries, operation, rowId) {
+  if (entries.length === 1) return;
+  throw new Error(
+    `[FinancialService:${operation}] خطأ محاسبي: يجب أن تحتوي الكارتة ${rowId} على حركة واحدة نشطة فقط `
+    + `لإضافة صافي الكارتة للمركبة، ولكن وُجد ${entries.length}. لم يتم إجراء أي تغيير؛ راجع القيود المحاسبية أولاً.`
+  );
+}
+
+// ─── RECEIPT-ROW COMPANY CHARGES (Karta creation) ───────────────────────────
+// Every persisted receipt row with a resolved company creates one independent
+// creation-side company withdrawal. It is intentionally separate from both
+// payment-company and payment-vehicle effects, exists regardless of
+// payment_status, and remains linked to the row UUID through the lifecycle.
+async function _resolveReceiptRowCompany(row, { tx } = {}) {
+  const officeName = String(row.office || '').trim();
+  if (!officeName) return null;
+  return _resolveReceiptPaymentOffice(row, { tx });
+}
+
+function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
+  const now = DateUtils.nowLocal();
+  const date = row.date || receiptDate || DateUtils.todayLocal();
+  const netCents = Number(row.net) || 0;
+  const sarfCents = Number(row.sarf) || 0;
+
+  return {
+    username,
+    owner_id: String(office.id),
+    owner_name: office.name || null,
+    client_id: String(office.id),
+    client_type: 'office',
+    client_name: office.name || null,
+    vehicle_id: null,
+    type: 'withdraw',
+    amount: netCents + sarfCents,
+    reference_type: RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE,
+    effect: RECEIPT_ROW_COMPANY_CHARGE_EFFECT,
+    reference_id: String(row.row_id),
+    date,
+    applied_at: now,
+    is_reversed: false,
+    note: `تحميل كارتة على الشركة — الصافي + الصرف (${office.name || ''})`,
+  };
+}
+
+async function _receiptRowCompanyChargeAddCommands(username, row, receiptDate, { tx } = {}) {
+  const office = await _resolveReceiptRowCompany(row, { tx });
+  if (!office) return [];
+  const payload = _receiptRowCompanyChargePayload(username, row, office, receiptDate);
+  return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
+}
+
+async function _getActiveReceiptRowCompanyCharges(rowId, { tx } = {}) {
+  const entries = tx
+    ? await tx.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId), { includeDeleted: true })
+    : await DB.getByIndex(STORE.LEDGER, 'by_reference_id', String(rowId));
+  return entries.filter(entry =>
+    entry.reference_type === RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE
+    && entry.effect === RECEIPT_ROW_COMPANY_CHARGE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+function _assertReceiptRowCompanyCreationEffects(entries, row, operation) {
+  const expectedCount = String(row.office || '').trim() ? 1 : 0;
+  if (entries.length === expectedCount) return;
+  throw new Error(
+    `[FinancialService:${operation}] خطأ محاسبي: الكارتة ${row.row_id} تحتوي على ${entries.length} `
+    + `من قيود إنشاء الشركة النشطة، بينما المتوقع ${expectedCount}. لم يتم الحذف؛ راجع القيود المحاسبية أولاً.`
+  );
+}
+
+function _receiptRowCompanyChargeReverseCommands(entries, username) {
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return entries.map(entry =>
+    createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
+  );
+}
+
+/**
+ * Block a receipt lifecycle mutation when any current receipt row has active
+ * Karta settlement evidence. A complete pair and every partial/duplicate state
+ * block equally: receipt rows must never be replaced or deleted underneath an
+ * active financial settlement.
+ */
+async function _assertReceiptRowsHaveNoActiveKartaSettlement(tx, rows, operation) {
+  const blockers = [];
+  for (const row of rows || []) {
+    const rowId = String(row?.row_id || '').trim();
+    if (!rowId) continue;
+    const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowId);
+    const pair = _analyzeKartaSettlementPair(entries, rowId);
+    if (pair.state !== 'none') blockers.push({ rowId, state: pair.state });
+  }
+
+  if (blockers.length > 0) {
+    const affected = blockers.map(blocker => `${blocker.rowId} (${blocker.state})`).join(', ');
+    const action = operation === 'deleteReceipt' ? 'deleted' : 'edited';
+    throw new Error(
+      `[FinancialService:${operation}] receipt row(s) ${affected} cannot be ${action} while Karta settlement is active. `
+      + 'Reverse the Karta settlement first.'
+    );
+  }
+}
+
+function _assertReceiptRowSetMatches(expectedRows, currentRows, operation) {
+  const expected = new Set((expectedRows || []).map(row => String(row.row_id || '')));
+  const current = new Set((currentRows || []).map(row => String(row.row_id || '')));
+  const same = expected.size === current.size && [...expected].every(rowId => current.has(rowId));
+  if (!same) {
+    throw new Error(`[FinancialService:${operation}] receipt rows changed before mutation; reload and retry.`);
+  }
+}
+
+// ─── LOAD PRICE ROUTE DISCOVERY ──────────────────────────────────────────────
+// Reference/master-data only. It neither posts financial entries nor changes a
+// user-managed price. Duplicate rows in one receipt collapse to one route key.
+async function _loadPriceDiscoveryCommands(username, receiptRows) {
+  const candidates = new Map();
+
+  for (const row of receiptRows) {
+    const loading = displayRoutePlace(row.loading);
+    const destination = displayRoutePlace(row.destination);
+    const canonical_route = canonicalRouteKey(loading, destination);
+    if (!canonical_route || candidates.has(canonical_route)) continue;
+
+    candidates.set(canonical_route, {
+      id: _uuid(),
+      username,
+      loading,
+      destination,
+      canonical_loading: canonicalizeRoutePlace(loading),
+      canonical_destination: canonicalizeRoutePlace(destination),
+      canonical_route,
+      price: 0,
+    });
+  }
+
+  const commands = [];
+  for (const route of candidates.values()) {
+    const existing = await LoadPriceRepository.findActiveByCanonicalRoute(route.canonical_route);
+    if (existing) continue;
+    commands.push(LoadPriceRepository.prepareCreate(route, { username }));
+  }
+
+  return commands;
 }
 
 async function createReceipt(username, data) {
@@ -350,7 +645,7 @@ async function createReceipt(username, data) {
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, receiptId);
 
   // Build ReceiptRow entities
-  const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId);
+  const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId, { forceUnpaid: true });
 
   // Assemble the full persistence record ONCE.
   const receiptRecord = {
@@ -364,21 +659,34 @@ async function createReceipt(username, data) {
 
   const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
 
-  // Payment postings: a newly created row enters paid only if explicitly
-  // collected as such (form default is unpaid → normally zero commands here).
-  // Fresh row UUIDs → no pre-existing postings can exist for these ids.
-  const paymentAddCommands = [];
-  for (const row of receiptRows) {
-    if (row.payment_status === PAYMENT_STATUS.PAID) {
-      paymentAddCommands.push(...(await _paymentAddCommands(username, row, receiptRecord.receipt_date)));
+  // New routes are master-data discoveries. Include their commands in the same
+  // receipt write batch so receipt rows and newly discovered routes commit or
+  // roll back together.
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, receiptRows);
+
+  // New receipt rows always begin unpaid. Creation-side office and vehicle
+  // movements are built from authoritative office/vehicle reads inside the
+  // same transaction that persists the receipt and rows.
+  const results = await DB.transaction(async (tx) => {
+    const companyChargeAddCommands = [];
+    const vehicleBalanceAddCommands = [];
+    for (const row of receiptRows) {
+      companyChargeAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
+        username, row, receiptRecord.receipt_date, { tx }
+      )));
+      vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
+        username, row, receiptRecord.receipt_date, { tx }
+      )));
     }
-  }
 
-  // Combine all commands
-  const allCommands = [receiptCommand, ...receiptRowCommands, ...paymentAddCommands];
-
-  // Execute through WriteDataSource
-  const results = await WriteDataSource.execute(allCommands, { username });
+    return WriteDataSource.executeWithinTransaction(tx, [
+      receiptCommand,
+      ...receiptRowCommands,
+      ...loadPriceCommands,
+      ...companyChargeAddCommands,
+      ...vehicleBalanceAddCommands,
+    ]);
+  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
 
   const receipt = Money.decimalizeRecord(results[0]);
 
@@ -387,125 +695,279 @@ async function createReceipt(username, data) {
 
 // ─── PUBLIC: updateReceipt ─────────────────────────────────────────────────────
 
+function _receiptCreationIdentity(row, receiptDate) {
+  return JSON.stringify({
+    net: Number(row.net) || 0,
+    sarf: Number(row.sarf) || 0,
+    office: String(row.office || '').trim(),
+    date: row.date || receiptDate || null,
+  });
+}
+
+function _sameLedgerIdSet(entries, expectedIds) {
+  const actualIds = (entries || []).map(entry => String(entry.id)).sort();
+  return actualIds.length === expectedIds.length && actualIds.every((id, index) => id === expectedIds[index]);
+}
+
+function _receiptVehicleBalanceIdentity(row, receiptDate) {
+  return JSON.stringify({
+    net: Number(row.net) || 0,
+    vehicle_id: String(row.vehicle_id || ''),
+    date: row.date || receiptDate || null,
+  });
+}
+
+function _receiptPaymentIdentity(row, receiptDate) {
+  return JSON.stringify({
+    payment_status: row.payment_status === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID,
+    net: Number(row.net) || 0,
+    sarf: Number(row.sarf) || 0,
+    vehicle_id: String(row.vehicle_id || ''),
+    office: String(row.office || '').trim(),
+    date: row.date || receiptDate || null,
+  });
+}
+
 async function updateReceipt(username, id, data) {
   if (!username) throw new Error('[FinancialService:update] username is required.');
-  if (!id)       throw new Error('[FinancialService:update] id is required.');
+  if (!id) throw new Error('[FinancialService:update] id is required.');
 
   const clean = _validate(data);
-
-  // Build updated Receipt header
+  const existingReceipt = await ReceiptRepository.getById(id);
+  if (!existingReceipt) throw new Error('[FinancialService:update] receipt not found.');
   const receiptHeader = _buildReceiptHeaderEntity(clean, username, id);
-
-  // Build updated ReceiptRow entities
-  const newReceiptRows = _buildReceiptRowEntities(clean.rows, id);
-
-  // Assemble the full persistence record ONCE (Update semantics:
-  // notes is only patched when provided).
+  const nextRows = _buildReceiptRowEntities(clean.rows, id);
   const receiptRecord = {
     ...receiptHeader,
     total: clean.total,
     ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
   };
+  const existingRows = await _getExistingReceiptRows(id);
+  const existingById = new Map(existingRows.map(row => [String(row.row_id), row]));
+  const nextById = new Map(nextRows.map(row => [String(row.row_id), row]));
+  if (nextById.size !== nextRows.length) {
+    throw new Error('[FinancialService:update] duplicate receipt row_id in edit payload.');
+  }
 
-  // Retrieve existing ReceiptRows (they must be REPLACED, not appended —
-  // new row entities get fresh row_ids on every edit, so failing to delete
-  // the old set would duplicate every karta in receipt_rows).
-  const existingReceiptRows = await _getExistingReceiptRows(id);
+  // A row added during an edit is still a new receipt row and therefore starts
+  // unpaid. Existing rows retain their persisted payment lifecycle status.
+  for (const nextRow of nextRows) {
+    if (!existingById.has(String(nextRow.row_id))) {
+      nextRow.payment_status = PAYMENT_STATUS.UNPAID;
+    }
+  }
 
-  // Payment reconciliation (atomic with the row replacement below):
-  // replacement issues fresh row UUIDs, and every posting is linked to its
-  // row UUID — so each paid OLD row's ACTIVE postings reverse into audit and
-  // each paid NEW row posts exactly once. Unchanged paid rows therefore have
-  // ZERO net balance effect; changed vehicle/company/الصافي/الصرف rows are
-  // safely adjusted (old effect reversed, new effect posted) — never
-  // duplicated, never lost.
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, nextRows);
+  const creationReverseCommands = [];
   const paymentReverseCommands = [];
-  for (const oldRow of existingReceiptRows) {
-    const active = await _getActivePaymentPostings(oldRow.row_id);
-    if (active.length > 0) {
-      paymentReverseCommands.push(..._paymentReverseCommands(active, username));
+  const creationAddRows = [];
+  const paymentAddRows = [];
+  const vehicleBalanceChangedRows = [];
+  const vehicleBalanceNewRows = [];
+  const expectedCreationEffectIds = new Map();
+  const expectedPaymentEffectIds = new Map();
+
+  for (const oldRow of existingRows) {
+    const rowKey = String(oldRow.row_id);
+    const nextRow = nextById.get(rowKey) || null;
+    const creationChanged = !nextRow
+      || _receiptCreationIdentity(oldRow, existingReceipt.receipt_date)
+        !== _receiptCreationIdentity(nextRow, receiptRecord.receipt_date);
+    const vehicleBalanceChanged = !nextRow
+      || _receiptVehicleBalanceIdentity(oldRow, existingReceipt.receipt_date)
+        !== _receiptVehicleBalanceIdentity(nextRow, receiptRecord.receipt_date);
+    const paymentChanged = !nextRow
+      || _receiptPaymentIdentity(oldRow, existingReceipt.receipt_date)
+        !== _receiptPaymentIdentity(nextRow, receiptRecord.receipt_date);
+
+    if (creationChanged) {
+      const creation = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
+      expectedCreationEffectIds.set(rowKey, creation.map(entry => String(entry.id)).sort());
+      if (creation.length > 0) {
+        creationReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(creation, username));
+      }
+      if (nextRow) creationAddRows.push(nextRow);
     }
-  }
-  const paymentAddCommands = [];
-  for (const newRow of newReceiptRows) {
-    if (newRow.payment_status === PAYMENT_STATUS.PAID) {
-      paymentAddCommands.push(...(await _paymentAddCommands(username, newRow, receiptRecord.receipt_date)));
+
+    if (vehicleBalanceChanged) {
+      vehicleBalanceChangedRows.push({ oldRow, nextRow });
+    }
+
+    if (paymentChanged) {
+      const payment = await _getReceiptPaymentPair(oldRow.row_id);
+      const oldPaid = oldRow.payment_status === PAYMENT_STATUS.PAID;
+      expectedPaymentEffectIds.set(rowKey, payment.companyLegs.map(entry => String(entry.id)).sort());
+      if (oldPaid) {
+        _assertCompleteReceiptPaymentCompanyEffect(payment, 'updateReceipt', oldRow);
+        paymentReverseCommands.push(..._receiptPaymentReverseCommands(payment.companyLegs, username));
+      } else {
+        _assertNoActiveReceiptPaymentEffects(payment, 'updateReceipt', oldRow.row_id);
+      }
+      if (nextRow?.payment_status === PAYMENT_STATUS.PAID) paymentAddRows.push(nextRow);
     }
   }
 
-  // Prepare PersistenceCommands via ReceiptRepository
+  for (const nextRow of nextRows) {
+    if (!existingById.has(String(nextRow.row_id))) {
+      creationAddRows.push(nextRow);
+      vehicleBalanceNewRows.push(nextRow);
+    }
+  }
+
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
     receiptRecord, { username }, PersistenceCommandType.UPDATE
   );
+  const rowCommands = [];
+  for (const oldRow of existingRows) {
+    if (!nextById.has(String(oldRow.row_id))) {
+      rowCommands.push(ReceiptRepository.prepareReceiptRowOperations(
+        [{ row_id: oldRow.row_id }], { username }, PersistenceCommandType.DELETE
+      )[0]);
+    }
+  }
+  for (const nextRow of nextRows) {
+    const type = existingById.has(String(nextRow.row_id))
+      ? PersistenceCommandType.UPDATE
+      : PersistenceCommandType.ADD;
+    rowCommands.push(ReceiptRepository.prepareReceiptRowOperations([nextRow], { username }, type)[0]);
+  }
 
-  const deleteRowCommands = existingReceiptRows.map(row =>
-    ReceiptRepository.prepareReceiptRowOperations(
-      [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
-    )[0]
-  );
+  const results = await DB.transaction(async (tx) => {
+    const currentReceipt = await ReceiptRepository.getById(id, { tx });
+    if (!currentReceipt || currentReceipt.receipt_date !== existingReceipt.receipt_date) {
+      throw new Error('[FinancialService:updateReceipt] receipt changed before mutation; reload and retry.');
+    }
+    const currentRows = await _getExistingReceiptRows(id, tx);
+    _assertReceiptRowSetMatches(existingRows, currentRows, 'updateReceipt');
+    await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'updateReceipt');
+    const currentById = new Map(currentRows.map(row => [String(row.row_id), row]));
+    for (const oldRow of existingRows) {
+      const currentRow = currentById.get(String(oldRow.row_id));
+      if (!currentRow
+        || _receiptCreationIdentity(oldRow, existingReceipt.receipt_date) !== _receiptCreationIdentity(currentRow, currentReceipt.receipt_date)
+        || _receiptVehicleBalanceIdentity(oldRow, existingReceipt.receipt_date) !== _receiptVehicleBalanceIdentity(currentRow, currentReceipt.receipt_date)
+        || _receiptPaymentIdentity(oldRow, existingReceipt.receipt_date) !== _receiptPaymentIdentity(currentRow, currentReceipt.receipt_date)) {
+        throw new Error('[FinancialService:updateReceipt] receipt row financial identity changed before mutation; reload and retry.');
+      }
+    }
+    for (const [rowId, expectedIds] of expectedCreationEffectIds) {
+      const active = await _getActiveReceiptRowCompanyCharges(rowId, { tx });
+      if (!_sameLedgerIdSet(active, expectedIds)) {
+        throw new Error('[FinancialService:updateReceipt] company creation effects changed before mutation; reload and retry.');
+      }
+    }
+    for (const [rowId, expectedIds] of expectedPaymentEffectIds) {
+      const payment = await _getReceiptPaymentPair(rowId, { tx });
+      if (!_sameLedgerIdSet(payment.companyLegs, expectedIds)) {
+        throw new Error('[FinancialService:updateReceipt] company payment effects changed before mutation; reload and retry.');
+      }
+    }
 
-  const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(newReceiptRows, { username });
+    const creationAddCommands = [];
+    for (const row of creationAddRows) {
+      creationAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
+        username, row, receiptRecord.receipt_date, { tx }
+      )));
+    }
+    const paymentAddCommands = [];
+    for (const row of paymentAddRows) {
+      paymentAddCommands.push(...(await _receiptPaymentAddCommands(
+        username, row, receiptRecord.receipt_date, { tx }
+      )));
+    }
 
-  // Combine all commands: header update → delete old rows → add new rows →
-  // payment effects (reverse replaced paid rows → post newly paid rows).
-  const allCommands = [
-    receiptCommand,
-    ...deleteRowCommands,
-    ...receiptRowCommands,
-    ...paymentReverseCommands,
-    ...paymentAddCommands
-  ];
+    const vehicleBalanceReverseCommands = [];
+    const vehicleBalanceAddCommands = [];
+    for (const { oldRow, nextRow } of vehicleBalanceChangedRows) {
+      const active = await _getActiveReceiptRowVehicleBalances(oldRow.row_id, { tx });
+      if (active.length !== 1) {
+        throw new Error(
+          `[FinancialService:updateReceipt] receipt row ${oldRow.row_id} has ${active.length} active vehicle creation effects; `
+          + 'reconcile legacy accounting explicitly before editing.'
+        );
+      }
+      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(active, username));
+      if (nextRow) {
+        vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
+          username, nextRow, receiptRecord.receipt_date, { tx }
+        )));
+      }
+    }
+    for (const row of vehicleBalanceNewRows) {
+      vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
+        username, row, receiptRecord.receipt_date, { tx }
+      )));
+    }
 
-  // Execute through WriteDataSource
-  const results = await WriteDataSource.execute(allCommands, { username });
+    return WriteDataSource.executeWithinTransaction(tx, [
+      receiptCommand,
+      ...rowCommands,
+      ...loadPriceCommands,
+      ...creationReverseCommands,
+      ...paymentReverseCommands,
+      ...vehicleBalanceReverseCommands,
+      ...creationAddCommands,
+      ...vehicleBalanceAddCommands,
+      ...paymentAddCommands,
+    ]);
+  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
 
-  const receipt = Money.decimalizeRecord(results[0]); // First command is the header update
-
-  return { receipt };
+  return { receipt: Money.decimalizeRecord(results[0]) };
 }
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
 
 async function deleteReceipt(username, id) {
   if (!username) throw new Error('[FinancialService:delete] username is required.');
-  if (!id)       throw new Error('[FinancialService:delete] id is required.');
+  if (!id) throw new Error('[FinancialService:delete] id is required.');
 
-  // Prepare delete command for Receipt via ReceiptRepository (Delete carries id only)
-  const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
-    { id },
-    { username },
-    PersistenceCommandType.DELETE
-  );
-
-  // Prepare delete commands for ReceiptRows
   const existingRows = await _getExistingReceiptRows(id);
 
-  // Payment reconciliation: deleting a receipt whose rows were paid reverses
-  // exactly those postings (is_reversed audit, never hard delete) inside the
-  // same atomic execute — a deleted row can never leave a live effect behind.
-  const paymentReverseCommands = [];
-  for (const row of existingRows) {
-    const active = await _getActivePaymentPostings(row.row_id);
-    if (active.length > 0) {
-      paymentReverseCommands.push(..._paymentReverseCommands(active, username));
+  await DB.transaction(async (tx) => {
+    const currentRows = await _getExistingReceiptRows(id, tx);
+    _assertReceiptRowSetMatches(existingRows, currentRows, 'deleteReceipt');
+    await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'deleteReceipt');
+
+    const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
+      { id }, { username }, PersistenceCommandType.DELETE
+    );
+    const receiptRowDeleteCommands = currentRows.map(row =>
+      ReceiptRepository.prepareReceiptRowOperations(
+        [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
+      )[0]
+    );
+    const companyChargeReverseCommands = [];
+    const vehicleBalanceReverseCommands = [];
+
+    // All deletion eligibility and reversal decisions are made from this
+    // transaction's current rows and ledger state, immediately before commit.
+    for (const row of currentRows) {
+      const payment = await _getReceiptPaymentPair(row.row_id, { tx });
+      if (row.payment_status === PAYMENT_STATUS.PAID
+        || payment.state !== 'none'
+        || payment.legacyVehicleLegs.length > 0) {
+        throw new Error(
+          '[FinancialService:deleteReceipt] paid or legacy payment receipt row deletion requires approved lifecycle accounting. '
+          + 'Change the row to unpaid and reconcile legacy accounting first.'
+        );
+      }
+
+      const companyCreation = await _getActiveReceiptRowCompanyCharges(row.row_id, { tx });
+      _assertReceiptRowCompanyCreationEffects(companyCreation, row, 'deleteReceipt');
+      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(companyCreation, username));
+
+      const vehicleCreation = await _getActiveReceiptRowVehicleBalances(row.row_id, { tx });
+      _assertExactlyOneActiveReceiptRowVehicleBalance(vehicleCreation, 'deleteReceipt', row.row_id);
+      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(vehicleCreation, username));
     }
-  }
 
-  const receiptRowDeleteCommands = existingRows.map(row =>
-    ReceiptRepository.prepareReceiptRowOperations(
-      [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
-    )[0]
-  );
-
-  // Combine all commands: delete rows → delete header → reverse payment effects
-  const allCommands = [
-    ...receiptRowDeleteCommands,
-    receiptDeleteCommand,
-    ...paymentReverseCommands
-  ];
-
-  // Execute through WriteDataSource
-  await WriteDataSource.execute(allCommands, { username });
+    await WriteDataSource.executeWithinTransaction(tx, [
+      ...receiptRowDeleteCommands,
+      receiptDeleteCommand,
+      ...companyChargeReverseCommands,
+      ...vehicleBalanceReverseCommands,
+    ]);
+  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER] });
 
   return { id, deleted: true };
 }
@@ -537,6 +999,585 @@ async function rebuildVehicleBalance(vehicle_id) {
   };
 }
 
+/**
+ * Read active vehicle-balance movements from the existing vehicle_ledger.
+ * This is a read projection only: its inclusion criteria intentionally match
+ * rebuildVehicleBalance (same vehicle, active, deposit/withdraw types).
+ */
+async function getVehicleLedger(vehicle_id) {
+  if (!vehicle_id) throw new Error('[FinancialService:getVehicleLedger] vehicle_id is required.');
+
+  const allEntries = await DB.getByIndex(STORE.LEDGER, 'by_vehicle', vehicle_id);
+  return allEntries
+    .filter(e => e.is_reversed === false
+      && e.deleted_at === null
+      && (e.type === 'deposit' || e.type === 'withdraw'))
+    .sort((a, b) => {
+      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
+      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
+      return db - da;
+    })
+    .map(Money.decimalizeRecord);
+}
+
+// ─── PUBLIC: Ledger Integrity Diagnostics (read-only) ─────────────────────────
+// The diagnostic adapter reads through ReadDataSource and delegates all
+// classification to the persistence-agnostic ledgerIntegrityDiagnostics module.
+async function getVehicleLedgerDateIntegrityDiagnostic() {
+  return LedgerIntegrityDiagnosticService.getVehicleLedgerDateIntegrityDiagnostic();
+}
+
+async function getLedgerIntegrityDiagnosticSnapshot() {
+  return LedgerIntegrityDiagnosticService.getLedgerIntegrityDiagnosticSnapshot();
+}
+
+function _parseMonthlyReportMonthKey(monthKey) {
+  if (typeof monthKey !== 'string' || !/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey must be YYYY-MM.');
+  }
+  const year = Number(monthKey.slice(0, 4));
+  const month = Number(monthKey.slice(5, 7));
+  if (!Number.isInteger(year) || year < 1 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey must contain a valid calendar month.');
+  }
+  if (year === 9999 && month === 12) {
+    throw new Error('[FinancialService:getVehicleMonthlyReport] monthKey is outside the supported reporting range.');
+  }
+
+  const monthStart = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-01`;
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthStart = `${String(nextYear).padStart(4, '0')}-${String(nextMonth).padStart(2, '0')}-01`;
+  return { monthKey, monthStart, nextMonthStart };
+}
+
+function _classifyMonthlyReportBusinessDate(value, today) {
+  if (value === null || value === undefined || value === '') {
+    return { classification: 'missing_date', future: false };
+  }
+  if (typeof value !== 'string') {
+    return { classification: 'invalid_type', future: false };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { classification: 'invalid_format', future: false };
+  }
+
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
+    return { classification: 'invalid_calendar_date', future: false };
+  }
+
+  return { classification: 'valid_date', future: value > today };
+}
+
+function _monthlyReportCategory(entry) {
+  const type = entry.type;
+  const effect = entry.effect || null;
+  const referenceType = entry.reference_type || null;
+  const hasMaintenance = String(entry.maintenance_type || '').trim().length > 0;
+
+  if (type === 'deposit') {
+    if (effect === RECEIPT_ROW_VEHICLE_BALANCE_EFFECT && referenceType === RECEIPT_ROW_VEHICLE_BALANCE_REF_TYPE) return 'receipt_row_creation_balance';
+    if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_deposit';
+    return 'other';
+  }
+
+  if (type === 'withdraw') {
+    if (effect === 'karta_settlement_charge' && referenceType === 'receipt_row') return 'karta_settlement';
+    if (effect === 'manual_vehicle_balance' && hasMaintenance) return 'maintenance';
+    if (effect === 'manual_vehicle_balance' && !hasMaintenance) return 'manual_vehicle_withdrawal';
+    return 'other';
+  }
+
+  return 'other';
+}
+
+function _monthlyReportEntryAmountCents(entry) {
+  return Number(entry.amount) || 0;
+}
+
+function _compareMonthlyReportMovements(a, b) {
+  const dateCompare = String(a.date).localeCompare(String(b.date));
+  if (dateCompare !== 0) return dateCompare;
+  const appliedCompare = String(a.applied_at || '').localeCompare(String(b.applied_at || ''));
+  if (appliedCompare !== 0) return appliedCompare;
+  const createdCompare = (Number(a.created_at) || 0) - (Number(b.created_at) || 0);
+  if (createdCompare !== 0) return createdCompare;
+  const aId = Number(a.id);
+  const bId = Number(b.id);
+  if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+  return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+}
+
+function _newMonthlyReportBreakdown() {
+  return {
+    inflows: {
+      receiptRowCreationBalance: { amountCents: 0, count: 0 },
+      manualVehicleDeposit: { amountCents: 0, count: 0 },
+      other: { amountCents: 0, count: 0 },
+    },
+    outflows: {
+      kartaSettlement: { amountCents: 0, count: 0 },
+      maintenance: { amountCents: 0, count: 0 },
+      manualVehicleWithdrawal: { amountCents: 0, count: 0 },
+      other: { amountCents: 0, count: 0 },
+    },
+  };
+}
+
+function _addMonthlyReportBreakdown(breakdown, entry, amountCents) {
+  const category = _monthlyReportCategory(entry);
+  const target = entry.type === 'deposit' ? breakdown.inflows : breakdown.outflows;
+  const key = entry.type === 'deposit'
+    ? ({ receipt_row_creation_balance: 'receiptRowCreationBalance', manual_vehicle_deposit: 'manualVehicleDeposit' }[category] || 'other')
+    : ({ karta_settlement: 'kartaSettlement', maintenance: 'maintenance', manual_vehicle_withdrawal: 'manualVehicleWithdrawal' }[category] || 'other');
+  target[key].amountCents += amountCents;
+  target[key].count += 1;
+}
+
+/**
+ * Read-only monthly Vehicle Ledger projection. All financial arithmetic uses
+ * active, vehicle-linked deposit/withdraw rows with strict business dates.
+ */
+async function getVehicleMonthlyReport(vehicleId, monthKey) {
+  const vehicleKey = String(vehicleId ?? '').trim();
+  if (!vehicleKey) throw new Error('[FinancialService:getVehicleMonthlyReport] vehicleId is required.');
+  const { monthStart, nextMonthStart } = _parseMonthlyReportMonthKey(monthKey);
+  const today = DateUtils.todayLocal();
+
+  // Existing by_vehicle index scopes the read to one vehicle; no store-wide
+  // scan and no new index are required for the initial report contract.
+  const indexedRows = await DB.getByIndex(STORE.LEDGER, 'by_vehicle', vehicleKey);
+  const activeVehicleRows = indexedRows.filter(entry =>
+    String(entry.vehicle_id || '') === vehicleKey
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  const reportRows = activeVehicleRows.filter(entry => entry.type === 'deposit' || entry.type === 'withdraw');
+  const dateRows = reportRows.map(entry => ({
+    entry,
+    dateInfo: _classifyMonthlyReportBusinessDate(entry.date, today),
+  }));
+  const validRows = dateRows.filter(item => item.dateInfo.classification === 'valid_date');
+  const invalidRows = dateRows.filter(item => item.dateInfo.classification !== 'valid_date');
+
+  let openingBalanceCents = 0;
+  let monthlyInflowsCents = 0;
+  let monthlyOutflowsCents = 0;
+  let cumulativeClosingBalanceCents = 0;
+  let inflowTransactionCount = 0;
+  let outflowTransactionCount = 0;
+  const monthlyEntries = [];
+  const breakdown = _newMonthlyReportBreakdown();
+
+  for (const { entry } of validRows) {
+    const amountCents = _monthlyReportEntryAmountCents(entry);
+    const signedCents = entry.type === 'deposit' ? amountCents : -amountCents;
+    if (entry.date < monthStart) openingBalanceCents += signedCents;
+    if (entry.date < nextMonthStart) cumulativeClosingBalanceCents += signedCents;
+    if (entry.date >= monthStart && entry.date < nextMonthStart) {
+      if (entry.type === 'deposit') {
+        monthlyInflowsCents += amountCents;
+        inflowTransactionCount++;
+      } else {
+        monthlyOutflowsCents += amountCents;
+        outflowTransactionCount++;
+      }
+      monthlyEntries.push({ entry, amountCents, category: _monthlyReportCategory(entry) });
+      _addMonthlyReportBreakdown(breakdown, entry, amountCents);
+    }
+  }
+
+  const closingBalanceCents = openingBalanceCents + monthlyInflowsCents - monthlyOutflowsCents;
+  const sortedEntries = monthlyEntries.sort((a, b) => _compareMonthlyReportMovements(a.entry, b.entry));
+  let runningBalanceCents = openingBalanceCents;
+  const movements = sortedEntries.map(({ entry, amountCents, category }) => {
+    runningBalanceCents += entry.type === 'deposit' ? amountCents : -amountCents;
+    return {
+      id: entry.id,
+      date: entry.date,
+      type: entry.type,
+      amountCents,
+      category,
+      effect: entry.effect || null,
+      referenceType: entry.reference_type || null,
+      referenceId: entry.reference_id || null,
+      batchId: entry.batch_id || null,
+      note: entry.note || null,
+      maintenanceType: entry.maintenance_type || null,
+      maintenanceQuantity: entry.maintenance_quantity ?? null,
+      appliedAt: entry.applied_at || null,
+      createdAt: entry.created_at ?? null,
+      runningBalanceCents,
+    };
+  });
+
+  const invalidDepositRows = invalidRows.filter(item => item.entry.type === 'deposit');
+  const invalidWithdrawRows = invalidRows.filter(item => item.entry.type === 'withdraw');
+  const amountOf = rows => rows.reduce((sum, item) => sum + _monthlyReportEntryAmountCents(item.entry), 0);
+  const futureRows = validRows.filter(item => item.dateInfo.future);
+  const futureDeposits = futureRows.filter(item => item.entry.type === 'deposit');
+  const futureWithdrawals = futureRows.filter(item => item.entry.type === 'withdraw');
+
+  return {
+    vehicleId: vehicleKey,
+    monthKey,
+    monthStart,
+    nextMonthStart,
+    openingBalanceCents,
+    monthlyInflowsCents,
+    monthlyOutflowsCents,
+    closingBalanceCents,
+    movementCount: movements.length,
+    inflowTransactionCount,
+    outflowTransactionCount,
+    breakdown,
+    movements,
+    integrity: {
+      hasInvalidDates: invalidRows.length > 0,
+      isFinanciallyComplete: invalidRows.length === 0,
+      invalidDateCount: invalidRows.length,
+      invalidDepositCount: invalidDepositRows.length,
+      invalidWithdrawCount: invalidWithdrawRows.length,
+      invalidDepositAmountCents: amountOf(invalidDepositRows),
+      invalidWithdrawAmountCents: amountOf(invalidWithdrawRows),
+      invalidNetEffectCents: amountOf(invalidDepositRows) - amountOf(invalidWithdrawRows),
+      invalidRows: invalidRows.map(({ entry, dateInfo }) => ({
+        id: entry.id,
+        vehicleId: entry.vehicle_id || null,
+        type: entry.type,
+        amountCents: _monthlyReportEntryAmountCents(entry),
+        date: Object.hasOwn(entry, 'date') ? entry.date : null,
+        effect: entry.effect || null,
+        referenceType: entry.reference_type || null,
+        referenceId: entry.reference_id || null,
+        classification: dateInfo.classification,
+      })),
+    },
+    future: {
+      count: futureRows.length,
+      depositCount: futureDeposits.length,
+      withdrawCount: futureWithdrawals.length,
+      depositAmountCents: amountOf(futureDeposits),
+      withdrawAmountCents: amountOf(futureWithdrawals),
+      netEffectCents: amountOf(futureDeposits) - amountOf(futureWithdrawals),
+      rows: futureRows.map(({ entry }) => ({
+        id: entry.id,
+        vehicleId: entry.vehicle_id || null,
+        type: entry.type,
+        amountCents: _monthlyReportEntryAmountCents(entry),
+        date: entry.date,
+        effect: entry.effect || null,
+        referenceType: entry.reference_type || null,
+        referenceId: entry.reference_id || null,
+      })),
+    },
+    reconciliation: {
+      cumulativeClosingBalanceCents,
+      isReconciled: cumulativeClosingBalanceCents === closingBalanceCents,
+      finalRunningBalanceCents: runningBalanceCents,
+    },
+    excludedActiveVehicleCustomTypeCount: activeVehicleRows.length - reportRows.length,
+  };
+}
+
+/**
+ * Read active company movements from the existing vehicle_ledger. Company
+ * balances have no dedicated ledger/store: this projection combines only the
+ * two company-only namespaces, both isolated from vehicle balances by
+ * vehicle_id:null — automatic receipt-row payments and explicit manual office
+ * deposits/withdrawals.
+ */
+async function getOfficeBalance(office_id) {
+  const officeKey = String(office_id ?? '').trim();
+  if (!officeKey) throw new Error('[FinancialService:getOfficeBalance] office_id is required.');
+
+  const entries = await DB.findByFields(STORE.LEDGER, {
+    client_type: 'office',
+    client_id: officeKey,
+    owner_id: officeKey,
+    is_reversed: false,
+  });
+  const active = entries
+    .filter(e => e.deleted_at === null
+      && e.vehicle_id === null
+      && ((e.reference_type === RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE && e.effect === RECEIPT_ROW_PAYMENT_COMPANY_EFFECT)
+        || (e.reference_type === RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE && e.effect === RECEIPT_ROW_COMPANY_CHARGE_EFFECT)
+        || (e.reference_type === MANUAL_OFFICE_REF_TYPE && e.effect === MANUAL_OFFICE_EFFECT)))
+    .sort((a, b) => {
+      const da = new Date(a.date || a.applied_at || a.created_at || 0).getTime();
+      const db = new Date(b.date || b.applied_at || b.created_at || 0).getTime();
+      return da - db;
+    });
+
+  let deposit_total = 0;
+  let withdraw_total = 0;
+  for (const entry of active) {
+    if (entry.type === 'deposit') deposit_total += Number(entry.amount) || 0;
+    if (entry.type === 'withdraw') withdraw_total += Number(entry.amount) || 0;
+  }
+
+  const balance = deposit_total - withdraw_total;
+  return {
+    office_id: officeKey,
+    balance: Money.toDecimal(balance),
+    deposit_total: Money.toDecimal(deposit_total),
+    withdraw_total: Money.toDecimal(withdraw_total),
+    entry_count: active.length,
+    entries: active.map(Money.decimalizeRecord),
+  };
+}
+
+// ─── MANUAL VEHICLE BALANCE MOVEMENTS ────────────────────────────────────────
+
+/**
+ * Prepare the existing single-leg manual vehicle movement payload. Maintenance
+ * is a structured manual withdrawal, not a separate financial engine: when
+ * maintenance metadata is absent, the existing manual deposit/withdraw
+ * contract remains unchanged.
+ */
+async function _prepareManualVehicleBalancePayload(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualVehicleBalanceEntry] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] data must be a plain object.');
+  }
+
+  const vehicle_id = String(data.vehicle_id || '').trim();
+  const entry_type = data.entry_type === 'withdraw' ? 'withdraw' : data.entry_type === 'deposit' ? 'deposit' : '';
+  const amount = Money.toCents(data.amount);
+  const date = data.date || DateUtils.todayLocal();
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
+  const maintenance_type = typeof data.maintenance_type === 'string' ? data.maintenance_type.trim() : '';
+  const hasMaintenance = maintenance_type.length > 0;
+  const rawMaintenanceQuantity = data.maintenance_quantity;
+  const hasMaintenanceQuantity = rawMaintenanceQuantity !== null
+    && rawMaintenanceQuantity !== undefined
+    && String(rawMaintenanceQuantity).trim() !== '';
+  const maintenance_quantity = hasMaintenance && hasMaintenanceQuantity ? Number(rawMaintenanceQuantity) : null;
+
+  if (!vehicle_id) throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualVehicleBalanceEntry] entry_type must be deposit or withdraw.');
+  if (amount <= 0) throw new Error('[FinancialService:createManualVehicleBalanceEntry] amount must be greater than zero.');
+  // Preserve the existing generic-manual validation order and note rule.
+  if (!hasMaintenance && !note) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] note is required.');
+  }
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] date must be a valid ISO date string.');
+  }
+  if (hasMaintenance) {
+    if (entry_type !== 'withdraw') {
+      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance entries must be withdrawals.');
+    }
+    if (hasMaintenanceQuantity && (!Number.isFinite(maintenance_quantity) || maintenance_quantity <= 0)) {
+      throw new Error('[FinancialService:createManualVehicleBalanceEntry] maintenance_quantity must be greater than zero when provided.');
+    }
+  }
+
+  // Resolve the vehicle before scheduling the atomic ledger write. A missing
+  // vehicle must fail loudly; manual entry must never create a fallback record.
+  const vehicle = await ClientRepository.getVehicleById(vehicle_id);
+  if (!vehicle || vehicle.deleted_at !== null) {
+    throw new Error('[FinancialService:createManualVehicleBalanceEntry] vehicle not found.');
+  }
+
+  const now = DateUtils.nowLocal();
+  return {
+    username,
+    owner_id: String(vehicle.owner_id || ''),
+    owner_name: vehicle.owner_name || null,
+    client_id: String(vehicle.id),
+    client_type: 'vehicle',
+    client_name: vehicle.plate || null,
+    vehicle_id: vehicle.id,
+    vehicle_plate: vehicle.plate || null,
+    type: entry_type,
+    effect: MANUAL_VEHICLE_EFFECT,
+    amount,
+    reference_type: MANUAL_VEHICLE_REF_TYPE,
+    reference_id: _uuid(),
+    date,
+    applied_at: now,
+    is_reversed: false,
+    // Existing manual entries still require a note. Maintenance allows an
+    // intentionally empty note while preserving it as null in the ledger.
+    note: note || null,
+    ...(hasMaintenance ? {
+      maintenance_type,
+      maintenance_quantity,
+    } : {}),
+  };
+}
+
+async function _getActiveManualVehicleBalanceEntries(reference_id) {
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  return entries.filter(entry =>
+    entry.reference_type === MANUAL_VEHICLE_REF_TYPE
+    && entry.effect === MANUAL_VEHICLE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+/**
+ * Create one manual vehicle balance movement in the existing vehicle_ledger.
+ * This is intentionally a single vehicle leg: it has no receipt-row, company,
+ * driver, or Karta Settlement side effect.
+ */
+async function createManualVehicleBalanceEntry(username, data) {
+  const payload = await _prepareManualVehicleBalancePayload(username, data);
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload,
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Replace one active structured maintenance withdrawal atomically. The old
+ * manual record is audit-reversed and a fresh record is created, so an amount
+ * or vehicle correction never leaves duplicate active withdrawals.
+ */
+async function updateVehicleMaintenanceEntry(username, reference_id, data) {
+  if (!username) throw new Error('[FinancialService:updateVehicleMaintenanceEntry] username is required.');
+  const active = await _getActiveManualVehicleBalanceEntries(reference_id);
+  const previous = active.find(entry => entry.type === 'withdraw' && String(entry.maintenance_type || '').trim());
+  if (!previous) {
+    throw new Error('[FinancialService:updateVehicleMaintenanceEntry] maintenance transaction not found or already reversed.');
+  }
+
+  const payload = await _prepareManualVehicleBalancePayload(username, {
+    ...data,
+    entry_type: 'withdraw',
+  });
+  if (!String(payload.maintenance_type || '').trim()) {
+    throw new Error('[FinancialService:updateVehicleMaintenanceEntry] maintenance_type is required.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const results = await DB.transaction([
+    ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { op: 'add', store: STORE.LEDGER, payload },
+  ], { username });
+
+  return Money.decimalizeRecord(results[results.length - 1]);
+}
+
+/**
+ * Reverse one logical manual vehicle movement without removing its audit row.
+ */
+async function deleteManualVehicleBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] username is required.');
+  const active = await _getActiveManualVehicleBalanceEntries(reference_id);
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] manual vehicle transaction not found or already reversed.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
+}
+
+// ─── MANUAL OFFICE BALANCE MOVEMENTS ─────────────────────────────────────────
+
+/**
+ * Create one manual company movement in the existing vehicle_ledger. This is
+ * company-only and cannot affect a vehicle, receipt row, driver, or settlement.
+ */
+async function createManualOfficeBalanceEntry(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualOfficeBalanceEntry] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] data must be a plain object.');
+  }
+
+  const office_id = String(data.office_id || '').trim();
+  const entry_type = data.entry_type === 'withdraw' ? 'withdraw' : data.entry_type === 'deposit' ? 'deposit' : '';
+  const amount = Money.toCents(data.amount);
+  const date = data.date || DateUtils.todayLocal();
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
+
+  if (!office_id) throw new Error('[FinancialService:createManualOfficeBalanceEntry] office_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualOfficeBalanceEntry] entry_type must be deposit or withdraw.');
+  if (amount <= 0) throw new Error('[FinancialService:createManualOfficeBalanceEntry] amount must be greater than zero.');
+  if (!note) throw new Error('[FinancialService:createManualOfficeBalanceEntry] note is required.');
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] date must be a valid ISO date string.');
+  }
+
+  const office = await OfficeRepository.getById(office_id);
+  if (!office || office.deleted_at !== null) {
+    throw new Error('[FinancialService:createManualOfficeBalanceEntry] office not found.');
+  }
+
+  const reference_id = _uuid();
+  const now = DateUtils.nowLocal();
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload: {
+      username,
+      owner_id: String(office.id),
+      owner_name: office.name || null,
+      client_id: String(office.id),
+      client_type: 'office',
+      client_name: office.name || null,
+      vehicle_id: null,
+      vehicle_plate: null,
+      type: entry_type,
+      effect: MANUAL_OFFICE_EFFECT,
+      amount,
+      reference_type: MANUAL_OFFICE_REF_TYPE,
+      reference_id,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Reverse one logical manual company movement while retaining its audit row.
+ */
+async function deleteManualOfficeBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] username is required.');
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  const active = entries.filter(entry =>
+    entry.reference_type === MANUAL_OFFICE_REF_TYPE
+    && entry.effect === MANUAL_OFFICE_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] manual office transaction not found or already reversed.');
+  }
+
+  const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
+}
+
 // ─── SHARED LEDGER & BALANCE HELPERS ──────────────────────────────────────────
 
 async function _fetchLedgerEntries(id, label) {
@@ -560,257 +1601,133 @@ async function _fetchLedgerEntries(id, label) {
 
 // ─── DRIVER FINANCIAL OPERATIONS ──────────────────────────────────────────────
 
-async function createDriverDeposit(username, data) {
-  if (!username) throw new Error('[FinancialService:createDriverDeposit] username is required.');
+/**
+ * Validate and shape one direct Driver Balance movement. These movements are
+ * intentionally driver-only: no vehicle, office, capital-book, receipt, or Karta
+ * posting is created alongside this ledger row.
+ */
+async function _prepareManualDriverBalancePayload(username, data) {
+  if (!username) throw new Error('[FinancialService:createManualDriverBalanceEntry] username is required.');
   if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createDriverDeposit] data must be a plain object.');
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] data must be a plain object.');
   }
 
   const driver_id = String(data.driver_id || '').trim();
-  const vehicle_id = String(data.vehicle_id || '').trim();
-  const amount = Money.toCents(data.amount);
+  const entry_type = data.entry_type === 'deposit'
+    ? 'deposit'
+    : data.entry_type === 'withdraw'
+      ? 'withdraw'
+      : '';
+  const rawAmount = Number(data.amount);
+  const amount = Money.toCents(rawAmount);
   const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : 'إيداع رصيد من المركبة';
+  const note = typeof data.note === 'string' ? data.note.trim() : '';
 
-  if (!driver_id) throw new Error('[FinancialService:createDriverDeposit] driver_id is required.');
-  if (!vehicle_id) throw new Error('[FinancialService:createDriverDeposit] vehicle_id is required.');
-  if (amount <= 0) throw new Error('[FinancialService:createDriverDeposit] amount must be greater than zero.');
+  if (!driver_id) throw new Error('[FinancialService:createManualDriverBalanceEntry] driver_id is required.');
+  if (!entry_type) throw new Error('[FinancialService:createManualDriverBalanceEntry] entry_type must be deposit or withdraw.');
+  if (!Number.isFinite(rawAmount) || !Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) {
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] amount must be a finite value greater than zero.');
+  }
   if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createDriverDeposit] date must be a valid ISO date string.');
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] date must be a valid ISO date string.');
   }
 
-  const referenceId = _uuid();
+  const driver = await ClientRepository.getDriverById(driver_id);
+  if (!driver || driver.deleted_at !== null) {
+    throw new Error('[FinancialService:createManualDriverBalanceEntry] driver not found.');
+  }
+
+  return {
+    username,
+    owner_id: String(driver.id),
+    owner_name: driver.name || null,
+    client_id: String(driver.id),
+    client_type: 'driver',
+    client_name: driver.name || null,
+    vehicle_id: null,
+    vehicle_plate: null,
+    type: entry_type,
+    effect: MANUAL_DRIVER_EFFECT,
+    amount,
+    reference_type: MANUAL_DRIVER_REF_TYPE,
+    reference_id: _uuid(),
+    date,
+    applied_at: DateUtils.nowLocal(),
+    is_reversed: false,
+    note: note || null,
+  };
+}
+
+async function _getActiveManualDriverBalanceEntries(reference_id) {
+  const referenceKey = String(reference_id || '').trim();
+  if (!referenceKey) throw new Error('[FinancialService:manualDriverBalance] reference_id is required.');
+
+  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', referenceKey);
+  return entries.filter(entry =>
+    entry.reference_type === MANUAL_DRIVER_REF_TYPE
+    && entry.effect === MANUAL_DRIVER_EFFECT
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+  );
+}
+
+/**
+ * Create exactly one direct driver balance movement. A deposit raises the
+ * driver's balance and a withdrawal lowers it; neither posts to a vehicle.
+ */
+async function createManualDriverBalanceEntry(username, data) {
+  const payload = await _prepareManualDriverBalancePayload(username, data);
+  const [saved] = await DB.transaction([{
+    op: 'add',
+    store: STORE.LEDGER,
+    payload,
+  }], { username });
+
+  return Money.decimalizeRecord(saved);
+}
+
+/**
+ * Edit a direct driver movement through the established audit convention:
+ * reverse its active row, then atomically add a replacement row.
+ */
+async function updateManualDriverBalanceEntry(username, reference_id, data) {
+  if (!username) throw new Error('[FinancialService:updateManualDriverBalanceEntry] username is required.');
+  const active = await _getActiveManualDriverBalanceEntries(reference_id);
+  if (active.length === 0) {
+    throw new Error('[FinancialService:updateManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
+  }
+
+  const previous = active[0];
+  const payload = await _prepareManualDriverBalancePayload(username, {
+    ...data,
+    driver_id: data?.driver_id || previous.owner_id,
+  });
   const now = DateUtils.nowLocal();
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const results = await DB.transaction([
+    ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { op: 'add', store: STORE.LEDGER, payload },
+  ], { username });
 
-  return DB.transaction(async (tx) => {
-    const driver = await ClientRepository.getDriverById(driver_id, { tx });
-    if (!driver || driver.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverDeposit] driver not found.');
-    }
-    const vehicle = await ClientRepository.getVehicleById(vehicle_id, { tx });
-    if (!vehicle || vehicle.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverDeposit] vehicle not found.');
-    }
-
-    const ops = [
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: String(vehicle.owner_id || ''),
-          owner_name: vehicle.owner_name || null,
-          client_id: String(vehicle.owner_id || ''),
-          client_type: 'owner',
-          vehicle_id: vehicle.id,
-          vehicle_plate: vehicle.plate,
-          type: 'withdraw',
-          amount,
-          reference_type: 'driver_deposit',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: `إيداع للسائق ${driver.name} من المركبة ${vehicle.plate}`,
-        },
-      },
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: driver_id,
-          owner_name: driver.name || null,
-          client_id: driver_id,
-          client_type: 'driver',
-          client_name: driver.name || null,
-          vehicle_id: vehicle.id,
-          vehicle_plate: vehicle.plate,
-          type: 'deposit',
-          amount,
-          reference_type: 'driver_deposit',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note: note,
-        },
-      },
-    ];
-
-    const results = await tx.runOps(ops);
-    return results.map(Money.decimalizeRecord);
-  }, { username, stores: [STORE.LEDGER, 'drivers', 'vehicles'] });
+  return Money.decimalizeRecord(results[results.length - 1]);
 }
 
-async function createDriverSalfa(username, data) {
-  if (!username) throw new Error('[FinancialService:createDriverSalfa] username is required.');
-  if (!data || typeof data !== 'object') {
-    throw new Error('[FinancialService:createDriverSalfa] data must be a plain object.');
+/**
+ * Reverse one direct driver movement while retaining its audit history.
+ */
+async function deleteManualDriverBalanceEntry(username, reference_id) {
+  if (!username) throw new Error('[FinancialService:deleteManualDriverBalanceEntry] username is required.');
+  const active = await _getActiveManualDriverBalanceEntries(reference_id);
+  if (active.length === 0) {
+    throw new Error('[FinancialService:deleteManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
   }
 
-  const driver_id = String(data.driver_id || '').trim();
-  const amount = Money.toCents(data.amount);
-  const date = data.date || DateUtils.todayLocal();
-  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : 'سلفة سائق';
-
-  if (!driver_id) throw new Error('[FinancialService:createDriverSalfa] driver_id is required.');
-  if (amount <= 0) throw new Error('[FinancialService:createDriverSalfa] amount must be greater than zero.');
-  if (!date || isNaN(Date.parse(date))) {
-    throw new Error('[FinancialService:createDriverSalfa] date must be a valid ISO date string.');
-  }
-
-  const referenceId = _uuid();
   const now = DateUtils.nowLocal();
-
-  return DB.transaction(async (tx) => {
-    const driver = await ClientRepository.getDriverById(driver_id, { tx });
-    if (!driver || driver.deleted_at !== null) {
-      throw new Error('[FinancialService:createDriverSalfa] driver not found.');
-    }
-
-    const ops = [
-      {
-        op: 'add',
-        store: STORE.LEDGER,
-        payload: {
-          username,
-          owner_id: driver_id,
-          owner_name: driver.name || null,
-          client_id: driver_id,
-          client_type: 'driver',
-          client_name: driver.name || null,
-          vehicle_id: null,
-          vehicle_plate: null,
-          type: 'withdraw',
-          effect: 'salfa',
-          amount,
-          reference_type: 'salfa',
-          reference_id: referenceId,
-          date,
-          applied_at: now,
-          is_reversed: false,
-          note,
-        },
-      },
-    ];
-
-    const results = await tx.runOps(ops);
-    return Money.decimalizeRecord(results[0]);
-  }, { username, stores: [STORE.LEDGER, 'drivers'] });
-}
-
-async function updateDriverDeposit(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateDriverDeposit] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:updateDriverDeposit] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:updateDriverDeposit] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    await tx.runOps(reverseOps);
-
-    const first = activeEntries[0];
-    return createDriverDeposit(username, {
-      driver_id: data.driver_id || first.owner_id,
-      vehicle_id: data.vehicle_id || first.vehicle_id,
-      amount: data.amount,
-      date: data.date,
-      note: data.note,
-    });
-  }, { username, stores: [STORE.LEDGER, 'drivers', 'vehicles'] });
-}
-
-async function deleteDriverDeposit(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteDriverDeposit] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:deleteDriverDeposit] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:deleteDriverDeposit] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    return tx.runOps(reverseOps);
-  }, { username, stores: [STORE.LEDGER] });
-}
-
-async function updateDriverSalfa(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateDriverSalfa] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:updateDriverSalfa] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:updateDriverSalfa] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    await tx.runOps(reverseOps);
-
-    const first = activeEntries[0];
-    return createDriverSalfa(username, {
-      driver_id: data.driver_id || first.owner_id,
-      amount: data.amount,
-      date: data.date,
-      note: data.note,
-    });
-  }, { username, stores: [STORE.LEDGER, 'drivers'] });
-}
-
-async function deleteDriverSalfa(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteDriverSalfa] username is required.');
-  if (!reference_id) throw new Error('[FinancialService:deleteDriverSalfa] reference_id is required.');
-
-  return DB.transaction(async (tx) => {
-    const existingEntries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', reference_id);
-    const activeEntries = existingEntries.filter(e => e.is_reversed === false && e.deleted_at === null);
-    if (activeEntries.length === 0) {
-      throw new Error('[FinancialService:deleteDriverSalfa] Transaction reference not found.');
-    }
-
-    const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-    const reverseOps = activeEntries.map(e => ({
-      op: 'update',
-      store: STORE.LEDGER,
-      id: e.id,
-      patch: reversePatch,
-    }));
-
-    return tx.runOps(reverseOps);
-  }, { username, stores: [STORE.LEDGER] });
+  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  return DB.transaction(
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
+    { username }
+  );
 }
 
 async function getDriverLedger(driver_id) {
@@ -862,16 +1779,194 @@ async function getDriverBalance(driver_id) {
 
 // ─── DRIVER KARTA SETTLEMENT (Phase 6B) ──────────────────────────────────────
 
-const PAYMENT_STATUS = Object.freeze({ UNPAID: 'unpaid', PAID: 'paid' }); // receipt_rows.payment_status whitelist
-const PAYMENT_EFFECT   = 'receipt_row_payment'; // effect tag: exactly one ACTIVE posting set per receipt row UUID
-const PAYMENT_REF_TYPE = 'receipt_row_payment'; // reference_type tag: reference_id = the receipt row's stable UUID
-
 const KARTA_REF_TYPE = 'receipt_row';
 const KARTA_SETTLEMENT_TYPE = 'driver_karta_payment';
 // Vehicle-balance leg of a karta settlement — follows the existing ledger
 // architecture (rebuildVehicleBalance reads type deposit/withdraw by_vehicle;
-// origin classification via `effect`, exactly like 'salfa').
+// origin classification via the settlement effect tag).
 const KARTA_CHARGE_EFFECT = 'karta_settlement_charge';
+
+// The receipt row persists the driver's display-name snapshot specifically for
+// receipt/Karta presentation. Use that existing association for the vehicle
+// movement label; no extra ledger field or financial lookup is needed.
+function _kartaVehicleSettlementNote(kartaRow) {
+  const driverName = String(kartaRow?.driver_name || '').trim();
+  return driverName ? `تسوية كارتة (${driverName})` : 'تسوية كارتة';
+}
+
+function _normalizeKartaSettlementAmount(value, label) {
+  const decimal = Number(value);
+  const cents = Money.toCents(decimal);
+  if (!Number.isFinite(decimal) || !Number.isFinite(cents) || !Number.isInteger(cents) || cents <= 0) {
+    throw new Error(`[FinancialService:${label}] amount must be a finite value greater than zero.`);
+  }
+  return cents;
+}
+
+function _activeKartaSettlementLegs(entries, rowId) {
+  const rowKey = String(rowId || '').trim();
+  return (entries || []).filter(entry =>
+    entry.reference_type === KARTA_REF_TYPE
+    && String(entry.reference_id || '') === rowKey
+    && entry.is_reversed === false
+    && entry.deleted_at === null
+    && (entry.type === KARTA_SETTLEMENT_TYPE || entry.effect === KARTA_CHARGE_EFFECT)
+  );
+}
+
+function _analyzeKartaSettlementPair(entries, rowId) {
+  const activeLegs = _activeKartaSettlementLegs(entries, rowId);
+  const driverLegs = activeLegs.filter(entry => entry.type === KARTA_SETTLEMENT_TYPE);
+  const vehicleLegs = activeLegs.filter(entry => entry.effect === KARTA_CHARGE_EFFECT);
+
+  let state = 'none';
+  if (driverLegs.length === 1 && vehicleLegs.length === 1 && activeLegs.length === 2) state = 'complete';
+  else if (driverLegs.length || vehicleLegs.length) {
+    state = driverLegs.length <= 1 && vehicleLegs.length <= 1 ? 'partial' : 'duplicate';
+  }
+
+  return { state, activeLegs, driverLegs, vehicleLegs };
+}
+
+function _assertCompleteKartaSettlementPair(context, operation) {
+  const { pair, row, rowId, driverId, vehicleId } = context;
+  if (pair.state !== 'complete') {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowId} has ${pair.state} active settlement state; expected one complete pair.`);
+  }
+
+  const driverLeg = pair.driverLegs[0];
+  const vehicleLeg = pair.vehicleLegs[0];
+  const driverAmount = Number(driverLeg.amount);
+  const vehicleAmount = Number(vehicleLeg.amount);
+  if (String(driverLeg.owner_id || '') !== driverId
+    || String(driverLeg.vehicle_id || '') !== vehicleId
+    || String(vehicleLeg.vehicle_id || '') !== vehicleId
+    || driverLeg.reference_id !== row.row_id
+    || vehicleLeg.reference_id !== row.row_id
+    || !Number.isFinite(driverAmount)
+    || !Number.isFinite(vehicleAmount)
+    || driverAmount >= 0
+    || vehicleAmount <= 0
+    || Math.abs(driverAmount) !== vehicleAmount) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowId} has inconsistent active settlement legs.`);
+  }
+}
+
+function _assertNoActiveKartaSettlementPair(context, operation) {
+  if (context.pair.state === 'none') return;
+  if (context.pair.state === 'complete') {
+    throw new Error(`[FinancialService:${operation}] Karta row ${context.rowId} already has an active settlement.`);
+  }
+  throw new Error(`[FinancialService:${operation}] Karta row ${context.rowId} has ${context.pair.state} active settlement state.`);
+}
+
+function _buildKartaSettlementLegPayloads({
+  username,
+  row,
+  driverId,
+  vehicle,
+  amount,
+  date,
+  note,
+  batch_id = undefined,
+  edited_from = undefined,
+  applied_at = undefined,
+}) {
+  const now = applied_at || DateUtils.nowLocal();
+  const shared = {
+    ...(batch_id !== undefined ? { batch_id } : {}),
+    ...(edited_from !== undefined ? { edited_from } : {}),
+  };
+
+  return [
+    {
+      username,
+      owner_id: driverId,
+      owner_name: null,
+      client_id: null,
+      client_type: 'driver',
+      type: KARTA_SETTLEMENT_TYPE,
+      amount: -amount,
+      price: amount,
+      vehicle_id: vehicle.id,
+      reference_type: KARTA_REF_TYPE,
+      reference_id: row.row_id,
+      ...shared,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note,
+    },
+    {
+      username,
+      owner_id: String(vehicle.owner_id || ''),
+      owner_name: vehicle.owner_name || null,
+      client_id: String(vehicle.owner_id || ''),
+      client_type: 'owner',
+      client_name: vehicle.owner_name || null,
+      vehicle_id: vehicle.id,
+      vehicle_plate: vehicle.plate || null,
+      type: 'withdraw',
+      effect: KARTA_CHARGE_EFFECT,
+      amount,
+      reference_type: KARTA_REF_TYPE,
+      reference_id: row.row_id,
+      ...shared,
+      date,
+      applied_at: now,
+      is_reversed: false,
+      note: _kartaVehicleSettlementNote(row),
+    },
+  ];
+}
+
+async function _loadKartaSettlementContext(tx, { rowId, driverId, operation, requireActiveEntities = true }) {
+  const rowKey = String(rowId || '').trim();
+  if (!rowKey) throw new Error(`[FinancialService:${operation}] row_id is required.`);
+
+  const row = await ReceiptRepository.getRowById(rowKey, { tx });
+  if (!row) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} not found or deleted.`);
+  }
+
+  const rowDriverId = String(row.driver_id || '').trim();
+  if (!rowDriverId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} has no driver.`);
+  }
+  const expectedDriverId = String(driverId || '').trim();
+  if (expectedDriverId && expectedDriverId !== rowDriverId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} does not belong to the selected driver.`);
+  }
+
+  const rowVehicleId = String(row.vehicle_id || '').trim();
+  if (!rowVehicleId) {
+    throw new Error(`[FinancialService:${operation}] Karta row ${rowKey} has no vehicle.`);
+  }
+
+  let driver = null;
+  let vehicle = null;
+  if (requireActiveEntities) {
+    driver = await ClientRepository.getDriverById(rowDriverId, { tx });
+    if (!driver || driver.deleted_at !== null) {
+      throw new Error(`[FinancialService:${operation}] driver for Karta row ${rowKey} not found or inactive.`);
+    }
+    vehicle = await ClientRepository.getVehicleById(rowVehicleId, { tx });
+    if (!vehicle || vehicle.deleted_at !== null) {
+      throw new Error(`[FinancialService:${operation}] vehicle for Karta row ${rowKey} not found or inactive.`);
+    }
+  }
+
+  const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowKey);
+  return {
+    rowId: rowKey,
+    row,
+    driverId: rowDriverId,
+    vehicleId: rowVehicleId,
+    driver,
+    vehicle,
+    pair: _analyzeKartaSettlementPair(entries, rowKey),
+  };
+}
 
 async function _getActiveKartaSettlements() {
   const all = await DB.findByFields(STORE.LEDGER, {
@@ -881,56 +1976,31 @@ async function _getActiveKartaSettlements() {
   return all.filter(e => e.type === KARTA_SETTLEMENT_TYPE);
 }
 
+/**
+ * Return the Driver Details Karta projection. Settlement status is derived
+ * exclusively from active driver_karta_payment legs; the persisted
+ * driver_settlement_price is intentionally separate from those ledger prices
+ * and from receipt_rows.driver_price (نولون).
+ */
 async function getDriverKartas(driverId) {
   if (!driverId) throw new Error('[FinancialService:getDriverKartas] driverId is required');
 
-  // Get projection data from the dedicated read repository
   const projectionData = await DriverKartaReadRepository.getDriverKartasData(driverId);
-
-  // Load active settlements from vehicle_ledger
   const settlements = await _getActiveKartaSettlements();
-  const settlementMap = new Map();
+  const settledRowIds = new Set();
 
-  for (const s of settlements) {
-    if (s.owner_id !== driverId) continue;
-    const rid = s.reference_id;
-    if (!settlementMap.has(rid)) settlementMap.set(rid, []);
-    settlementMap.get(rid).push(s);
+  for (const settlement of settlements) {
+    if (settlement.owner_id === driverId && settlement.reference_id) {
+      settledRowIds.add(String(settlement.reference_id));
+    }
   }
 
   const result = [];
-
   for (const { row, receipt } of projectionData) {
     if (!row || !row.row_id || row.driver_id !== driverId) continue;
 
-    // BUSINESS RULE: the receipt's driver_price (نولون) is IRRELEVANT on this
-    // screen — never used as the payable base, never displayed, never a
-    // filter. The driver's payable amount (السعر) is the settlement price
-    // entered manually in Driver Details; kartas appear regardless of نولون.
-    const rowSettlements = settlementMap.get(row.row_id) || [];
-    let settled = 0;
-    let lastDate = null;
-    let priceCents = null;   // settlement price (cents) from the LATEST active settlement
-    let latestSettledAt = -Infinity;
-
-    for (const s of rowSettlements) {
-      settled += Math.abs(Number(s.amount) || 0); // ledger amounts are persisted cents
-      if (!lastDate || new Date(s.date) > new Date(lastDate)) lastDate = s.date;
-      const enteredAt = new Date(s.applied_at || s.date || 0).getTime() || 0;
-      if (typeof s.price === 'number' && enteredAt >= latestSettledAt) {
-        latestSettledAt = enteredAt;
-        priceCents = s.price;
-      }
-    }
-
-    // Payments / remaining / status are anchored ONLY to the settlement price.
-    const remaining = priceCents === null ? null : Math.max(0, priceCents - settled);
-    let status = 'unpaid';
-    if (priceCents !== null && settled > 0) {
-      if (remaining > 0) status = 'partial';
-      else status = 'paid';
-    }
-
+    const settlementPriceCents = _readDriverSettlementPriceCents(row.driver_settlement_price);
+    const settled = settledRowIds.has(String(row.row_id));
     result.push({
       row_id: row.row_id,
       receipt_id: row.receipt_id,
@@ -940,10 +2010,11 @@ async function getDriverKartas(driverId) {
       company: row.office || null,
       loading: row.loading || null,
       destination: row.destination || null,
-      advance: Money.toDecimal(row.advance ?? 0), // persisted cents → decimal, single conversion
-      price: priceCents === null ? null : Money.toDecimal(priceCents), // settlement price only — NEVER نولون
-      status,
-      last_settlement_date: lastDate,
+      advance: Money.toDecimal(row.advance ?? 0),
+      driver_settlement_price: settlementPriceCents === null
+        ? null
+        : Money.toDecimal(settlementPriceCents),
+      status: settled ? 'settled' : 'unsettled',
     });
   }
 
@@ -952,25 +2023,195 @@ async function getDriverKartas(driverId) {
 
 async function getDriverKartasSummary(driverId) {
   const kartas = await getDriverKartas(driverId);
-  let total_kartas = 0, unpaid_kartas = 0, paid_kartas = 0;
+  let total_kartas = 0;
+  let unsettled_kartas = 0;
+  let settled_kartas = 0;
   let total_price = 0;
 
-  for (const k of kartas) {
+  for (const karta of kartas) {
     total_kartas++;
-    if (k.status === 'unpaid') unpaid_kartas++;
-    else if (k.status === 'paid') paid_kartas++;
-
-    // Summed over the settlement price ONLY (نولون never enters this summary);
-    // kartas with no settlement yet contribute 0.
-    total_price += Money.toCents(k.price ?? 0);
+    if (karta.status === 'settled') settled_kartas++;
+    else unsettled_kartas++;
+    total_price += Money.toCents(karta.driver_settlement_price ?? 0);
   }
 
   return {
     total_kartas,
-    unpaid_kartas,
-    paid_kartas,
+    unsettled_kartas,
+    settled_kartas,
     total_price: Money.toDecimal(total_price),
   };
+}
+
+/**
+ * Patch only the persisted Driver Details settlement price of one receipt row.
+ * This write never creates or changes vehicle_ledger records.
+ */
+async function updateDriverKartaSettlementPrice(username, rowId, value) {
+  if (!username) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] username is required.');
+  const rowKey = String(rowId ?? '').trim();
+  if (!rowKey) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] row_id is required.');
+
+  const row = await ReceiptRepository.getRowById(rowKey);
+  if (!row || row.deleted_at !== null) {
+    throw new Error('[FinancialService:updateDriverKartaSettlementPrice] receipt row not found.');
+  }
+  if (!row.driver_id) {
+    throw new Error('[FinancialService:updateDriverKartaSettlementPrice] receipt row must belong to a driver.');
+  }
+
+  const driver_settlement_price = _normalizeDriverSettlementPrice(value);
+  const [saved] = await DB.transaction([{
+    op: 'update',
+    store: 'receipt_rows',
+    id: rowKey,
+    patch: { driver_settlement_price },
+  }], { username });
+
+  const decimalized = Money.decimalizeRecord(saved);
+  return {
+    ...decimalized,
+    driver_settlement_price: driver_settlement_price === null
+      ? null
+      : Money.toDecimal(driver_settlement_price),
+  };
+}
+
+/**
+ * Settle multiple Driver Karta rows in ONE transaction. Each Karta preserves
+ * its own receipt-row reference and vehicle withdrawal; batch_id only groups
+ * the audit records created together.
+ */
+async function createKartaSettlementBatch(username, driverId, rowIds) {
+  if (!username) throw new Error('[FinancialService:createKartaSettlementBatch] username is required.');
+  const driverKey = String(driverId ?? '').trim();
+  if (!driverKey) throw new Error('[FinancialService:createKartaSettlementBatch] driver_id is required.');
+  if (!Array.isArray(rowIds) || rowIds.length === 0) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] row_ids must contain at least one row.');
+  }
+
+  const normalizedRowIds = rowIds.map(rowId => String(rowId ?? '').trim());
+  if (normalizedRowIds.some(rowId => !rowId)) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] every row_id is required.');
+  }
+  if (new Set(normalizedRowIds).size !== normalizedRowIds.length) {
+    throw new Error('[FinancialService:createKartaSettlementBatch] duplicate row_id in batch input.');
+  }
+
+  return DB.transaction(async (tx) => {
+    // Schedule every authoritative read inside the same transaction before
+    // validation or writes, so the active-settlement state is checked at the
+    // exact transaction boundary that commits the new batch.
+    const [rows, vehicles, drivers, ledger] = await Promise.all([
+      tx.getAll('receipt_rows'),
+      tx.getAll('vehicles'),
+      tx.getAll('drivers'),
+      tx.findByFields(STORE.LEDGER, { is_reversed: false }),
+    ]);
+
+    const driver = drivers.find(record => String(record.id) === driverKey);
+    if (!driver) {
+      throw new Error('[FinancialService:createKartaSettlementBatch] driver not found.');
+    }
+
+    const rowsById = new Map(rows.map(row => [String(row.row_id), row]));
+    const vehiclesById = new Map(vehicles.map(vehicle => [String(vehicle.id), vehicle]));
+    const activeByReference = new Map();
+    for (const entry of ledger) {
+      if (entry.reference_type !== KARTA_REF_TYPE || !entry.reference_id) continue;
+      const key = String(entry.reference_id);
+      if (!activeByReference.has(key)) activeByReference.set(key, []);
+      activeByReference.get(key).push(entry);
+    }
+
+    const eligible = [];
+    const skippedRowIds = [];
+    for (const rowId of normalizedRowIds) {
+      const row = rowsById.get(rowId);
+      if (!row) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} not found.`);
+      }
+      if (String(row.driver_id || '') !== driverKey) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} does not belong to the selected driver.`);
+      }
+
+      const priceCents = _readDriverSettlementPriceCents(row.driver_settlement_price);
+      if (priceCents === null || priceCents === 0) {
+        skippedRowIds.push(rowId);
+        continue;
+      }
+
+      const activeEntries = activeByReference.get(rowId) || [];
+      const activePayment = activeEntries.find(entry => entry.type === KARTA_SETTLEMENT_TYPE);
+      const activeCharge = activeEntries.find(entry => entry.effect === KARTA_CHARGE_EFFECT);
+      if (activePayment) {
+        // The row became settled after the UI loaded or was supplied directly.
+        // Never duplicate either existing settlement leg.
+        skippedRowIds.push(rowId);
+        continue;
+      }
+      if (activeCharge) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} has an active vehicle settlement charge without an active driver settlement.`);
+      }
+
+      const vehicleId = String(row.vehicle_id || '').trim();
+      if (!vehicleId) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] Karta row ${rowId} requires an active vehicle.`);
+      }
+      const vehicle = vehiclesById.get(vehicleId);
+      if (!vehicle) {
+        throw new Error(`[FinancialService:createKartaSettlementBatch] vehicle for Karta row ${rowId} not found or inactive.`);
+      }
+
+      eligible.push({ row, rowId, vehicle, priceCents });
+    }
+
+    if (eligible.length === 0) {
+      return {
+        success: true,
+        batch_id: null,
+        settled_row_ids: [],
+        skipped_row_ids: skippedRowIds,
+        settled_count: 0,
+        total: 0,
+        affected_vehicle_count: 0,
+      };
+    }
+
+    const batch_id = _uuid();
+    const now = DateUtils.nowLocal();
+    const date = DateUtils.todayLocal();
+    const ops = [];
+    for (const { row, vehicle, priceCents } of eligible) {
+      const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
+        username,
+        row,
+        driverId: driverKey,
+        vehicle,
+        amount: priceCents,
+        date,
+        note: 'تسوية عامة للكارتات',
+        batch_id,
+        applied_at: now,
+      });
+      ops.push(
+        { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+        { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+      );
+    }
+
+    await tx.runOps(ops);
+    const totalCents = eligible.reduce((sum, item) => sum + item.priceCents, 0);
+    return {
+      success: true,
+      batch_id,
+      settled_row_ids: eligible.map(item => item.rowId),
+      skipped_row_ids: skippedRowIds,
+      settled_count: eligible.length,
+      total: Money.toDecimal(totalCents),
+      affected_vehicle_count: new Set(eligible.map(item => String(item.vehicle.id))).size,
+    };
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'drivers'] });
 }
 
 async function getKartaSettlementHistory(rowId) {
@@ -986,235 +2227,139 @@ async function getKartaSettlementHistory(rowId) {
 }
 
 async function createKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required');
-  if (!data?.row_id || typeof data.amount !== 'number' || !data?.vehicle_id) {
-    throw new Error('[FinancialService:createKartaSettlement] row_id, amount and vehicle_id are required');
+  if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:createKartaSettlement] data must be a plain object.');
   }
 
-  const rowId = data.row_id;
-  const amount = Money.toCents(data.amount);
-  if (amount <= 0) throw new Error('[FinancialService:createKartaSettlement] amount must be positive');
-  const chargeVehicleId = String(data.vehicle_id).trim();
-  if (!chargeVehicleId) throw new Error('[FinancialService:createKartaSettlement] vehicle_id (the vehicle to charge) is required');
-
-  const referenceId = _uuid();
-  const now = DateUtils.nowLocal();
+  const rowId = String(data.row_id || '').trim();
+  const selectedDriverId = String(data.driver_id || '').trim();
+  if (!rowId) throw new Error('[FinancialService:createKartaSettlement] row_id is required.');
+  if (!selectedDriverId) throw new Error('[FinancialService:createKartaSettlement] driver_id is required.');
+  const amount = _normalizeKartaSettlementAmount(data.amount, 'createKartaSettlement');
   const date = data.date || DateUtils.todayLocal();
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:createKartaSettlement] date must be a valid ISO date string.');
+  }
   const note = data.note || 'تسوية كارتة سائق';
 
-  // Attribute the settlement to the karta's driver via the permanent id key
-  // (row.driver_id) — getDriverKartas matches settlements to drivers by it.
-  // No name-based matching anywhere in this chain.
-  const kartaRow = await ReceiptRepository.getRowById(String(rowId));
-  const settlementDriverId = kartaRow?.driver_id ?? null;
-
-  // The vehicle-to-charge must exist — validated BEFORE the atomic write
-  // transaction (guards evaluated inside DB.transaction callbacks race with
-  // transaction auto-commit in database.js; write-path failures inside the tx
-  // are what abort it reliably).
-  const chargeVehicle = await ClientRepository.getVehicleById(chargeVehicleId);
-  if (!chargeVehicle || chargeVehicle.deleted_at !== null) {
-    throw new Error('[FinancialService:createKartaSettlement] vehicle to charge not found.');
-  }
-
-  // BUSINESS RULE: the manually entered amount is the SETTLEMENT PRICE — the
-  // driver's payable amount for this karta (never the receipt نولون). The
-  // settlement is a REAL financial transaction integrated into the existing
-  // vehicle-balance architecture (vehicle_ledger, by_vehicle index,
-  // rebuildVehicleBalance): ONE atomic transaction posts BOTH legs —
-  //   1. driver settlement payment (driver is paid: type driver_karta_payment)
-  //   2. vehicle charge (the selected vehicle's balance is reduced by the
-  //      settlement price: type 'withdraw' + effect tag, the exact convention
-  //      used by createDriverDeposit's vehicle leg and 'salfa')
-  // Both legs share reference_type/reference_id → they reverse together.
   await DB.transaction(async (tx) => {
-    // Leg 1 — driver settlement payment
-    await tx.add(STORE.LEDGER, {
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      driverId: selectedDriverId,
+      operation: 'createKartaSettlement',
+    });
+    if (data.vehicle_id !== undefined && String(data.vehicle_id || '').trim() !== context.vehicleId) {
+      throw new Error('[FinancialService:createKartaSettlement] caller vehicle_id does not match the Karta row vehicle.');
+    }
+    _assertNoActiveKartaSettlementPair(context, 'createKartaSettlement');
+
+    const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
       username,
-      owner_id: settlementDriverId,
-      owner_name: null,
-      client_id: null,
-      client_type: 'driver',
-      type: KARTA_SETTLEMENT_TYPE,
-      amount: -amount,
-      price: amount, // settlement price (cents) — the payable base
-      vehicle_id: chargeVehicle.id, // the vehicle charged by this settlement
-      reference_type: KARTA_REF_TYPE,
-      reference_id: rowId,
+      row: context.row,
+      driverId: context.driverId,
+      vehicle: context.vehicle,
+      amount,
       date,
-      applied_at: now,
-      is_reversed: false,
       note,
     });
-
-    // Leg 2 — vehicle balance reduction (settlement price charged to the vehicle)
-    await tx.add(STORE.LEDGER, {
-      username,
-      owner_id: String(chargeVehicle.owner_id || ''),
-      owner_name: chargeVehicle.owner_name || null,
-      client_id: String(chargeVehicle.owner_id || ''),
-      client_type: 'owner',
-      client_name: chargeVehicle.owner_name || null,
-      vehicle_id: chargeVehicle.id,
-      vehicle_plate: chargeVehicle.plate || null,
-      type: 'withdraw',
-      effect: KARTA_CHARGE_EFFECT,
-      amount, // settlement price (cents, positive — withdraw convention)
-      reference_type: KARTA_REF_TYPE,
-      reference_id: rowId,
-      date,
-      applied_at: now,
-      is_reversed: false,
-      note: `تحميل تسوية كارتة على المركبة ${chargeVehicle.plate || chargeVehicleId}`,
-    });
-  }, { username, stores: [STORE.LEDGER] });
+    await tx.runOps([
+      { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+      { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+    ]);
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
-    settlement_reference_id: referenceId,
+    settlement_reference_id: rowId,
     row_id: rowId,
   };
 }
 
 /**
- * Edit the EXISTING settlement of a karta — "settlement edited", never a second
- * settlement. The logical settlement identity (reference_type='receipt_row',
- * reference_id=rowId) is preserved: the old legs reverse into audit history
- * and the replacement legs post for THE SAME reference with an edited_from
- * link to the superseded payment leg. ONE atomic transaction covers both
- * halves, so exactly one ACTIVE settlement exists per karta at every instant.
+ * Replace one complete active Karta settlement with a corrected pair. The row
+ * driver and vehicle remain authoritative; old legs are audit-reversed.
  */
 async function updateKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:updateKartaSettlement] username is required');
-  if (!data?.row_id || typeof data.amount !== 'number' || !data?.vehicle_id) {
-    throw new Error('[FinancialService:updateKartaSettlement] row_id, amount and vehicle_id are required');
+  if (!username) throw new Error('[FinancialService:updateKartaSettlement] username is required.');
+  if (!data || typeof data !== 'object') {
+    throw new Error('[FinancialService:updateKartaSettlement] data must be a plain object.');
   }
 
-  const rowId = data.row_id;
-  const amount = Money.toCents(data.amount);
-  if (amount <= 0) throw new Error('[FinancialService:updateKartaSettlement] amount must be positive');
-  const chargeVehicleId = String(data.vehicle_id).trim();
-  if (!chargeVehicleId) throw new Error('[FinancialService:updateKartaSettlement] vehicle_id (the vehicle to charge) is required');
-
-  const now = DateUtils.nowLocal();
+  const rowId = String(data.row_id || '').trim();
+  const selectedDriverId = String(data.driver_id || '').trim();
+  if (!rowId) throw new Error('[FinancialService:updateKartaSettlement] row_id is required.');
+  if (!selectedDriverId) throw new Error('[FinancialService:updateKartaSettlement] driver_id is required.');
+  const amount = _normalizeKartaSettlementAmount(data.amount, 'updateKartaSettlement');
   const date = data.date || DateUtils.todayLocal();
+  if (!date || isNaN(Date.parse(date))) {
+    throw new Error('[FinancialService:updateKartaSettlement] date must be a valid ISO date string.');
+  }
   const note = data.note || 'تسوية كارتة سائق';
 
-  // ── Pre-transaction reads/validation (house atomicity convention — guards
-  // inside DB.transaction callbacks race with tx auto-commit in database.js) ──
-  const kartaRow = await ReceiptRepository.getRowById(String(rowId));
-  if (!kartaRow) throw new Error('[FinancialService:updateKartaSettlement] karta row not found');
-  const settlementDriverId = kartaRow?.driver_id ?? null;
+  await DB.transaction(async (tx) => {
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      driverId: selectedDriverId,
+      operation: 'updateKartaSettlement',
+    });
+    if (data.vehicle_id !== undefined && String(data.vehicle_id || '').trim() !== context.vehicleId) {
+      throw new Error('[FinancialService:updateKartaSettlement] caller vehicle_id does not match the Karta row vehicle.');
+    }
+    _assertCompleteKartaSettlementPair(context, 'updateKartaSettlement');
 
-  const existing = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', rowId);
-  const activeLegs = existing.filter(e =>
-    e.reference_type === KARTA_REF_TYPE &&
-    (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
-    e.is_reversed === false
-  );
-  const prevPaymentLeg = activeLegs.find(e => e.type === KARTA_SETTLEMENT_TYPE);
-  if (!prevPaymentLeg) {
-    throw new Error('[FinancialService:updateKartaSettlement] no active settlement for this karta (nothing to edit)');
-  }
-
-  const chargeVehicle = await ClientRepository.getVehicleById(chargeVehicleId);
-  if (!chargeVehicle || chargeVehicle.deleted_at !== null) {
-    throw new Error('[FinancialService:updateKartaSettlement] vehicle to charge not found.');
-  }
-
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-
-  // ONE atomic BATCH transaction (array-ops API → transactionBatch): every op
-  // is scheduled synchronously inside a single IDB transaction, so there is no
-  // pending==0 window between sequential awaits (the DB.transaction callback
-  // race). Either ALL ops commit or the whole edit rolls back.
-  const leg1 = {
-    username,
-    owner_id: settlementDriverId,
-    owner_name: null,
-    client_id: null,
-    client_type: 'driver',
-    type: KARTA_SETTLEMENT_TYPE,
-    amount: -amount,
-    price: amount, // settlement price (cents) — the payable base
-    vehicle_id: chargeVehicle.id, // the vehicle charged by this settlement
-    reference_type: KARTA_REF_TYPE,
-    reference_id: rowId,
-    edited_from: prevPaymentLeg.id, // audit: supersedes the previous version
-    date,
-    applied_at: now,
-    is_reversed: false,
-    note,
-  };
-  const leg2 = {
-    username,
-    owner_id: String(chargeVehicle.owner_id || ''),
-    owner_name: chargeVehicle.owner_name || null,
-    client_id: String(chargeVehicle.owner_id || ''),
-    client_type: 'owner',
-    client_name: chargeVehicle.owner_name || null,
-    vehicle_id: chargeVehicle.id,
-    vehicle_plate: chargeVehicle.plate || null,
-    type: 'withdraw',
-    effect: KARTA_CHARGE_EFFECT,
-    amount, // settlement price (cents, positive — withdraw convention)
-    reference_type: KARTA_REF_TYPE,
-    reference_id: rowId,
-    edited_from: prevPaymentLeg.id,
-    date,
-    applied_at: now,
-    is_reversed: false,
-    note: `تحميل تسوية كارتة على المركبة ${chargeVehicle.plate || chargeVehicleId}`,
-  };
-
-  const ops = [
-    // 1) Previous version → audit history (flag-flip reversal — the
-    //    reverseKartaSettlement convention). Balances are
-    //    derived, so the previously charged vehicle restores automatically.
-    ...activeLegs.map(leg => ({ op: 'update', store: STORE.LEDGER, id: leg.id, patch: reversePatch })),
-    // 2) Replacement legs for THE SAME logical settlement (edited version).
-    { op: 'add', store: STORE.LEDGER, payload: leg1 },
-    { op: 'add', store: STORE.LEDGER, payload: leg2 },
-  ];
-  await DB.transaction(ops, { username });
+    const reversePatch = { is_reversed: true, reversed_at: DateUtils.nowLocal(), reversed_by: username };
+    const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
+      username,
+      row: context.row,
+      driverId: context.driverId,
+      vehicle: context.vehicle,
+      amount,
+      date,
+      note,
+      edited_from: context.pair.driverLegs[0].id,
+    });
+    await tx.runOps([
+      ...context.pair.activeLegs.map(leg => ({ op: 'update', store: STORE.LEDGER, id: leg.id, patch: reversePatch })),
+      { op: 'add', store: STORE.LEDGER, payload: driverLeg },
+      { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
+    ]);
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
-    settlement_reference_id: rowId, // SAME logical settlement identity
+    settlement_reference_id: rowId,
     row_id: rowId,
     edited: true,
   };
 }
 
 async function reverseKartaSettlement(username, settlementReferenceId) {
-  if (!username) throw new Error('[FinancialService:reverseKartaSettlement] username is required');
-  if (!settlementReferenceId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required');
-
-  const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  if (!username) throw new Error('[FinancialService:reverseKartaSettlement] username is required.');
+  const rowId = String(settlementReferenceId || '').trim();
+  if (!rowId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required.');
 
   await DB.transaction(async (tx) => {
-    const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
-    // Both settlement legs reverse ATOMICALLY: the driver payment
-    // (type-based, existing) and the vehicle charge leg (effect-based).
-    const active = entries.filter(e =>
-      e.reference_type === KARTA_REF_TYPE &&
-      (e.type === KARTA_SETTLEMENT_TYPE || e.effect === KARTA_CHARGE_EFFECT) &&
-      e.is_reversed === false
-    );
-    if (active.length === 0) {
-      throw new Error('[FinancialService:reverseKartaSettlement] settlement not found or already reversed');
-    }
-    const ops = active.map(e => ({ op: 'update', store: STORE.LEDGER, id: e.id, patch: reversePatch }));
-    await tx.runOps(ops);
-  }, { username, stores: [STORE.LEDGER] });
+    const context = await _loadKartaSettlementContext(tx, {
+      rowId,
+      operation: 'reverseKartaSettlement',
+      requireActiveEntities: false,
+    });
+    _assertCompleteKartaSettlementPair(context, 'reverseKartaSettlement');
 
-  const entries = await DB.getByIndex(STORE.LEDGER, 'by_reference_id', settlementReferenceId);
-  const rowId = entries[0]?.reference_id || null;
+    const now = DateUtils.nowLocal();
+    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    await tx.runOps(context.pair.activeLegs.map(leg => ({
+      op: 'update',
+      store: STORE.LEDGER,
+      id: leg.id,
+      patch: reversePatch,
+    })));
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
 
   return {
     success: true,
-    settlement_reference_id: settlementReferenceId,
+    settlement_reference_id: rowId,
     row_id: rowId,
   };
 }
@@ -1223,61 +2368,83 @@ async function reverseKartaSettlement(username, settlementReferenceId) {
 
 // ─── PUBLIC: setReceiptRowPaymentStatus — explicit row payment state machine ─
 // unpaid → unpaid : no-op          paid → paid : no-op
-// unpaid → paid   : post vehicle (الصافي) + company (الصافي + الصرف) exactly once
-// paid   → unpaid : reverse exactly those postings, exactly once
-// Status write and financial postings commit in ONE atomic DB.transaction —
-// never «paid without posting», never «posting without paid».
+// unpaid → paid   : post company (الصافي + الصرف) exactly once
+// paid   → unpaid : reverse that company posting exactly once
+// Vehicle net is a separate creation-side effect and never changes here.
+// Status write and company posting commit in ONE atomic DB.transaction.
 async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
   if (!username) throw new Error('[FinancialService:setReceiptRowPaymentStatus] username is required.');
   const rowKey = String(rowId ?? '').trim();
   if (!rowKey) throw new Error('[FinancialService:setReceiptRowPaymentStatus] row_id is required.');
   const target = targetStatus === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID;
 
-  const row = await ReceiptRepository.getRowById(rowKey);
-  if (!row || row.deleted_at !== null) {
-    throw new Error('[FinancialService:setReceiptRowPaymentStatus] receipt row not found.');
-  }
-  const current = row.payment_status === PAYMENT_STATUS.PAID
-    ? PAYMENT_STATUS.PAID
-    : PAYMENT_STATUS.UNPAID;
+  return DB.transaction(async (tx) => {
+    const row = await ReceiptRepository.getRowById(rowKey, { tx });
+    if (!row || row.deleted_at !== null) {
+      throw new Error('[FinancialService:setReceiptRowPaymentStatus] receipt row not found.');
+    }
+    const current = row.payment_status === PAYMENT_STATUS.PAID
+      ? PAYMENT_STATUS.PAID
+      : PAYMENT_STATUS.UNPAID;
+    const payment = await _getReceiptPaymentPair(rowKey, { tx });
+    const vehicleCreation = await _getActiveReceiptRowVehicleBalances(rowKey, { tx });
+    _assertExactlyOneActiveReceiptRowVehicleBalance(
+      vehicleCreation, 'setReceiptRowPaymentStatus', rowKey
+    );
 
-  // ── no-transition guard: unchanged status ⇒ ZERO financial operation ──
-  if (current === target) {
-    return { row_id: rowKey, payment_status: current, changed: false };
-  }
+    if (current === target) {
+      if (target === PAYMENT_STATUS.PAID) {
+        _assertCompleteReceiptPaymentCompanyEffect(payment, 'setReceiptRowPaymentStatus', row);
+      } else {
+        _assertNoActiveReceiptPaymentEffects(payment, 'setReceiptRowPaymentStatus', rowKey);
+      }
+      return {
+        row_id: rowKey,
+        receipt_id: row.receipt_id,
+        payment_status: current,
+        changed: false,
+        vehicle_id: row.vehicle_id,
+        office_id: target === PAYMENT_STATUS.PAID
+          ? payment.companyLegs[0].client_id
+          : null,
+      };
+    }
 
-  if (target === PAYMENT_STATUS.PAID) {
-    // Idempotency: if an ACTIVE posting set already exists for this row UUID,
-    // never create another one (this also answers «was the posting created?»).
-    const active = await _getActivePaymentPostings(rowKey);
-    const legs = active.length > 0
-      ? []
-      : _paymentLegPayloads(username, row, await _resolvePaymentTargets(row), null);
+    if (target === PAYMENT_STATUS.PAID) {
+      _assertNoActiveReceiptPaymentEffects(payment, 'setReceiptRowPaymentStatus', rowKey);
+      const legs = await _receiptPaymentAddCommands(username, row, null, { tx });
+      await tx.runOps([
+        ...legs.map(command => ({ op: 'add', store: STORE.LEDGER, payload: command.payload })),
+        { op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.PAID } },
+      ]);
+      return {
+        row_id: rowKey,
+        receipt_id: row.receipt_id,
+        payment_status: PAYMENT_STATUS.PAID,
+        changed: true,
+        vehicle_id: row.vehicle_id,
+        office_id: String(legs[0].payload.client_id),
+      };
+    }
 
-    await DB.transaction(async (tx) => {
-      const ops = legs.map(payload => ({ op: 'add', store: STORE.LEDGER, payload }));
-      ops.push({ op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.PAID } });
-      await tx.runOps(ops);
-    }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
-  } else {
-    // paid → unpaid: reverse the exact previously created ACTIVE postings.
-    await DB.transaction(async (tx) => {
-      const entries = await tx.getByIndex(STORE.LEDGER, 'by_reference_id', rowKey);
-      const active = entries.filter(e =>
-        e.reference_type === PAYMENT_REF_TYPE &&
-        e.effect === PAYMENT_EFFECT &&
-        e.is_reversed === false &&
-        e.deleted_at === null
-      );
-      const now = DateUtils.nowLocal();
-      const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
-      const ops = active.map(e => ({ op: 'update', store: STORE.LEDGER, id: e.id, patch: reversePatch }));
-      ops.push({ op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.UNPAID } });
-      await tx.runOps(ops);
-    }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
-  }
-
-  return { row_id: rowKey, payment_status: target, changed: true };
+    _assertCompleteReceiptPaymentCompanyEffect(payment, 'setReceiptRowPaymentStatus', row);
+    const now = DateUtils.nowLocal();
+    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    await tx.runOps([
+      ...payment.companyLegs.map(entry => ({
+        op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch,
+      })),
+      { op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.UNPAID } },
+    ]);
+    return {
+      row_id: rowKey,
+      receipt_id: row.receipt_id,
+      payment_status: PAYMENT_STATUS.UNPAID,
+      changed: true,
+      vehicle_id: row.vehicle_id,
+      office_id: payment.companyLegs[0].client_id,
+    };
+  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'offices'] });
 }
 
 export const FinancialService = Object.freeze({
@@ -1285,16 +2452,25 @@ export const FinancialService = Object.freeze({
   updateReceipt,
   deleteReceipt,
   rebuildVehicleBalance,
+  getVehicleLedger,
+  getVehicleLedgerDateIntegrityDiagnostic,
+  getLedgerIntegrityDiagnosticSnapshot,
+  getVehicleMonthlyReport,
+  getOfficeBalance,
+  createManualVehicleBalanceEntry,
+  updateVehicleMaintenanceEntry,
+  deleteManualVehicleBalanceEntry,
+  createManualOfficeBalanceEntry,
+  deleteManualOfficeBalanceEntry,
   getDriverBalance,
   getDriverLedger,
-  createDriverDeposit,
-  updateDriverDeposit,
-  deleteDriverDeposit,
-  createDriverSalfa,
-  updateDriverSalfa,
-  deleteDriverSalfa,
+  createManualDriverBalanceEntry,
+  updateManualDriverBalanceEntry,
+  deleteManualDriverBalanceEntry,
   getDriverKartas,
   getDriverKartasSummary,
+  updateDriverKartaSettlementPrice,
+  createKartaSettlementBatch,
   getKartaSettlementHistory,
   createKartaSettlement,
   updateKartaSettlement,
