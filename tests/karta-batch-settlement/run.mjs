@@ -47,7 +47,7 @@ const mkRow = ({ row_id = uuid(), driver = DRIVER_A, vehicle = VA, price = null,
   driver_price: 44,
   driver_settlement_price: price,
   loading: 'طنطا', destination: 'القاهرة', office: null,
-  advance: 0, net: 10, sarf: 0, kartano,
+  advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 10, net: 10, sarf: 0, kartano,
 });
 
 async function createRows(rows) {

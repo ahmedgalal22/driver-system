@@ -73,7 +73,7 @@ await write({
   receipts: [{ id: 'receipt-1', total: 1250, deleted_at: null }],
   vehicleOwners: [{ id: 'owner-1', name: 'Owner Test', deleted_at: null }],
   drivers: [{ id: 30, name: 'Driver Test', deleted_at: null }],
-  receipt_rows: [{ row_id: 'row-1', receipt_id: 'receipt-1', deleted_at: null }],
+  receipt_rows: [{ row_id: 'row-1', receipt_id: 'receipt-1', weight: 10, deficit: 200, weight2: 'raw stored value', weightTotal: 999, deleted_at: null }],
   mainCapitalTreasury: [{ id: 'capital-1', amount: 5000, deleted_at: null }],
   legacy_extra: [{ id: 'extra-1', value: 'preserve me' }],
 });
@@ -168,12 +168,14 @@ const beforeMutation = await createBackupSnapshot(db, { canonicalStoreNames: can
 await write({
   users: [{ id: 1, username: USER, password_hash: 'changed', role: 'admin', deleted_at: null }],
   vehicles: [{ id: 10, plate: 'CHANGED', deleted_at: null }],
+  receipt_rows: [{ row_id: 'row-1', receipt_id: 'receipt-1', weight: 0, deficit: 0, weight2: 'changed', weightTotal: 0, deleted_at: null }],
   legacy_extra: [{ id: 'extra-1', value: 'changed' }],
 });
 await restoreValidatedBackup(db, validateBackupSnapshot(db, clone(beforeMutation), { canonicalStoreNames: canonical }));
 await verifyRestoredBackup(db, validateBackupSnapshot(db, clone(beforeMutation), { canonicalStoreNames: canonical }));
 const afterRestore = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
 assertSameSnapshot(beforeMutation.stores, afterRestore.stores, 'valid complete restore replaces every active store and preserves empty stores');
+ok(afterRestore.stores.receipt_rows[0].value.weight2 === 'raw stored value' && afterRestore.stores.receipt_rows[0].value.weightTotal === 999, 'receipt quantity and stored total survive backup and restore unchanged');
 
 const beforeFailure = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
 const writeFailure = clone(beforeFailure);

@@ -34,7 +34,7 @@ const row = {
   _type: 'data', row_id: uuid(), owner_id: OWNER, owner_name: 'مالك اختبار',
   driver_id: null, vehicle_id: VEHICLE_REC.id, vehicle_plate: VEHICLE_REC.plate,
   driver_price: 0, loading: 'طنطا', destination: 'القاهرة', office: OFFICE.name,
-  advance: 0, net: 11, sarf: 75, date: DateUtils.todayLocal(), payment_status: 'paid',
+  advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 86, net: 11, sarf: 75, date: DateUtils.todayLocal(), payment_status: 'paid',
 };
 const created = await FinancialService.createReceipt(U, {
   receipt_date: DateUtils.todayLocal(), client_id: OWNER, client_type: 'owner', client_name: 'مالك اختبار', total: 11, rows: [row],

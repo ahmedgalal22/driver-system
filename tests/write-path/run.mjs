@@ -35,11 +35,11 @@ function makePayload(over = {}) {
       { row_id: uuid(), _type: 'data', owner_id: client_id, owner_name: 'مالك اختبار',
         vehicle_id: 'veh-1', vehicle_plate: '111 أ ب', driver_id: null,
         driver_price: 11, advance: 0, loading: 'طنطا', destination: 'القاهرة',
-        office: 'شركة أ', net: 550, sarf: 0 },
+        office: 'شركة أ', weight: 50, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 550, sarf: 0 },
       { row_id: uuid(), _type: 'data', owner_id: client_id, owner_name: 'مالك اختبار',
         vehicle_id: 'veh-2', vehicle_plate: '222 ج د', driver_id: null,
         driver_price: 12, advance: 0, loading: 'طنطا', destination: 'الإسكندرية',
-        office: 'شركة ب', net: 600, sarf: 0 },
+        office: 'شركة ب', weight: 50, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 600, sarf: 0 },
     ],
     ...over,
   };
@@ -73,7 +73,7 @@ ok(ledger1.length === 4
 
 const lz = await FinancialService.createReceipt(U, makePayload({
   total: 100,
-  rows: [ { ...makePayload().rows[0], net: 100 } ],
+  rows: [ { ...makePayload().rows[0], weight: 10, driver_price: 10, net: 100 } ],
 })).then(r => r.receipt.id);
 ok((await ledgerOfRows(await rowsOf(lz))).length === 2, 'second receipt emits its company and vehicle creation entries');
 const before = (await DB.getAll('receipts', { username: U })).length;
@@ -88,7 +88,7 @@ const p1u = makePayload({
     { row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
       vehicle_id: 'veh-3', vehicle_plate: '333 هـ و', driver_id: null,
       driver_price: 10, advance: 0, loading: 'طنطا', destination: 'المنصورة',
-      office: 'شركة ج', net: 650, sarf: 0 } ],
+      office: 'شركة ج', weight: 65, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 650, sarf: 0 } ],
 });
 const updRes = await FinancialService.updateReceipt(U, rid, p1u);
 const header2 = await DB.getById('receipts', rid);

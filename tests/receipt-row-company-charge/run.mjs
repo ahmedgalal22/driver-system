@@ -36,7 +36,7 @@ const mkRow = (over = {}) => ({
   driver_id: null,
   vehicle_id: V1.id,
   vehicle_plate: V1.plate,
-  driver_price: 0,
+  driver_price: 1, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 0,
   loading: 'طنطا',
   destination: 'القاهرة',
   office: OFFICE_A.name,
@@ -63,7 +63,7 @@ const chargesFor = async (rowId, activeOnly = true) =>
   );
 
 console.log('\n— one row / creation charge —');
-const row1 = mkRow({ kartano: 'A-1', net: 100, sarf: 20 });
+const row1 = mkRow({ kartano: 'A-1', weight: 120, net: 100, sarf: 20 });
 const receipt1 = await FinancialService.createReceipt(U, mkReceipt([row1]));
 ok(!!receipt1.receipt?.id, 'receipt persists through the real receipt creation path');
 const row1Charge = (await chargesFor(row1.row_id))[0];
@@ -95,8 +95,8 @@ ok((await officeBalanceCents(OFFICE_A.id)) === -12000,
   'after payment reversal the receipt-created company deduction remains active');
 
 console.log('\n— multiple rows and companies —');
-const row2 = mkRow({ kartano: 'A-2', net: 80, sarf: 10 });
-const row3 = mkRow({ kartano: 'B-1', vehicle_id: V2.id, vehicle_plate: V2.plate, office: OFFICE_B.name, net: 50, sarf: 5 });
+const row2 = mkRow({ kartano: 'A-2', weight: 90, net: 80, sarf: 10 });
+const row3 = mkRow({ kartano: 'B-1', vehicle_id: V2.id, vehicle_plate: V2.plate, office: OFFICE_B.name, weight: 55, net: 50, sarf: 5 });
 await FinancialService.createReceipt(U, mkReceipt([row2, row3]));
 ok((await chargesFor(row2.row_id)).length === 1 && (await chargesFor(row3.row_id)).length === 1,
   'multiple receipt rows create one independently traceable company charge per row UUID');
@@ -106,24 +106,24 @@ ok((await vehicleBalanceCents(V1.id)) === 18000 && (await vehicleBalanceCents(V2
   'multiple receipt rows add each net amount once to their associated vehicle balances');
 
 console.log('\n— no company / unresolvable company safety —');
-const noCompanyRow = mkRow({ kartano: 'NONE', office: null, net: 40, sarf: 4 });
+const noCompanyRow = mkRow({ kartano: 'NONE', office: null, weight: 44, net: 40, sarf: 4 });
 await FinancialService.createReceipt(U, mkReceipt([noCompanyRow]));
 ok((await chargesFor(noCompanyRow.row_id)).length === 0,
   'rows without a company create no company ledger entry');
 const receiptsBeforeUnknown = (await DB.getAll('receipts', { username: U })).length;
 let unknownError = '';
 try {
-  await FinancialService.createReceipt(U, mkReceipt([mkRow({ office: 'شركة غير مسجلة', net: 10, sarf: 1 })]));
+  await FinancialService.createReceipt(U, mkReceipt([mkRow({ office: 'شركة غير مسجلة', weight: 11, net: 10, sarf: 1 })]));
 } catch (error) { unknownError = error.message; }
 ok(/unknown office/.test(unknownError) && (await DB.getAll('receipts', { username: U })).length === receiptsBeforeUnknown,
   'unresolvable company fails before the atomic receipt write and never fabricates an office');
 
 console.log('\n— edit lifecycle —');
-const lifecycleOld = mkRow({ kartano: 'EDIT-OLD', office: OFFICE_A.name, net: 30, sarf: 2 });
+const lifecycleOld = mkRow({ kartano: 'EDIT-OLD', office: OFFICE_A.name, weight: 32, net: 30, sarf: 2 });
 const lifecycleReceipt = await FinancialService.createReceipt(U, mkReceipt([lifecycleOld]));
 const lifecycleId = lifecycleReceipt.receipt.id;
 const oldCharge = (await chargesFor(lifecycleOld.row_id))[0];
-const lifecycleNew = mkRow({ kartano: 'EDIT-NEW', office: OFFICE_B.name, net: 10, sarf: 3 });
+const lifecycleNew = mkRow({ kartano: 'EDIT-NEW', office: OFFICE_B.name, weight: 13, net: 10, sarf: 3 });
 await FinancialService.updateReceipt(U, lifecycleId, mkReceipt([lifecycleNew]));
 const oldAudit = await chargesFor(lifecycleOld.row_id, false);
 const newCharge = (await chargesFor(lifecycleNew.row_id))[0];

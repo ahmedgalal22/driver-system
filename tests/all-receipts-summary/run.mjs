@@ -1,6 +1,7 @@
 // run.mjs — All Receipts summary totals regression.
 import { readFileSync } from 'node:fs';
 
+const { calculateWeightTotal } = await import('./services/financialCalculator.js');
 const SRC = readFileSync('./allReceipts.src.js', 'utf8');
 let failures = 0;
 const ok = (condition, label) => {
@@ -23,7 +24,7 @@ function extractFn(src, name) {
   throw new Error(`extractFn: ${name} unbalanced`);
 }
 
-const summaryApi = new Function(`
+const summaryApi = new Function('calculateWeightTotal', `
   const STATE = { filters: { receipts: { global: '', owner: '', company: '', vehicle: '', karta: '', type: '' } } };
   const toNumber = (value) => Number(value) || 0;
   const hasActiveRowFilters = (filters) => !!(
@@ -37,19 +38,19 @@ const summaryApi = new Function(`
   ${extractFn(SRC, 'sumVisibleRowField')}
   ${extractFn(SRC, 'summarizeReceipts')}
   return { STATE, summarizeReceipts };
-`)();
+`)(calculateWeightTotal);
 
 const records = [
   {
     rows: [
-      { _type: 'data', weightTotal: 10, noloon: 5, ohda: 1, net: 100, sarf: 7 },
+      { _type: 'data', weight: 10, weightTotal: 999, noloon: 5, ohda: 1, net: 100, sarf: 7 },
       { _type: 'separator', net: 999, sarf: 999 },
       { _type: 'data', weight: 4, weight2: 2, deficit: 1, noloon: 0, ohda: '', net: 0, sarf: '' },
     ],
   },
   {
     rows: [
-      { _type: 'data', weightTotal: 8, noloon: 9, ohda: 3, net: 250.5, sarf: 12.25 },
+      { _type: 'data', weight: 8, weight_total: 999, noloon: 9, ohda: 3, net: 250.5, sarf: 12.25 },
       { _type: 'data', weightTotal: '', weight: 0, weight2: 0, deficit: 0, noloon: null, ohda: null, net: null, sarf: null },
     ],
   },
@@ -57,8 +58,8 @@ const records = [
 
 console.log('\n— all loaded receipt rows —');
 let sums = summaryApi.summarizeReceipts(records);
-ok(sums.count === 4 && sums.weight === 23 && sums.noloon === 14 && sums.ohda === 4,
-  'existing count, weight, noloon, and ohda summary conventions remain unchanged');
+ok(sums.count === 4 && Math.abs(sums.weight - 21.999) < 1e-9 && sums.noloon === 14 && sums.ohda === 4,
+  'count and financial totals remain; weight uses the new formula rather than conflicting stored totals');
 ok(sums.net === 350.5,
   'إجمالي الصافي equals the sum of data-row net values across multiple receipts');
 ok(sums.sarf === 19.25,

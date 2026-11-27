@@ -71,7 +71,7 @@ await FinancialService.createReceipt(U, {
     _type: 'data', row_id: rowId, owner_id: OWNER_ID, owner_name: 'مالك الصيانة',
     driver_id: DRIVER_ID, driver_name: 'سائق الصيانة', vehicle_id: V1.id,
     vehicle_plate: V1.plate, driver_price: 0, loading: 'طنطا', destination: 'القاهرة',
-    office: OFFICE.name, advance: 0, net: 1000, sarf: 0,
+    office: OFFICE.name, advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 1000, net: 1000, sarf: 0,
   }],
 });
 await FinancialService.setReceiptRowPaymentStatus(U, rowId, 'paid');

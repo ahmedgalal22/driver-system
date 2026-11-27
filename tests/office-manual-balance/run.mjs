@@ -61,6 +61,7 @@ const receiptRow = {
   destination: 'القاهرة',
   office: OFFICE_A.name,
   advance: 0,
+  weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 18,
   net: 11,
   sarf: 7,
 };

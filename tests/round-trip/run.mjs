@@ -26,7 +26,7 @@ const { DB } = await import('./database.js');
 const { FinancialService } = await import('./financial.js');
 const { ReceiptReadRepository } = await import('./services/receiptReadRepository.js');
 const { Money } = await import('./money.js');
-const { calculateRowNet, calculateReceiptTotals } = await import('./services/financialCalculator.js');
+const { calculateRowNet, calculateReceiptTotals, calculateWeightTotal, isSeparatorRow } = await import('./services/financialCalculator.js');
 
 const U = 'roundtrip-tester';
 let failures = 0;
@@ -68,7 +68,7 @@ function fingerprint(src, snippet, label) {
 
 // Bind REAL functions into one scope (deps injected by name).
 const receiptsScope = new Function(
-  'Money', 'calculateRowNet', 'calculateReceiptTotals',
+  'Money', 'calculateRowNet', 'calculateReceiptTotals', 'calculateWeightTotal', 'isSeparatorRow',
   `
   ${extractBracketConst(RECEIPTS_SRC, 'ROW_TYPES', '{')};
   ${extractBracketConst(RECEIPTS_SRC, 'ROW_PAYMENT', '{')};
@@ -89,7 +89,7 @@ const receiptsScope = new Function(
            _persistedRowToUiShape, _buildServicePayload,
            getSnapshotCellRawValue, formatSnapshotCellValue };
   `
-)(Money, calculateRowNet, calculateReceiptTotals);
+)(Money, calculateRowNet, calculateReceiptTotals, calculateWeightTotal, isSeparatorRow);
 
 const allReceiptsScope = new Function(
   'Money',
@@ -124,7 +124,7 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
   ["driver_id    : rowDriverId || null, // authoritative relationship: THIS row → driver (no selected driver → null)", 'collector persists row.driver_id (Receipt Row → Driver; vehicle carries no driver)'],
   ["weight       : _num(row, 'receipt-weight')", 'collector maps weight'],
-  ["weight2      : _num(row, 'receipt-weight2')", 'collector maps weight2'],
+  ["weight2      : row.dataset.weight2", 'collector preserves hidden stored weight2'],
   ["deficit      : _num(row, 'receipt-deficit')", 'collector maps deficit'],
   ["type         : normalizeOptionalString(_field(row, 'receipt-type'))", 'collector maps type'],
   ["office       : normalizeOptionalString(_field(row, 'receipt-office'))", 'collector maps office'],
@@ -282,7 +282,7 @@ ok(hamzaRows.length === 1,
 const rowA_net = calculateRowNet({
   weight: 50, weight2: 10, deficit: 2, noloon: 20, ohda: 150,
   officeAmount: 75, discount: 25, add: 40, sarf: 30,
-}); // (50+10-2)*20 - (150+75+25) + 40 - 30 = 920
+}); // (50 - 2/1000)*20 - (150+75+25) + 40 - 30 = 759.96
 const rowB_net = calculateRowNet({
   weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50,
   officeAmount: 0, discount: 0, add: 0, sarf: 0,
@@ -304,7 +304,7 @@ const FORM_PAYLOAD = {
       kartano: 'K-100', date: '2026-07-29', data: 'السائق أحمد', driver_name: 'السائق أحمد', driver_id: 'drv-1',
       car: 'أ ب ج 1234', vehicle_id: 'veh-1', vehicle_plate: 'أ ب ج 1234',
       loading: 'طنطا', taktik: 'القاهرة', type: 'قمح', office: 'شركة الأمل',
-      weight: 50, weight2: 10, deficit: 2, weightTotal: 58,
+      weight: 50, weight2: 10, deficit: 2, weightTotal: 49.998,
       noloon: 20, ohda: 150, officeAmount: 75, discount: 25, sarf: 30, add: 40,
       net: rowA_net },
     { _type: 'separator', vehicleName: 'أ ب ج 1234', subtotal: rowA_net, notes: 'ملاحظة الفاصل', isAuto: false },
@@ -371,7 +371,7 @@ ok(persistedHeader.vehicle_id === undefined, 'LOST: header.vehicle_id NOT persis
 // Header survivors
 ok(persistedHeader.client_id === 'owner-1' && persistedHeader.client_name === 'مالك الاختبار'
    && persistedHeader.receipt_date === '2026-07-29', 'KEPT: client_id / client_name / receipt_date');
-ok(persistedHeader.total === Money.toCents(1170) && persistedHeader.general_add === undefined
+ok(persistedHeader.total === Money.toCents(1009.96) && persistedHeader.general_add === undefined
    && persistedHeader.net_due === undefined && persistedHeader.net_total === undefined
    && persistedHeader.previous_balance === undefined && persistedHeader.paid === undefined,
    `REMOVED (General Add + Net Due + Net Total + Paid + Client Balance phases): header.general_add / header.net_due / header.net_total / header.paid / header.previous_balance not persisted (total=${persistedHeader.total})`);
@@ -385,7 +385,7 @@ const restoredRowFields = ['kartano', 'date', 'driver_name', 'weight', 'weight2'
 ok(restoredRowFields.every(f => f in pA),
    `KEPT (Phase 5 — Step 2): all restored row columns present in store: [${restoredRowFields.join(', ')}]`);
 ok(pA.kartano === 'K-100' && pA.date === '2026-07-29' && pA.driver_name === 'السائق أحمد' && pA.type === 'قمح'
-   && pA.weight === 50 && pA.weight2 === 10 && pA.deficit === 2 && pA.weightTotal === 58
+   && pA.weight === 50 && pA.weight2 === 10 && pA.deficit === 2 && pA.weightTotal === 49.998
    && pA.officeAmount === 7500 && pA.discount === 2500 && pA.add === 4000 && pA.row_order === 0
    && !('data' in pA),
    'KEPT: entered values exact — strings/quantities raw, officeAmount/discount/add integer cents (7500/2500/4000); UI-alias "data" intentionally not stored');
@@ -396,7 +396,7 @@ ok(pB && pB.driver_id === null && pB.driver_name === null,
    `driver-less row persisted with driver_id=null → excluded from every driver's Details (driver_id=${J(pB?.driver_id)}, driver_name=${J(pB?.driver_name)})`);
 ok(pA.vehicle_plate === 'أ ب ج 1234' && pA.office === 'شركة الأمل' && pA.loading === 'طنطا'
    && pA.destination === 'القاهرة', 'KEPT: vehicle_plate / office / loading / destination');
-ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 92000 && pA.sarf === 3000,
+ok(pA.driver_price === 2000 && pA.advance === 15000 && pA.net === 75996 && pA.sarf === 3000,
    `KEPT: money in cents (driver_price=${pA.driver_price}, advance=${pA.advance}, net=${pA.net}, sarf=${pA.sarf})`);
 const ledger = await DB.getByIndex('vehicle_ledger', 'by_reference_id', rid);
 ok(ledger.length === 0,
@@ -442,7 +442,6 @@ const snapshotCols = COL_DEFS.filter(c => c.key !== '_actions');
 const enteredA = FORM_PAYLOAD.rows[0];
 const displayTable = snapshotCols.map(col => {
   const entered = col.key === 'data' ? enteredA.data
-    : col.key === 'weightTotal' ? enteredA.weightTotal
     : (enteredA[col.key] ?? '');
   return { col: col.key, entered, rendered: receiptsScope.formatSnapshotCellValue(pageRowA, col), raw: getSnapshotCellRawValue(pageRowA, col) };
 });
@@ -454,12 +453,12 @@ const dmap = Object.fromEntries(displayTable.map(t => [t.col, t.rendered]));
 ok(dmap.car === 'أ ب ج 1234' && dmap.office === 'شركة الأمل' && dmap.loading === 'طنطا' && dmap.taktik === 'القاهرة',
    'AllForms OK: car / office / loading / taktik(الجهة)');
 ok(dmap.noloon === '20' && dmap.ohda === '150', `AllForms OK: نولون=${dmap.noloon} عهدة=${dmap.ohda} (cents→decimal)`);
-ok(dmap.sarf === '30.00' && dmap.net === '920.00', `AllForms OK: sarf=${dmap.sarf} net=${dmap.net} (persisted net displays CORRECTLY)`);
+ok(dmap.sarf === '30.00' && dmap.net === '759.96', `AllForms OK: sarf=${dmap.sarf} net=${dmap.net} (persisted net displays CORRECTLY)`);
 // Restored columns render the entered values (Phase 5 — Step 3 read bridges)
 ok(dmap.kartano === 'K-100' && dmap.date === '2026-07-29' && dmap.data === 'السائق أحمد' && dmap.type === 'قمح',
    `AllForms RESTORED: رقم الكارتة=${J(dmap.kartano)} / التاريخ=${J(dmap.date)} / اسم السائق=${J(dmap.data)} / النوع=${J(dmap.type)}`);
-ok(Number(dmap.weight) === 50 && Number(dmap.weight2) === 10 && Number(dmap.deficit) === 2 && Number(dmap.weightTotal) === 58,
-   `AllForms RESTORED: وزن وش=${J(dmap.weight)} / وزن م=${J(dmap.weight2)} / عجز=${J(dmap.deficit)} / الوزن=${J(dmap.weightTotal)}`);
+ok(Number(dmap.weight) === 50 && Number(dmap.deficit) === 2 && dmap.weight2 === undefined && dmap.weightTotal === undefined,
+   `AllForms RESTORED: وزن وش=${J(dmap.weight)} / عجز=${J(dmap.deficit)}`);
 ok(Number(dmap.officeAmount) === 75 && Number(dmap.add) === 40 && Number(dmap.discount) === 25,
    `AllForms RESTORED: مكتب=${J(dmap.officeAmount)} / إضافة=${J(dmap.add)} / خصم=${J(dmap.discount)} (cents→decimal)`);
 // Card header
@@ -480,8 +479,8 @@ console.log('\n══ STAGE F — edit form reconstruction (REAL bridge) ══'
   "setF('receipt-kartano',       ui.kartano);",
   "setF('receipt-data',          rowData.driver_id ? (driverNames.get(rowData.driver_id) || '') : '');",
   "setF('receipt-car',           ui.car);",
-  "setF('receipt-noloon',        ui.noloon ? Money.fmt(ui.noloon) : '');",
-  "setF('receipt-net',           Money.fmt(ui.net || 0));",
+  "setF('receipt-noloon',        Money.fmt(ui.noloon));",
+  "setF('receipt-net',           Money.fmt(calculateRowNet(ui)));",
 ].forEach((s) => fingerprint(RECEIPTS_SRC, s, 'loadReceiptForEdit mapping: ' + s.slice(0, 44)));
 fingerprint(RECEIPTS_SRC, 'if (d) driverNames.set(did, d.name || \'\');', 'driver-name fallback resolution via driver_id (bridge prefers persisted driver_name)');
 fingerprint(RECEIPTS_SRC, "el.id = 'driverACList';",
@@ -503,25 +502,25 @@ const simDriverNames = new Map([[pA.driver_id, 'السائق أحمد']]);
 const editFields = {
   'receipt-kartano': uiA.kartano, 'receipt-date': uiA.date,
   'receipt-data': pA.driver_id ? (simDriverNames.get(pA.driver_id) || '') : '',
-  'receipt-car': uiA.car, 'receipt-weight': uiA.weight, 'receipt-weight2': uiA.weight2,
+  'receipt-car': uiA.car, 'receipt-weight': uiA.weight,
   'receipt-deficit': uiA.deficit, 'receipt-type': uiA.type, 'receipt-office': uiA.office,
   'receipt-loading': uiA.loading, 'receipt-taktik': uiA.taktik,
-  'receipt-noloon': uiA.noloon ? Money.fmt(uiA.noloon) : '',
-  'receipt-ohda': uiA.ohda ? Money.fmt(uiA.ohda) : '',
+  'receipt-noloon': Money.fmt(uiA.noloon),
+  'receipt-ohda': Money.fmt(uiA.ohda),
   'receipt-office-amount': uiA.officeAmount, 'receipt-discount': uiA.discount,
-  'receipt-sarf': uiA.sarf ? Money.fmt(uiA.sarf) : '', 'receipt-add': uiA.add,
-  'receipt-net': Money.fmt(uiA.net || 0),
+  'receipt-sarf': Money.fmt(uiA.sarf), 'receipt-add': uiA.add,
+  'receipt-net': Money.fmt(calculateRowNet(uiA)),
 };
 for (const [k, v] of Object.entries(editFields)) console.log(`   ${k.padEnd(22)} = ${J(v)}`);
 ok(editFields['receipt-car'] === 'أ ب ج 1234' && editFields['receipt-office'] === 'شركة الأمل'
    && editFields['receipt-loading'] === 'طنطا' && editFields['receipt-taktik'] === 'القاهرة',
    'Edit OK: car / office / loading / taktik reconstructed');
 ok(editFields['receipt-noloon'] === '20.00' && editFields['receipt-ohda'] === '150.00'
-   && editFields['receipt-sarf'] === '30.00' && editFields['receipt-net'] === '920.00',
+   && editFields['receipt-sarf'] === '30.00' && editFields['receipt-net'] === '759.96',
    'Edit OK: نولون / عهدة / sarf / net reconstructed from persisted cents');
 ok(editFields['receipt-kartano'] === 'K-100' && editFields['receipt-date'] === '2026-07-29'
    && editFields['receipt-data'] === 'السائق أحمد' && editFields['receipt-type'] === 'قمح'
-   && editFields['receipt-weight'] === 50 && editFields['receipt-weight2'] === 10 && editFields['receipt-deficit'] === 2
+   && editFields['receipt-weight'] === 50 && editFields['receipt-deficit'] === 2
    && editFields['receipt-office-amount'] === 75 && editFields['receipt-discount'] === 25 && editFields['receipt-add'] === 40,
    `Edit RESTORED: kartano / row date / driver autocomplete shows the driver NAME resolved id→name via the driver record (${J(editFields['receipt-data'])}) / type / weights / officeAmount / discount / add reconstructed exactly as entered`);
 ok(uiA.data === 'السائق أحمد',
@@ -547,7 +546,6 @@ ok(!RECEIPTS_SRC.includes('getReceiptByNumber'),
 // persisted net exactly.
 const recomputedA = calculateRowNet({
   weight: parseFloat(editFields['receipt-weight']) || 0,
-  weight2: parseFloat(editFields['receipt-weight2']) || 0,
   deficit: parseFloat(editFields['receipt-deficit']) || 0,
   noloon: parseFloat(editFields['receipt-noloon']) || 0,
   ohda: parseFloat(editFields['receipt-ohda']) || 0,
@@ -556,20 +554,20 @@ const recomputedA = calculateRowNet({
   add: parseFloat(editFields['receipt-add']) || 0,
   sarf: parseFloat(editFields['receipt-sarf']) || 0,
 });
-console.log(`   row A: persisted net=920  →  recomputed after reconstruction=${recomputedA}`);
-ok(recomputedA === 920 && recomputedA === Money.toDecimal(pA.net),
+console.log(`   row A: persisted net=759.96  →  recomputed after reconstruction=${recomputedA}`);
+ok(recomputedA === 759.96 && recomputedA === Money.toDecimal(pA.net),
    `Edit re-save recompute = ${recomputedA} == persisted net (${Money.toDecimal(pA.net)}) — NO corruption; unchanged calculator + reconstructed inputs`);
 const rebuiltTotals = calculateReceiptTotals(
   [
     // row A — built from the REAL reconstructed bridge output (uiA)
-    { weight: Number(uiA.weight) || 0, weight2: Number(uiA.weight2) || 0, deficit: Number(uiA.deficit) || 0,
+    { weight: Number(uiA.weight) || 0, deficit: Number(uiA.deficit) || 0,
       noloon: uiA.noloon, ohda: uiA.ohda, officeAmount: uiA.officeAmount, discount: uiA.discount,
       add: uiA.add, sarf: uiA.sarf },
     // row B — entered values (same reconstruction established)
     { weight: 30, weight2: 0, deficit: 0, noloon: 10, ohda: 50, officeAmount: 0, discount: 0, add: 0, sarf: 0 },
   ]);
 console.log(`   totals frame after loadReceiptForEdit→calculateTotals(): total=${rebuiltTotals.total}`);
-ok(rebuiltTotals.total === 1170 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === undefined,
+ok(rebuiltTotals.total === 1009.96 && rebuiltTotals.net_total === undefined && rebuiltTotals.balance === undefined,
    `REMOVED-CONTRACT (Net Due + Net Total + Client Balance phases): calculator returns {total} only — total=${rebuiltTotals.total}, balance=${rebuiltTotals.balance}`);
 fingerprint(FINANCIAL_SRC, "throw new Error('[FinancialService] total must be a non-negative number.');",
   'FinancialService would reject negative total on save (if the number gate were bypassed)');

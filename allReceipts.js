@@ -1,5 +1,6 @@
 import { ReceiptsModule } from './receipts.js';
 import { Money } from './money.js';
+import { calculateWeightTotal } from './services/financialCalculator.js';
 import { FinancialService } from './financial.js';
 import {
   loadReceiptForEdit,
@@ -162,7 +163,7 @@ const _receiptRowsProjection = new Map();
  * Bridge one persisted ReceiptRow (persisted contract, money in CENTS:
  * { row_id, receipt_id, driver_id, vehicle_id, vehicle_plate, driver_price,
  *   loading, destination, office, advance, net, sarf, kartano, date,
- *   driver_name, weight, weight2, deficit, weightTotal, type, officeAmount,
+ *   driver_name, weight, deficit, type, officeAmount,
  *   discount, add, row_order })
  * into the read-side vocabulary this page renders/prints (money in DECIMALS).
  * Mirrors the receipts.js read boundary. Every user-entered column is
@@ -194,8 +195,7 @@ function _persistedRowToPageRow(row) {
     data: driverName, driver: driverName,
     owner_name: '', notes: '',
     type: row.type ?? '',
-    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
-    weightTotal: row.weightTotal ?? '', weight_total: row.weightTotal ?? '',
+    weight: row.weight ?? '', deficit: row.deficit ?? '',
     // ── money: cents → decimals ──
     discount: Money.toDecimal(row.discount ?? 0),
     officeAmount: Money.toDecimal(row.officeAmount ?? 0),
@@ -293,13 +293,7 @@ function sumVisibleRowWeight(rows) {
   return rows
     .filter((row) => row._type !== 'separator')
     .reduce((sum, row) => {
-      if (row.weightTotal != null && row.weightTotal !== '') {
-        return sum + toNumber(row.weightTotal);
-      }
-      if (row.weight_total != null && row.weight_total !== '') {
-        return sum + toNumber(row.weight_total);
-      }
-      return sum + toNumber(row.weight) + toNumber(row.weight2) - toNumber(row.deficit);
+      return sum + calculateWeightTotal(row);
     }, 0);
 }
 
@@ -692,7 +686,7 @@ function serializeCurrentView(_tab) {
  * Mirrors the summary cards shown on screen above the list.
  *
  * Money units:
- *   weight, noloon, ohda   → DECIMAL (summed directly from row fields)
+ *   weight → calculated from row inputs; noloon and ohda → summed decimals
  *   count                  → integer
  */
 function _buildReceiptsBulkSummary(sums) {
@@ -819,11 +813,11 @@ function buildReceiptPrintBlock(record) {
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
 //   • Top-level money field (total) is stored as CENTS → Money.fmtCents().
 //   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
-//     weight2, deficit, weightTotal) are stored as DECIMALS → Money.fmt().
+//     deficit) are stored as DECIMALS → Money.fmt().
 //   • Separator rows (_type === 'separator') carry vehicleName, subtotal, notes.
 //     subtotal is a DECIMAL (not cents) — matches how getSnapshotCellRawValue
 //     handles separator rows.
-//   • Conditional columns (weight, weight2, add) are included only when at
+//   • Conditional columns (weight, add) are included only when at
 //     least one data row has a non-zero value for that field.
 //   • Rendered via printEngine.js buildPrintDocument() — no raw HTML wrapper,
 //     no window.open, no DOM cloning.
@@ -843,9 +837,7 @@ const _RECEIPT_PRINT_COLS = Object.freeze([
   { key: 'data',         label: 'اسم السائق',    type: 'text',   printHide: false, conditional: false },
   { key: 'car',          label: 'رقم المركبة',   type: 'text',   printHide: false, conditional: false },
   { key: 'weight',       label: 'وزن وش',        type: 'number', printHide: false, conditional: true  },
-  { key: 'weight2',      label: 'وزن م',         type: 'number', printHide: false, conditional: true  },
   { key: 'deficit',      label: 'عجز',           type: 'number', printHide: false, conditional: false },
-  { key: 'weightTotal',  label: 'الوزن',         type: 'number', printHide: false, conditional: false },
   { key: 'loading',      label: 'التحميل',       type: 'text',   printHide: false, conditional: false },
   { key: 'taktik',       label: 'الجهة',         type: 'text',   printHide: false, conditional: false },
   { key: 'type',         label: 'النوع',         type: 'text',   printHide: false, conditional: false },
@@ -867,7 +859,6 @@ const _RECEIPT_PRINT_COLS = Object.freeze([
  * Row field storage:
  *   - Text fields  → stored as strings.
  *   - Number fields → stored as DECIMALS (not cents).
- *   - weightTotal  → may be pre-calculated or absent (fallback: w+w2-deficit).
  */
 function _receiptPrintGetCellValue(row, colKey) {
   switch (colKey) {
@@ -886,19 +877,8 @@ function _receiptPrintGetCellValue(row, colKey) {
     }
     case 'weight':
       return row.weight ?? '';
-    case 'weight2':
-      return row.weight2 ?? '';
     case 'deficit':
       return row.deficit ?? '';
-    case 'weightTotal': {
-      // Pre-calculated field — fall back to arithmetic for legacy records.
-      if (row.weightTotal != null && row.weightTotal !== '') return row.weightTotal;
-      if (row.weight_total != null && row.weight_total !== '') return row.weight_total;
-      const w1 = Number(row.weight)  || 0;
-      const w2 = Number(row.weight2) || 0;
-      const d  = Number(row.deficit) || 0;
-      return (w1 > 0 || w2 > 0) ? (w1 + w2 - d) : '';
-    }
     case 'loading':
       return row.loading ?? '';
     case 'taktik':

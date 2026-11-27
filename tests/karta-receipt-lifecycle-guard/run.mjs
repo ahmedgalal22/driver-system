@@ -32,7 +32,7 @@ const mkRow = ({ row_id = uuid(), price = 50, kartano = row_id }) => ({
   vehicle_id: VEHICLE.id, vehicle_plate: VEHICLE.plate,
   driver_price: 10, driver_settlement_price: price,
   loading: 'طنطا', destination: 'القاهرة', office: null,
-  advance: 0, net: 10, sarf: 0, kartano,
+  advance: 0, weight: 1, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 10, sarf: 0, kartano,
 });
 
 function payload(rows) {

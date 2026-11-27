@@ -4,7 +4,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 W="${TMPDIR:-/tmp}/wpt-all-receipts-summary"
-rm -rf "$W"; mkdir -p "$W"
+rm -rf "$W"; mkdir -p "$W/services"
+cp "$ROOT/money.js" "$W/"
+cp "$ROOT/services/financialCalculator.js" "$W/services/"
 cp "$ROOT/allReceipts.js" "$W/allReceipts.src.js"
 cp "$(dirname "${BASH_SOURCE[0]}")/run.mjs" "$W/"
 cd "$W" && node run.mjs

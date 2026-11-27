@@ -29,9 +29,9 @@ await ClientRepository.saveVehicle(V2, { username: U });
 
 const row = (over = {}) => ({
   _type: 'data', row_id: uuid(), owner_id: OWNER, owner_name: 'Owner C', driver_id: null,
-  vehicle_id: V1.id, vehicle_plate: V1.plate, driver_price: 0, driver_settlement_price: null,
+  vehicle_id: V1.id, vehicle_plate: V1.plate, driver_price: 1, driver_settlement_price: null,
   kartano: 'VC-1', date: '2026-03-10', loading: 'طنطا', destination: 'القاهرة',
-  office: OFFICE.name, advance: 0, net: 100, sarf: 15, weight: 0, weight2: 0,
+  office: OFFICE.name, advance: 0, net: 100, sarf: 15, weight: 115, weight2: 0,
   deficit: 0, officeAmount: 0, discount: 0, add: 0, ...over,
 });
 const payload = (rows, over = {}) => ({
@@ -94,7 +94,7 @@ ok(!result.changed && (await effects(stored.row_id)).vehicle.length === 1,
   'repeated unpaid status is idempotent');
 
 console.log('\n— edit identities —');
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, net: 120, sarf: 15 }]));
+await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15 }]));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const netEditReversed = state.all.find(entry => entry.id === initialVehicleId);
@@ -106,7 +106,7 @@ ok((await vehicleBalance(V1.id)) === 12000 && (await officeBalance()) === -13500
   'net edit updates both creation-side balances exactly once');
 const netEditVehicleId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate }]));
+await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate }]));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const vehicleEditReversed = state.all.find(entry => entry.id === netEditVehicleId);
@@ -118,7 +118,7 @@ ok((await vehicleBalance(V1.id)) === 0 && (await vehicleBalance(V2.id)) === 1200
   'vehicle edit moves the creation balance exactly once');
 const vehicleEditId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
+await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const dateEditReversed = state.all.find(entry => entry.id === vehicleEditId);
@@ -128,12 +128,12 @@ ok(dateEditReversed?.is_reversed === true
 'date edit retains the prior creation entry as reversed and creates exactly one active entry with the updated business date');
 const dateEditVehicleId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, net: 120, sarf: 20, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
+await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 115, sarf: 20, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
 state = await effects(stored.row_id);
-ok(state.vehicle.length === 1 && state.vehicle[0].id === dateEditVehicleId,
-  'sarf-only edit leaves vehicle creation entry untouched');
-ok((await vehicleBalance(V2.id)) === 12000 && (await officeBalance()) === -14000,
-  'sarf-only edit changes office creation amount without changing vehicle balance');
+ok(state.vehicle.length === 1 && state.vehicle[0].id !== dateEditVehicleId,
+  'sarf-only edit replaces the vehicle entry because net changes');
+ok((await vehicleBalance(V2.id)) === 11500 && (await officeBalance()) === -13500,
+  'sarf-only edit changes net while leaving the company charge unchanged');
 
 console.log('\n— deletion and transaction rollback —');
 await FinancialService.deleteReceipt(U, receiptId);

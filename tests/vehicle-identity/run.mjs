@@ -119,8 +119,8 @@ const rowPayload = () => ({
   data: null, driver_name: null, driver_id: null,
   car: v1.plate, vehicle_id: v1.id, vehicle_plate: v1.plate,
   loading: 'طنطا', taktik: 'القاهرة', type: 'نشا', office: 'شركة أ',
-  weight: 10, weight2: 5, deficit: 1, weightTotal: 14,
-  noloon: 100, ohda: 50, officeAmount: 25, discount: 0, sarf: 0, add: 0, net: 500,
+  weight: 10, weight2: 5, deficit: 1, weightTotal: 9.999,
+  driver_price: 100, advance: 50, officeAmount: 25, discount: 0, sarf: 0, add: 0, net: 924.9,
 });
 const created = await FinancialService.createReceipt(U, {
   receipt_date: '2026-08-10',

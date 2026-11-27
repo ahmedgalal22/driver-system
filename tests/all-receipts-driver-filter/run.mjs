@@ -1,5 +1,6 @@
 // run.mjs — All Receipts driver-name filter regression.
 import { readFileSync } from 'node:fs';
+import { calculateWeightTotal } from './services/financialCalculator.js';
 
 const SRC = readFileSync('./allReceipts.src.js', 'utf8');
 let failures = 0;
@@ -23,7 +24,7 @@ function extractFn(src, name) {
   throw new Error(`extractFn: ${name} unbalanced`);
 }
 
-const api = new Function(`
+const api = new Function('calculateWeightTotal', `
   const STATE = { filters: { receipts: { global: '', owner: '', company: '', driver: '', vehicle: '', karta: '', type: '' } } };
   const toNumber = (value) => Number(value) || 0;
   const rowContains = (value, query) => !query || String(value ?? '').toLowerCase().includes(query);
@@ -38,14 +39,14 @@ const api = new Function(`
   ${extractFn(SRC, 'summarizeReceipts')}
   ${extractFn(SRC, 'getReceiptCardsFiltered')}
   return { STATE, getDisplayRowsForReceipt, summarizeReceipts, getReceiptCardsFiltered, rowMatchesReceiptFilters };
-`)();
+`)(calculateWeightTotal);
 
 const records = [
   { owner_name: 'مالك أ', company_name: 'شركة أ', rows: [
-    { _type: 'data', data: 'أحمد محمد', driver: 'أحمد محمد', office: 'شركة أ', net: 100, sarf: 10, noloon: 20, ohda: 5, weightTotal: 8 },
+    { _type: 'data', data: 'أحمد محمد', driver: 'أحمد محمد', office: 'شركة أ', net: 100, sarf: 10, noloon: 20, ohda: 5, weight: 8, weightTotal: 8 },
   ] },
   { owner_name: 'مالك ب', company_name: 'شركة ب', rows: [
-    { _type: 'data', data: 'محمد علي', driver: 'محمد علي', office: 'شركة ب', net: 50, sarf: 2, noloon: 10, ohda: 1, weightTotal: 4 },
+    { _type: 'data', data: 'محمد علي', driver: 'محمد علي', office: 'شركة ب', net: 50, sarf: 2, noloon: 10, ohda: 1, weight: 4, weightTotal: 4 },
   ] },
 ];
 

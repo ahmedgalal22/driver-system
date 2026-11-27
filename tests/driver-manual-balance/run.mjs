@@ -185,6 +185,7 @@ const kartaRow = {
   destination: 'القاهرة',
   office: null,
   advance: 0,
+  weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 10,
   net: 10,
   sarf: 0,
 };

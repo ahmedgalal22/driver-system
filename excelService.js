@@ -127,7 +127,7 @@ function _parseBuffer(buffer) {
   const ws = wb.Sheets[sheetName];
   const rows = XL.utils.sheet_to_json(ws, { defval: '' });
   const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
-  return { headers, rows };
+  return { headers, rows, worksheet: ws };
 }
 
 // ─── INTERNAL: SAFE NUMBER ────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ export function parseImportedDate(value) {
 /**
  * Column definitions for receipt Excel export/import.
  * Mirrors COL_DEFS from receipts.js but scoped to this module.
- * Excludes: _actions (UI only), net & weightTotal (calculated by the form).
+ * Excludes UI-only actions. Net is export-only.
  *
  * key    → field name in stored row object (DB field)
  * header → Arabic column label shown in Excel header
@@ -288,7 +288,6 @@ const _RECEIPT_COLS = Object.freeze([
   { key: 'data',         header: 'اسم السائق',     type: 'text'   },
   { key: 'car',          header: 'رقم المركبة',    type: 'text'   },
   { key: 'weight',       header: 'وزن وش',         type: 'number' },
-  { key: 'weight2',      header: 'وزن م',          type: 'number' },
   { key: 'deficit',      header: 'عجز',            type: 'number' },
   { key: 'office',       header: 'اسم المكتب',     type: 'text'   },
   { key: 'loading',      header: 'التحميل',        type: 'text'   },
@@ -300,6 +299,7 @@ const _RECEIPT_COLS = Object.freeze([
   { key: 'add',          header: 'إضافة',          type: 'number' },
   { key: 'discount',     header: 'خصم',           type: 'number' },
   { key: 'sarf',         header: 'الصرف',         type: 'number' },
+  { key: 'net',          header: 'الصافي',         type: 'number' },
 ]);
 
 // Full header list used in import validation error messages.
@@ -309,7 +309,7 @@ const _RECEIPT_REQUIRED_HEADERS = _RECEIPT_COLS.map(c => c.header);
  * exportReceiptRows(rows, filename?)
  *
  * Exports data rows from the receipt form to Excel.
- * Skips separator rows (_type === 'separator') and calculated fields (net, weightTotal).
+ * Skips separator rows (_type === 'separator'); exports the calculated net.
  * Triggers a browser download immediately.
  *
  * @param {object[]} rows     - Array of row data objects from the form/record
@@ -334,7 +334,9 @@ function exportReceiptRows(rows, filename) {
     for (const col of _RECEIPT_COLS) {
       const raw = row[col.key] ?? '';
       obj[col.header] = col.type === 'number'
-        ? (raw === '' || raw === null || raw === undefined ? '' : _num(raw))
+        ? (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '') ? ''
+          : ((typeof raw === 'number' || typeof raw === 'string') && Number.isFinite(Number(raw))
+            ? Number(raw) : String(raw)))
         : _str(raw);
     }
     return obj;
@@ -361,7 +363,7 @@ async function importReceiptRows(file) {
   _assertExcelFile(file);
 
   const buffer = await _readFileBuffer(file);
-  const { headers, rows } = _parseBuffer(buffer);
+  const { headers, rows, worksheet } = _parseBuffer(buffer);
 
   // Validate: file must have at least one expected column
   const matchedCols = _RECEIPT_COLS.filter(col => headers.includes(col.header));
@@ -376,9 +378,33 @@ async function importReceiptRows(file) {
     throw new Error('الملف لا يحتوي على بيانات.');
   }
 
+  // Never silently discard a meaningful value from the removed column. Blank
+  // and zero legacy cells remain compatible; other values require review.
+  const XL = _xlsx();
+  const isLegacyHeader = header => /^وزن\s+م(?:\s*_\s*\d+)*$/u.test(String(header ?? '').trim());
+  let invalidCell = false;
+  if (worksheet['!ref']) {
+    const range = XL.utils.decode_range(worksheet['!ref']);
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const header = worksheet[XL.utils.encode_cell({r: range.s.r, c})];
+      if (!isLegacyHeader(header?.v)) continue;
+      for (let r = range.s.r + 1; r <= range.e.r; r++) {
+        if (worksheet[XL.utils.encode_cell({r, c})]?.t === 'e') invalidCell = true;
+      }
+    }
+  }
+  if (invalidCell || rows.some(r => Object.entries(r).some(([header, value]) => {
+    // SheetJS suffixes repeated headers with _1, _2, etc.
+    if (!isLegacyHeader(header)) return false;
+    if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return false;
+    if (typeof value !== 'number' && typeof value !== 'string') return true;
+    return !Number.isFinite(Number(value)) || Number(value) !== 0;
+  }))) {
+    throw new Error('يحتوي الملف على قيم في عمود وزن م الملغى. راجع الملف وأزل هذه القيم قبل الاستيراد؛ لا تدخل في الحساب الجديد.');
+  }
+
   // Map Excel rows → receipt row objects.
-  // net and weightTotal are calculated fields — the import handler recomputes
-  // them inline from the imported values before inserting rows into the form.
+  // The form computes net from imported inputs.
   const result = rows
     .filter(r => {
       // Skip fully empty rows
@@ -391,14 +417,14 @@ async function importReceiptRows(file) {
         if (col.key === 'date') {
           cellVal = parseImportedDate(cellVal);
         }
+        // Keep absent and invalid calculation inputs visible for correction;
+        // they must not silently become zero before the write boundary.
         row[col.key] = col.type === 'number'
-          ? _num(cellVal)
+          ? ((typeof cellVal === 'number' || (typeof cellVal === 'string' && cellVal.trim() !== ''))
+              && Number.isFinite(Number(cellVal)) ? Number(cellVal) : cellVal)
           : _str(cellVal);
       }
-      // net and weightTotal will be computed by the import handler from
-      // the raw values above — no event dispatching needed.
-      row.net         = 0;
-      row.weightTotal = 0;
+      row.net = 0;
       row._type       = 'data';
       return row;
     });
@@ -586,7 +612,7 @@ async function importEntitiesExcel(file) {
  *
  * Money semantics:
  *   - Row-level numeric fields (net, ohda, noloon, officeAmount, add,
- *     weight, weight2, deficit, weightTotal) → stored as DECIMALS.
+ *     weight and deficit) → stored as DECIMALS.
  *   - Exported as-is (no conversion needed).
  *
  * "صاحب المركبة" comes from the parent record (record.owner_name ||
@@ -599,20 +625,7 @@ const _ALL_RECEIPTS_COLS = Object.freeze([
   { header: 'صاحب المركبة', getValue: (_row, rec)  => _str(rec.owner_name ?? rec.client_name ?? '') },
   { header: 'رقم المركبة',  getValue: (row, _rec) => _str(row.car ?? row.vehicle_plate ?? row.carNo ?? '') },
   { header: 'وزن وش',        getValue: (row, _rec) => _allReceiptsNum(row.weight) },
-  { header: 'وزن م',         getValue: (row, _rec) => _allReceiptsNum(row.weight2) },
   { header: 'عجز',           getValue: (row, _rec) => _allReceiptsNum(row.deficit) },
-  {
-    header: 'الوزن',
-    getValue: (row, _rec) => {
-      // weightTotal may be pre-calculated or absent (legacy records)
-      if (row.weightTotal != null && row.weightTotal !== '') return _allReceiptsNum(row.weightTotal);
-      if (row.weight_total != null && row.weight_total !== '') return _allReceiptsNum(row.weight_total);
-      const w1 = Number(row.weight)  || 0;
-      const w2 = Number(row.weight2) || 0;
-      const d  = Number(row.deficit) || 0;
-      return (w1 > 0 || w2 > 0) ? _allReceiptsNum(w1 + w2 - d) : '';
-    },
-  },
   { header: 'اسم المكتب',   getValue: (row, _rec) => _str(row.office ?? '') },
   { header: 'التحميل',      getValue: (row, _rec) => _str(row.loading ?? '') },
   { header: 'الجهة',        getValue: (row, _rec) => _str(row.taktik ?? row.direction ?? '') },

@@ -34,6 +34,7 @@ import { createPersistenceCommand, PersistenceCommandType } from './services/per
 import { DriverKartaReadRepository } from './services/driverKartaReadRepository.js';
 import { LedgerIntegrityDiagnosticService } from './services/ledgerIntegrityDiagnosticService.js';
 import { Money } from './money.js';
+import { calculateRowNet, calculateWeightTotal, isSeparatorRow } from './services/financialCalculator.js';
 import { DateUtils } from './dateUtils.js';
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ function _validateReceiptHeader(data) {
 }
 
 function _validateReceiptRows(rows) {
-  const dataRows = Array.isArray(rows) ? rows.filter(r => r && r._type !== 'separator') : [];
+  const dataRows = Array.isArray(rows) ? rows.filter(r => r && !isSeparatorRow(r)) : [];
   if (dataRows.length === 0) {
     throw new Error('[FinancialService] rows must contain at least one data row.');
   }
@@ -245,7 +246,34 @@ function _validate(data) {
   const header = _validateReceiptHeader(data);
 
   // Delegate row validation to the dedicated helper
-  const dataRows = _validateReceiptRows(data.rows);
+  const rows = _validateReceiptRows(data.rows);
+  const dataRows = rows.map(row => {
+    const quantities = ['weight', 'deficit'];
+    const monetary = ['driver_price', 'advance', 'officeAmount', 'discount', 'add', 'sarf'];
+    const clean = { ...row };
+    for (const key of [...quantities, ...monetary]) {
+      const value = row[key];
+      if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
+          || !['number', 'string'].includes(typeof value) || !Number.isFinite(Number(value))) {
+        throw new Error(`[FinancialService] receipt calculation input ${key} is required and must be numeric.`);
+      }
+      if (monetary.includes(key) && !Number.isSafeInteger(Money.toCents(value))) {
+        throw new Error(`[FinancialService] receipt calculation input ${key} exceeds safe monetary precision.`);
+      }
+      clean[key] = monetary.includes(key) ? Money.round(Number(value)) : Number(value);
+      if (monetary.includes(key) && Money.toCents(clean[key]) !== Money.toCents(value)) {
+        throw new Error(`[FinancialService] receipt calculation input ${key} cannot be represented consistently in cents.`);
+      }
+    }
+    const inputs = { ...clean, noloon: clean.driver_price, ohda: clean.advance };
+    const weightTotal = calculateWeightTotal(inputs);
+    const net = calculateRowNet(inputs);
+    if (!Number.isFinite(weightTotal) || !Number.isSafeInteger(Money.toCents(net))
+        || Money.toCents(Money.toDecimal(Money.toCents(net))) !== Money.toCents(net)) {
+      throw new Error('[FinancialService] calculated receipt values exceed safe precision.');
+    }
+    return { ...clean, weightTotal, net };
+  });
 
   // Continue with existing business logic that builds groups and calculates totals
   const clientVehicleGroups = new Map();
@@ -282,7 +310,14 @@ function _validate(data) {
   const receipt_date = header.receipt_date;
 
   // Convert decimals → cents (RULE 9)
-  const total = Money.toCents(data.total);
+  const total = dataRows.reduce((sum, row) => {
+    const next = sum + Money.toCents(row.net);
+    if (!Number.isSafeInteger(next)) throw new Error('[FinancialService] receipt total exceeds safe precision.');
+    return next;
+  }, 0);
+  if (!Number.isSafeInteger(total) || Money.toCents(Money.toDecimal(total)) !== total) {
+    throw new Error('[FinancialService] receipt total exceeds safe precision.');
+  }
   if (total < 0) {
     throw new Error('[FinancialService] total must be a non-negative number.');
   }
@@ -360,11 +395,10 @@ function _assertCompleteReceiptPaymentCompanyEffect(payment, operation, row) {
   }
 
   const company = payment.companyLegs[0];
-  const netCents = Number(row.net) || 0;
-  const sarfCents = Number(row.sarf) || 0;
+  const amount = _receiptCompanyAmount(row);
   if (company.type !== 'deposit'
     || company.vehicle_id !== null
-    || Number(company.amount) !== netCents + sarfCents
+    || Number(company.amount) !== amount
     || String(company.reference_id || '') !== String(row.row_id)) {
     throw new Error(
       `[FinancialService:${operation}] receipt row ${row.row_id} has inconsistent active company payment effect.`
@@ -399,9 +433,19 @@ function _receiptPaymentDate(row, receiptDate = null) {
   return row.date || receiptDate || DateUtils.todayLocal();
 }
 
+function _receiptCompanyAmount(row) {
+  const net = Number(row.net);
+  const sarf = Number(row.sarf);
+  const amount = net + sarf;
+  if (!Number.isSafeInteger(net) || !Number.isSafeInteger(sarf) || !Number.isSafeInteger(amount)
+      || Money.toCents(Money.toDecimal(amount)) !== amount) {
+    throw new Error('[FinancialService] receipt company amount exceeds safe precision.');
+  }
+  return amount;
+}
+
 function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
-  const netCents = Number(row.net) || 0;
-  const sarfCents = Number(row.sarf) || 0;
+  const amount = _receiptCompanyAmount(row);
   return {
     username,
     owner_id: String(office.id),
@@ -413,7 +457,7 @@ function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = nul
     vehicle_plate: row.vehicle_plate || null,
     type: 'deposit',
     effect: RECEIPT_ROW_PAYMENT_COMPANY_EFFECT,
-    amount: netCents + sarfCents,
+    amount,
     reference_type: RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE,
     reference_id: String(row.row_id),
     date: _receiptPaymentDate(row, receiptDate),
@@ -507,8 +551,7 @@ async function _resolveReceiptRowCompany(row, { tx } = {}) {
 function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
   const now = DateUtils.nowLocal();
   const date = row.date || receiptDate || DateUtils.todayLocal();
-  const netCents = Number(row.net) || 0;
-  const sarfCents = Number(row.sarf) || 0;
+  const amount = _receiptCompanyAmount(row);
 
   return {
     username,
@@ -519,7 +562,7 @@ function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
     client_name: office.name || null,
     vehicle_id: null,
     type: 'withdraw',
-    amount: netCents + sarfCents,
+    amount,
     reference_type: RECEIPT_ROW_COMPANY_CHARGE_REF_TYPE,
     effect: RECEIPT_ROW_COMPANY_CHARGE_EFFECT,
     reference_id: String(row.row_id),

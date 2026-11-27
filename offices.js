@@ -339,11 +339,12 @@ async function _loadReceiptRowsProjection(receipts) {
  */
 function _persistedRowToOfficeShape(row) {
   return {
+    _type: 'data',
     office : row.office || '',
     loading: row.loading || '',
     taktik : row.destination || '', // destination → الجهة
     // ── persisted user-entered columns (original form) ──
-    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
+    weight: row.weight ?? '', deficit: row.deficit ?? '',
     type: row.type || '',
     // ── money: persisted cents → decimals ──
     officeAmount: Money.toDecimal(row.officeAmount ?? 0),

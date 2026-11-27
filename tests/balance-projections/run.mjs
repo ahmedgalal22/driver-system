@@ -52,6 +52,7 @@ const mkRow = (over = {}) => ({
   destination: 'القاهرة',
   office: OFFICE_A.name,
   advance: 0,
+  weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 18,
   net: 11,
   sarf: 7,
   ...over,
@@ -64,7 +65,7 @@ const r3 = mkRow({
   vehicle_id: V2.id,
   vehicle_plate: V2.plate,
   office: OFFICE_B.name,
-  net: 20,
+  net: 20, add: 25,
   sarf: 5,
 });
 

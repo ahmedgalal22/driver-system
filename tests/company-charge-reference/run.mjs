@@ -44,7 +44,7 @@ const mkRow = (kartano, net, sarf) => ({
   _type: 'data', row_id: uuid(), owner_id: OWNER_ID, owner_name: 'مالك اختبار',
   driver_id: null, vehicle_id: VEHICLE.id, vehicle_plate: VEHICLE.plate,
   driver_price: 0, loading: 'طنطا', destination: 'القاهرة', office: OFFICE.name,
-  advance: 0, kartano, net, sarf,
+  advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: net + sarf, kartano, net, sarf,
 });
 const rowA = mkRow('1258', 100, 20);
 const rowB = mkRow('1260', 80, 10);

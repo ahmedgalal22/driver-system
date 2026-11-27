@@ -45,19 +45,19 @@ for (const [id, plate] of [['veh-1', '111 أ ب'], ['veh-2', '222 ج د'], ['veh
 const row1 = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
   vehicle_id: 'veh-1', vehicle_plate: '111 أ ب', driver_id: null,
   driver_price: 11, advance: 5, loading: 'طنطا', destination: 'القاهرة',
-  office: 'شركة أ', net: 550, sarf: 2 });
+  office: 'شركة أ', weight: 50, deficit: 0, officeAmount: 0, discount: 0, add: 7, net: 550, sarf: 2 });
 const row2 = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
   vehicle_id: 'veh-2', vehicle_plate: '222 ج د', driver_id: null,
   driver_price: 12, advance: 0, loading: 'طنطا', destination: 'الإسكندرية',
-  office: 'شركة ب', net: 600, sarf: 0 });
+  office: 'شركة ب', weight: 50, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 600, sarf: 0 });
 const row3 = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
   vehicle_id: 'veh-3', vehicle_plate: '333 هـ و', driver_id: null,
   driver_price: 10, advance: 0, loading: 'طنطا', destination: 'المنصورة',
-  office: 'شركة أ', net: 650, sarf: 0 });
+  office: 'شركة أ', weight: 65, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 650, sarf: 0 });
 const rowX = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
   vehicle_id: 'veh-9', vehicle_plate: '999 ز ح', driver_id: null,
   driver_price: 20, advance: 0, loading: 'طنطا', destination: 'القاهرة',
-  office: 'شركة أ', net: 100, sarf: 0 });
+  office: 'شركة أ', weight: 5, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 100, sarf: 0 });
 
 const hdr = (over = {}) => ({
   receipt_date: '2026-07-27',
@@ -155,7 +155,7 @@ function _persistedRowToOfficeShape(row) {
     loading: row.loading || '',
     taktik : row.destination || '', // destination → الجهة
     // ── persisted user-entered columns (original form) ──
-    weight: row.weight ?? '', weight2: row.weight2 ?? '', deficit: row.deficit ?? '',
+    weight: row.weight ?? '', deficit: row.deficit ?? '',
     type: row.type || '',
     // ── money: persisted cents → decimals ──
     officeAmount: Money.toDecimal(row.officeAmount ?? 0),
@@ -200,10 +200,10 @@ ok(sRow.office === 'شركة أ' && sRow.loading === 'طنطا' && sRow.taktik =
   'shape: office/loading mapped + destination → الجهة vocabulary bridge');
 ok(sRow.noloon === 11 && sRow.ohda === 5 && sRow.sarf === 2 && sRow.net === 550,
   `shape money: cents→decimal via REAL Money (نولون=${sRow.noloon}, عهدة=${sRow.ohda}, sarf=${sRow.sarf}, net=${sRow.net})`);
-ok(sRow.weight === '' && sRow.weight2 === '' && sRow.deficit === ''
-    && sRow.officeAmount === 0 && sRow.discount === 0 && sRow.add === 0 && sRow.type === '',
-  'shape: slots restored from persisted row — fixture rows carry none → blank/zero');
-ok(calculateWeightTotal(sRow) === 0, 'calculateWeightTotal(shape) = 0 via REAL financialCalculator (persisted weights absent in fixture)');
+ok(sRow.weight === 50 && sRow.deficit === 0
+    && sRow.officeAmount === 0 && sRow.discount === 0 && sRow.add === 7 && sRow.type === '',
+  'shape: quantities and adjustments restored from persisted row');
+ok(calculateWeightTotal(sRow) === 50, 'calculateWeightTotal(shape) uses persisted quantities');
 
 const summary = _officeSummaryLoop(activeReceipts, receiptRowsProjection, nameMap, offices);
 const sumA = summary.get(String(officeA.id)), sumB = summary.get(String(officeB.id));
@@ -211,7 +211,7 @@ const expectedNetA = Money.toDecimal(liveRows.filter(r => r.office === 'شركة
 ok(sumA.net === 1200 && sumA.net === expectedNetA,
   `summary: شركة أ net REVIVED from persisted row nets (${sumA.net} = 550+650, cross-checked vs cents sum ${expectedNetA})`);
 ok(sumB.net === 600, `summary: شركة ب net = 600 from persisted row net (got ${sumB.net})`);
-ok(sumA.weight === 0 && sumB.weight === 0, 'summary: weights = 0 (fixture rows carry no persisted weights; slot read proven)');
+ok(sumA.weight === 115 && sumB.weight === 50, 'summary: weights use persisted quantities');
 
 // REMOVED-CONTRACT (كارتات Tab Removal — Office Details): the details-page
 // «الكارتات» tab + its cards renderer (_getOfficeCards/_renderOfficeCards) are
