@@ -457,8 +457,6 @@ const SEPARATOR_CLASS = 'vehicle-separator-row';
 
 /**
  * COLUMN DEFINITIONS — Single source of truth for column order, headers, classes.
- * إزالة: خصم (discount)
- * ترتيب جديد حسب المطلوب
  */
 const COL_DEFS = [
   // index: 0
@@ -487,12 +485,9 @@ const COL_DEFS = [
   { key: 'ohda',         label: 'عهدة',               cls: 'receipt-ohda',         type: 'number', minW: '55px',  printHide: false },
   // index: 15
   { key: 'officeAmount', label: 'مكتب',               cls: 'receipt-office-amount',type: 'number', minW: '45px',  printHide: false },
-  // index: 16
-  { key: 'add',          label: 'إضافة',              cls: 'receipt-add',          type: 'number', minW: '45px',  printHide: false, printConditional: true },
-  // index: 17 (New)
-  { key: 'discount',     label: 'خصم',               cls: 'receipt-discount',     type: 'number', minW: '45px',  printHide: false, printConditional: true },
   { key: 'sarf',         label: 'الصرف',              cls: 'receipt-sarf',         type: 'number', minW: '45px',  printHide: false, printConditional: true },
-  // index: 19
+  { key: 'add',          label: 'إضافة',              cls: 'receipt-add',          type: 'number', minW: '45px',  printHide: false, printConditional: true },
+  { key: 'discount',     label: 'خصم',               cls: 'receipt-discount',     type: 'number', minW: '45px',  printHide: false, printConditional: true },
   { key: 'net',          label: 'الصافي',             cls: 'receipt-net',          type: 'number', minW: '90px',  printHide: false, readonly: true },
   // index: 19 — الحالة: row payment status (تم صرفه / لم يتم صرفه).
   // Persisted per receipt row; managed from the All Receipts page only —

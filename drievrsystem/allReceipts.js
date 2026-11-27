@@ -492,8 +492,8 @@ function renderSummaryCards(_tab, _preFiltered) {
         ${summaryCard('⚖️ إجمالي الوزن', fmtMoney(sums.weight), 'summary-card--green')}
         ${summaryCard('🚛 إجمالي النولون', fmtMoney(sums.noloon), 'summary-card--cyan')}
         ${summaryCard('🏦 إجمالي العهدة', fmtMoney(sums.ohda), 'summary-card--emerald')}
-        ${summaryCard('💜 إجمالي الصافي', fmtMoney(sums.net), 'summary-card--violet')}
         ${summaryCard('🟠 إجمالي الصرف', fmtMoney(sums.sarf), 'summary-card--orange')}
+        ${summaryCard('💜 إجمالي الصافي', fmtMoney(sums.net), 'summary-card--violet')}
       </div>
     `;
   const container = document.getElementById('receiptsSummaryContainer');
@@ -812,12 +812,12 @@ function buildReceiptPrintBlock(record) {
 // Design contract:
 //   • Source of truth: the stored record object from STATE.receipts (never DOM).
 //   • Top-level money field (total) is stored as CENTS → Money.fmtCents().
-//   • Row-level numeric fields (net, ohda, noloon, officeAmount, add, weight,
+//   • Row-level numeric fields (net, ohda, noloon, officeAmount, sarf, add, discount, weight,
 //     deficit) are stored as DECIMALS → Money.fmt().
 //   • Separator rows (_type === 'separator') carry vehicleName, subtotal, notes.
 //     subtotal is a DECIMAL (not cents) — matches how getSnapshotCellRawValue
 //     handles separator rows.
-//   • Conditional columns (weight, add) are included only when at
+//   • Conditional columns (weight, sarf, add, discount) are included only when at
 //     least one data row has a non-zero value for that field.
 //   • Rendered via printEngine.js buildPrintDocument() — no raw HTML wrapper,
 //     no window.open, no DOM cloning.
@@ -844,7 +844,9 @@ const _RECEIPT_PRINT_COLS = Object.freeze([
   { key: 'noloon',       label: 'نولون',         type: 'number', printHide: false, conditional: false },
   { key: 'ohda',         label: 'عهدة',          type: 'number', printHide: false, conditional: false },
   { key: 'officeAmount', label: 'مكتب',          type: 'number', printHide: false, conditional: false },
+  { key: 'sarf',         label: 'الصرف',         type: 'number', printHide: false, conditional: true  },
   { key: 'add',          label: 'إضافة',         type: 'number', printHide: false, conditional: true  },
+  { key: 'discount',     label: 'خصم',           type: 'number', printHide: false, conditional: true  },
   { key: 'net',          label: 'الصافي',        type: 'number', printHide: false, conditional: false },
   { key: 'payment_status', label: 'الحالة',      type: 'text',   printHide: false, conditional: false },
 ]);
@@ -891,8 +893,12 @@ function _receiptPrintGetCellValue(row, colKey) {
       return row.ohda ?? '';
     case 'officeAmount':
       return row.officeAmount ?? '';
+    case 'sarf':
+      return row.sarf ?? '';
     case 'add':
       return row.add ?? '';
+    case 'discount':
+      return row.discount ?? '';
     case 'net':
       return row.net ?? '';
     case 'payment_status':

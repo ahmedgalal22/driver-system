@@ -84,6 +84,8 @@ ok(SRC.includes("summaryCard('🗂️ عدد الكارتات', String(sums.coun
 ok(SRC.includes("summaryCard('💜 إجمالي الصافي', fmtMoney(sums.net), 'summary-card--violet')")
   && SRC.includes("summaryCard('🟠 إجمالي الصرف', fmtMoney(sums.sarf), 'summary-card--orange')"),
   'new net and sarf summary cards render with existing professional card styles');
+ok(SRC.indexOf("summaryCard('🟠 إجمالي الصرف'") < SRC.indexOf("summaryCard('💜 إجمالي الصافي'"),
+  'sarf summary precedes net in the financial display order');
 
 console.log(failures === 0
   ? '\n✅ ALL ALL-RECEIPTS-SUMMARY ASSERTIONS PASSED'

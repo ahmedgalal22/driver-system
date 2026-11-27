@@ -296,9 +296,9 @@ const _RECEIPT_COLS = Object.freeze([
   { key: 'noloon',       header: 'نولون',          type: 'number' },
   { key: 'ohda',         header: 'عهدة',           type: 'number' },
   { key: 'officeAmount', header: 'مكتب',           type: 'number' },
+  { key: 'sarf',         header: 'الصرف',         type: 'number' },
   { key: 'add',          header: 'إضافة',          type: 'number' },
   { key: 'discount',     header: 'خصم',           type: 'number' },
-  { key: 'sarf',         header: 'الصرف',         type: 'number' },
   { key: 'net',          header: 'الصافي',         type: 'number' },
 ]);
 
@@ -633,9 +633,9 @@ const _ALL_RECEIPTS_COLS = Object.freeze([
   { header: 'نولون',        getValue: (row, _rec) => _allReceiptsNum(row.noloon) },
   { header: 'عهدة',         getValue: (row, _rec) => _allReceiptsNum(row.ohda) },
   { header: 'مكتب',         getValue: (row, _rec) => _allReceiptsNum(row.officeAmount) },
+  { header: 'الصرف',       getValue: (row, _rec) => _allReceiptsNum(row.sarf) },
   { header: 'اضافة',        getValue: (row, _rec) => _allReceiptsNum(row.add) },
   { header: 'خصم',         getValue: (row, _rec) => _allReceiptsNum(row.discount) },
-  { header: 'الصرف',       getValue: (row, _rec) => _allReceiptsNum(row.sarf) },
   { header: 'الصافي',       getValue: (row, _rec) => _allReceiptsNum(row.net) },
   { header: 'الحالة',       getValue: (row, _rec) => (row.payment_status === 'paid' ? 'تم صرفه' : 'لم يتم صرفه') },
 ]);

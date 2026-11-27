@@ -14,7 +14,9 @@ const extract = (source, start, end) => source.slice(source.indexOf(start), sour
 const columnsText = extract(src, 'const COL_DEFS = [', '\n// Snapshot data columns');
 const cols = new Function(`${columnsText}; return COL_DEFS;`)();
 const formCols = cols.filter(c => !c.noForm);
-const expected = ['رقم الكارتة','التاريخ','اسم السائق','رقم المركبة','الوزن','عجز','اسم المكتب','التحميل','الجهة','النوع','نولون','عهدة','مكتب','إضافة','خصم','الصرف','الصافي','إجراءات'];
+const financialKeys = ['weight','deficit','noloon','ohda','officeAmount','sarf','add','discount','net'];
+assert.deepEqual(formCols.filter(c => financialKeys.includes(c.key)).map(c => c.key), financialKeys);
+const expected = ['رقم الكارتة','التاريخ','اسم السائق','رقم المركبة','الوزن','عجز','اسم المكتب','التحميل','الجهة','النوع','نولون','عهدة','مكتب','الصرف','إضافة','خصم','الصافي','إجراءات'];
 assert.deepEqual(formCols.map(c => c.label), expected);
 assert(!cols.some(c => c.key === 'weight2' || c.key === 'weightTotal'));
 assert.match(src, /<label[^>]*>رقم المركبة<\/label>\s*<div class="relative">\s*<input id="clientInput"/);
@@ -37,6 +39,10 @@ function fn(name) {
 const ui = new Function('COL_DEFS','tFmt',`${fn('_buildArrowRowHTML')}\n${fn('renderTable')}\n${fn('_separatorRowInnerHTML')}\nreturn {arrow:_buildArrowRowHTML(), table:renderTable(), sep:_separatorRowInnerHTML(0)};`)(cols, Money.fmt);
 assert.equal((ui.arrow.match(/<td\b/g)||[]).length, expected.length);
 assert.equal((ui.table.match(/<th\b/g)||[]).length, expected.length);
+assert.deepEqual([...ui.table.matchAll(/<th\b[^>]*>([^<]+)<\/th>/g)].map(m=>m[1].trim()), expected);
+const formRow = new Function('COL_DEFS', `${fn('_buildRowHTML')}; return _buildRowHTML();`)(cols);
+const rowClasses = [...formRow.matchAll(/class="[^"]*\b(receipt-(?:weight|deficit|noloon|ohda|office-amount|sarf|add|discount|net))\b[^"]*"/g)].map(m=>m[1]);
+assert.deepEqual(rowClasses, ['receipt-weight','receipt-deficit','receipt-noloon','receipt-ohda','receipt-office-amount','receipt-sarf','receipt-add','receipt-discount','receipt-net']);
 assert.deepEqual([...ui.arrow.matchAll(/data-col-index="(\d+)"/g)].map(m=>+m[1]), formCols.map((c,i)=>c.key === '_actions' ? null : i).filter(x=>x!==null));
 assert.equal([...ui.sep.matchAll(/colspan="(\d+)"/g)].reduce((n,m)=>n+Number(m[1]),0), expected.length);
 assert.match(src, /const ENTER_NAV_ORDER = COL_DEFS[\s\S]*?!c\.noForm/);
@@ -55,7 +61,7 @@ for (const key of ['officeAmount','add','discount','sarf']) {
 }
 // The actual keyboard handler derives Enter order from the form columns.
 let keyHandler, focused='';
-const active={classList:{contains:cls=>cls==='receipt-discount'}};
+const active={classList:{contains:cls=>cls==='receipt-office-amount'}};
 const keyboardRow={classList:{contains:()=>false},contains:()=>true,addEventListener:(_name,handler)=>{keyHandler=handler;},querySelector:selector=>({focus:()=>{focused=selector;},readOnly:false,disabled:false})};
 const keyboardDocument={activeElement:active};
 new Function('COL_DEFS','SEPARATOR_CLASS','document', `${fn('attachKeyboardNav')}; return attachKeyboardNav;`)(cols,'separator',keyboardDocument)(keyboardRow);
@@ -69,11 +75,24 @@ const printColsText=extract(all, 'const _RECEIPT_PRINT_COLS = Object.freeze([', 
 const printCols=new Function(`${printColsText}; return _RECEIPT_PRINT_COLS;`)();
 assert(!printCols.some(c=>['weight2','weightTotal'].includes(c.key)));
 const at=printCols.findIndex(c=>c.key==='officeAmount');
-assert.deepEqual(printCols.slice(at,at+4).map(c=>c.key), ['officeAmount','add','net','payment_status']);
+assert.deepEqual(printCols.slice(at,at+6).map(c=>c.key), ['officeAmount','sarf','add','discount','net','payment_status']);
 assert.match(all, /return sum \+ calculateWeightTotal\(row\)/);
 const snapshotValue = new Function('calculateWeightTotal', `${fn('getSnapshotCellRawValue')}; return getSnapshotCellRawValue;`)(weight);
 assert.equal(snapshotValue({weight:10,deficit:200},{key:'weight'}),10);
 assert.equal(snapshotValue({weight:10,deficit:200},{key:'deficit'}),200);
+
+const snapshotRender = new Function('COL_DEFS','tFmt', `${fn('_snapshotEsc')}\n${fn('formatSnapshotNumber')}\n${fn('getSnapshotCellRawValue')}\n${fn('formatSnapshotCellValue')}\n${fn('renderReceiptSnapshotDataRow')}\n${fn('renderReceiptSnapshotTableHead')}\nreturn {head:renderReceiptSnapshotTableHead,row:renderReceiptSnapshotDataRow};`)(cols,Money.fmt);
+const snapshotLabels=[...snapshotRender.head().matchAll(/<th[^>]*>([^<]+)<\/th>/g)].map(m=>m[1]);
+assert.deepEqual(snapshotLabels,cols.filter(c=>c.key!=='_actions').map(c=>c.label));
+const snapshotCells=[...snapshotRender.row({...a,net:182}).matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m=>m[1]);
+const snapshotOffice=cols.findIndex(c=>c.key==='officeAmount');
+assert.deepEqual(snapshotCells.slice(snapshotOffice,snapshotOffice+5),['4',Money.fmt(2),Money.fmt(5),Money.fmt(3),Money.fmt(182)]);
+// Live-form print derives its header and cells from the same filtered COL_DEFS.
+assert.match(src, /const printCols = COL_DEFS\.filter/);
+assert.match(src, /printCols\.map\(c => `<th/);
+assert.match(src, /printCols\.forEach\(col =>/);
+assert.deepEqual(cols.filter(c=>!c.noForm && !c.printHide && financialKeys.includes(c.key)).map(c=>c.key),financialKeys);
+
 function allFn(name) {
  const start=all.indexOf(`function ${name}(`), b=all.indexOf('{',start); let level=0;
  for(let i=b;i<all.length;i++){if(all[i]==='{')level++;else if(all[i]==='}' && --level===0)return all.slice(start,i+1);}
@@ -83,7 +102,22 @@ const printApi = new Function('_RECEIPT_PRINT_COLS','calculateWeightTotal',`${al
 assert.equal(printApi.value({weight:10,deficit:200},'weight'),10);
 assert.equal(printApi.value({weight:10,deficit:200},'deficit'),200);
 const printed=printApi.resolve([{weight:10,sarf:2,add:5,discount:3}]).map(c=>c.key);
-assert.deepEqual(printed.slice(printed.indexOf('officeAmount'),printed.indexOf('officeAmount')+4),['officeAmount','add','net','payment_status']);
+assert.deepEqual(printed.slice(printed.indexOf('officeAmount'),printed.indexOf('officeAmount')+6),['officeAmount','sarf','add','discount','net','payment_status']);
+
+assert.deepEqual(printed.filter(k=>financialKeys.includes(k)), financialKeys);
+assert.deepEqual(printApi.resolve([{}]).map(c=>c.key).filter(k=>['sarf','add','discount'].includes(k)), []);
+assert.equal(printApi.value({sarf:2,discount:3},'sarf'),2);
+assert.equal(printApi.value({sarf:2,discount:3},'discount'),3);
+const printRender = new Function('Money','esc','_receiptPrintGetCellValue', `${allFn('_receiptPrintFormatCell')}\n${allFn('_receiptPrintBuildTableHead')}\n${allFn('_receiptPrintBuildTableBody')}\n${allFn('_bulkReceiptBuildTableHead')}\n${allFn('_bulkReceiptBuildTableBody')}\nreturn {singleHead:_receiptPrintBuildTableHead,singleBody:_receiptPrintBuildTableBody,bulkHead:_bulkReceiptBuildTableHead,bulkBody:_bulkReceiptBuildTableBody};`)(Money, String, printApi.value);
+const activePrint = printApi.resolve([{...a,net:182}]);
+for (const [head,body] of [[printRender.singleHead,printRender.singleBody],[printRender.bulkHead,printRender.bulkBody]]) {
+  const labels=[...head(activePrint).matchAll(/<th[^>]*>([^<]+)<\/th>/g)].map(m=>m[1]);
+  assert.deepEqual(labels.slice(labels.indexOf('مكتب'),labels.indexOf('مكتب')+5),['مكتب','الصرف','إضافة','خصم','الصافي']);
+  const cells=[...body([{...a,net:182}],activePrint).matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m => m[1]);
+  const idx=activePrint.findIndex(c=>c.key==='officeAmount');
+  assert.deepEqual(cells.slice(idx,idx+5),[4,2,5,3,182].map(Money.fmt));
+}
+
 
 // Actual Excel service with isolated in-memory SheetJS/FileReader doubles.
 let captured, fileRows=[];
@@ -95,10 +129,12 @@ globalThis.FileReader = class FileReader { readAsArrayBuffer(){this.onload({targ
 ExcelService.exportReceiptRows([{...a, _type:'data', net:net(a)}]);
 assert.deepEqual(captured.headers, expected.filter(x=>x!=='إجراءات'));
 assert.equal(captured.data[0]['الصافي'],182);
+assert.deepEqual(['مكتب','الصرف','إضافة','خصم'].map(h=>captured.data[0][h]),[4,2,5,3]);
 ExcelService.exportAllReceiptsRows([{record:{client_name:'مالك'},rows:[{...a,net:net(a),_type:'data'}]}]);
 assert.deepEqual(captured.headers.slice(captured.headers.indexOf('الوزن'),captured.headers.indexOf('الوزن')+2), ['الوزن','عجز']);
 const officeIndex=captured.headers.indexOf('مكتب');
-assert.deepEqual(captured.headers.slice(officeIndex,officeIndex+4), ['مكتب','اضافة','خصم','الصرف']);
+assert.deepEqual(captured.headers.slice(officeIndex,officeIndex+4), ['مكتب','الصرف','اضافة','خصم']);
+assert.deepEqual(['مكتب','الصرف','اضافة','خصم'].map(h=>captured.data[0][h]),[4,2,5,3]);
 fileRows=[{'التاريخ':'2026-07-01','الوزن':10,'عجز':200,'نولون':20,'وزن م':0}];
 let imported=await ExcelService.importReceiptRows(new File());
 assert.equal(net(imported[0]),196);
