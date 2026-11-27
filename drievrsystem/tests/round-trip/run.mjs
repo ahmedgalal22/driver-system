@@ -458,7 +458,7 @@ ok(dmap.sarf === '30.00' && dmap.net === '759.96', `AllForms OK: sarf=${dmap.sar
 ok(dmap.kartano === 'K-100' && dmap.date === '2026-07-29' && dmap.data === 'السائق أحمد' && dmap.type === 'قمح',
    `AllForms RESTORED: رقم الكارتة=${J(dmap.kartano)} / التاريخ=${J(dmap.date)} / اسم السائق=${J(dmap.data)} / النوع=${J(dmap.type)}`);
 ok(Number(dmap.weight) === 50 && Number(dmap.deficit) === 2 && dmap.weight2 === undefined && dmap.weightTotal === undefined,
-   `AllForms RESTORED: وزن وش=${J(dmap.weight)} / عجز=${J(dmap.deficit)}`);
+   `AllForms RESTORED: الوزن=${J(dmap.weight)} / عجز=${J(dmap.deficit)}`);
 ok(Number(dmap.officeAmount) === 75 && Number(dmap.add) === 40 && Number(dmap.discount) === 25,
    `AllForms RESTORED: مكتب=${J(dmap.officeAmount)} / إضافة=${J(dmap.add)} / خصم=${J(dmap.discount)} (cents→decimal)`);
 // Card header

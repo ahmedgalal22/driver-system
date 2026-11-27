@@ -14,7 +14,7 @@ const extract = (source, start, end) => source.slice(source.indexOf(start), sour
 const columnsText = extract(src, 'const COL_DEFS = [', '\n// Snapshot data columns');
 const cols = new Function(`${columnsText}; return COL_DEFS;`)();
 const formCols = cols.filter(c => !c.noForm);
-const expected = ['رقم الكارتة','التاريخ','اسم السائق','رقم المركبة','وزن وش','عجز','اسم المكتب','التحميل','الجهة','النوع','نولون','عهدة','مكتب','إضافة','خصم','الصرف','الصافي','إجراءات'];
+const expected = ['رقم الكارتة','التاريخ','اسم السائق','رقم المركبة','الوزن','عجز','اسم المكتب','التحميل','الجهة','النوع','نولون','عهدة','مكتب','إضافة','خصم','الصرف','الصافي','إجراءات'];
 assert.deepEqual(formCols.map(c => c.label), expected);
 assert(!cols.some(c => c.key === 'weight2' || c.key === 'weightTotal'));
 assert.match(src, /<label[^>]*>رقم المركبة<\/label>\s*<div class="relative">\s*<input id="clientInput"/);
@@ -96,17 +96,17 @@ ExcelService.exportReceiptRows([{...a, _type:'data', net:net(a)}]);
 assert.deepEqual(captured.headers, expected.filter(x=>x!=='إجراءات'));
 assert.equal(captured.data[0]['الصافي'],182);
 ExcelService.exportAllReceiptsRows([{record:{client_name:'مالك'},rows:[{...a,net:net(a),_type:'data'}]}]);
-assert.deepEqual(captured.headers.slice(captured.headers.indexOf('وزن وش'),captured.headers.indexOf('وزن وش')+2), ['وزن وش','عجز']);
+assert.deepEqual(captured.headers.slice(captured.headers.indexOf('الوزن'),captured.headers.indexOf('الوزن')+2), ['الوزن','عجز']);
 const officeIndex=captured.headers.indexOf('مكتب');
 assert.deepEqual(captured.headers.slice(officeIndex,officeIndex+4), ['مكتب','اضافة','خصم','الصرف']);
-fileRows=[{'التاريخ':'2026-07-01','وزن وش':10,'عجز':200,'نولون':20,'وزن م':0}];
+fileRows=[{'التاريخ':'2026-07-01','الوزن':10,'عجز':200,'نولون':20,'وزن م':0}];
 let imported=await ExcelService.importReceiptRows(new File());
 assert.equal(net(imported[0]),196);
 assert.equal(imported[0].ohda, ''); // Missing inputs remain missing until the user fills them.
 assert(!('weight2' in imported[0]));
-fileRows=[{'وزن وش':10,'وزن م':5}];
+fileRows=[{'الوزن':10,'وزن م':5}];
 await assert.rejects(()=>ExcelService.importReceiptRows(new File()), /وزن م الملغى/);
-fileRows=[{'وزن وش':10,'وزن م':'غير معروف'}];
+fileRows=[{'الوزن':10,'وزن م':'غير معروف'}];
 await assert.rejects(()=>ExcelService.importReceiptRows(new File()), /وزن م الملغى/);
 
 // Actual IndexedDB-shim persistence and ledger lifecycle with new calculated net.
@@ -331,10 +331,10 @@ assert.equal(matchRow({weight:73,weight2:81,weightTotal:92,deficit:64},{},{globa
 assert.equal(matchRow({weight:73,weight2:81,weightTotal:92,deficit:64},{},{global:'81'}),false);
 assert.equal(matchRow({data:'driver',weight:73},{},{global:'driver'}),true);
 for (const value of [undefined, null, '', '  ', 0, '0']) {
- fileRows=[{'التاريخ':'2026-07-01','وزن وش':10,'وزن م':value}];
+ fileRows=[{'التاريخ':'2026-07-01','الوزن':10,'وزن م':value}];
  assert.equal((await ExcelService.importReceiptRows(new File())).length,1);
 }
-fileRows=[{'وزن وش':10,'وزن م':-1}];
+fileRows=[{'الوزن':10,'وزن م':-1}];
 await assert.rejects(()=>ExcelService.importReceiptRows(new File()), /وزن م الملغى/);
 console.log('PASS summary matrix, office projection, print summary, filtering and legacy import');
 
@@ -349,29 +349,29 @@ ExcelService.exportReceiptRows([{...a,_type:'data',date:'2026-07-01',net:net(a)}
 let workbook=XLSX.read(bytes,{type:'array'});
 let workbookRows=XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 assert.equal(workbookRows[0]['الصافي'],182);
-assert.deepEqual(Object.keys(workbookRows[0]).slice(Object.keys(workbookRows[0]).indexOf('وزن وش'),Object.keys(workbookRows[0]).indexOf('وزن وش')+2), ['وزن وش','عجز']);
+assert.deepEqual(Object.keys(workbookRows[0]).slice(Object.keys(workbookRows[0]).indexOf('الوزن'),Object.keys(workbookRows[0]).indexOf('الوزن')+2), ['الوزن','عجز']);
 const reimport=await ExcelService.importReceiptRows(new File(bytes));
 assert.equal(net(reimport[0]),182);
 ExcelService.exportAllReceiptsRows([{record:{client_name:'Client'},rows:[{...a,net:net(a)}]}]);
 workbook=XLSX.read(bytes,{type:'array'});
 workbookRows=XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 assert.equal(workbookRows[0]['الصافي'],182);
-assert.deepEqual(Object.keys(workbookRows[0]).slice(Object.keys(workbookRows[0]).indexOf('وزن وش'),Object.keys(workbookRows[0]).indexOf('وزن وش')+2), ['وزن وش','عجز']);
+assert.deepEqual(Object.keys(workbookRows[0]).slice(Object.keys(workbookRows[0]).indexOf('الوزن'),Object.keys(workbookRows[0]).indexOf('الوزن')+2), ['الوزن','عجز']);
 const legacyBook=XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(legacyBook,XLSX.utils.json_to_sheet([{'التاريخ':'2026-07-01','وزن وش':10,'وزن م':3}]),'S');
+XLSX.utils.book_append_sheet(legacyBook,XLSX.utils.json_to_sheet([{'التاريخ':'2026-07-01','الوزن':10,'وزن م':3}]),'S');
 await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(legacyBook,{type:'array',bookType:'xlsx'}))), /وزن م الملغى/);
 console.log('PASS real SheetJS XLSX serialization, exports and import (file I/O simulated)');
 
 const duplicateBook=XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(duplicateBook,XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش','وزن م','وزن م'],['2026-07-01',10,0,5]]),'S');
+XLSX.utils.book_append_sheet(duplicateBook,XLSX.utils.aoa_to_sheet([['التاريخ','الوزن','وزن م','وزن م'],['2026-07-01',10,0,5]]),'S');
 await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(duplicateBook,{type:'array',bookType:'xlsx'}))), /وزن م الملغى/);
 const booleanBook=XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(booleanBook,XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش','وزن م'],['2026-07-01',10,false]]),'S');
+XLSX.utils.book_append_sheet(booleanBook,XLSX.utils.aoa_to_sheet([['التاريخ','الوزن','وزن م'],['2026-07-01',10,false]]),'S');
 await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(booleanBook,{type:'array',bookType:'xlsx'}))), /وزن م الملغى/);
 console.log('PASS duplicate legacy headers and invalid boolean cells');
 
 const errorBook=XLSX.utils.book_new();
-const errorSheet=XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش','وزن م'],['2026-07-01',10,0]]);
+const errorSheet=XLSX.utils.aoa_to_sheet([['التاريخ','الوزن','وزن م'],['2026-07-01',10,0]]);
 errorSheet.C2={t:'e',v:7};
 XLSX.utils.book_append_sheet(errorBook,errorSheet,'S');
 await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(errorBook,{type:'array',bookType:'xlsx'}))), /وزن م الملغى/);
@@ -408,19 +408,19 @@ for (const headers of [['وزن م ','وزن م '], ['  وزن م','  وزن م'
   for (const invalid of [5,-1,'invalid',false]) {
    const cells=[0,0]; cells[target]=invalid;
    const wb=XLSX.utils.book_new();
-   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش',...headers],['2026-07-01',10,...cells]]),'S');
+   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['التاريخ','الوزن',...headers],['2026-07-01',10,...cells]]),'S');
    await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(wb,{type:'array',bookType:'xlsx'}))),/وزن م الملغى/);
   }
  }
  const wb=XLSX.utils.book_new();
- XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش',...headers],['2026-07-01',10,0,'']]),'S');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['التاريخ','الوزن',...headers],['2026-07-01',10,0,'']]),'S');
  assert.equal((await ExcelService.importReceiptRows(new File(XLSX.write(wb,{type:'array',bookType:'xlsx'})))).length,1);
 }
 console.log('PASS transformed and whitespace duplicate legacy headers');
 
 for (let target=0;target<2;target++) {
  const wb=XLSX.utils.book_new();
- const ws=XLSX.utils.aoa_to_sheet([['التاريخ','وزن وش','وزن م ','وزن م '],['2026-07-01',10,0,0]]);
+ const ws=XLSX.utils.aoa_to_sheet([['التاريخ','الوزن','وزن م ','وزن م '],['2026-07-01',10,0,0]]);
  ws[target===0?'C2':'D2']={t:'e',v:7};
  XLSX.utils.book_append_sheet(wb,ws,'S');
  await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(wb,{type:'array',bookType:'xlsx'}))),/وزن م الملغى/);
@@ -501,7 +501,7 @@ exportRow.querySelector('.receipt-date').value='2026-07-01';
 const originalQuery=exportRow.querySelector;
 const validateImport=new Function(`${fn('_validateImportedCalculationInputs')}; return _validateImportedCalculationInputs;`)();
 for (const [key,cls,header,serviceKey] of [
-  ['weight','weight','وزن وش','weight'], ['deficit','deficit','عجز','deficit'],
+  ['weight','weight','الوزن','weight'], ['deficit','deficit','عجز','deficit'],
   ['noloon','noloon','نولون','driver_price'], ['ohda','ohda','عهدة','advance'],
   ['officeAmount','office-amount','مكتب','officeAmount'], ['discount','discount','خصم','discount'],
   ['add','add','إضافة','add'], ['sarf','sarf','الصرف','sarf'],

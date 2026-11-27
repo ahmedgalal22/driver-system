@@ -135,7 +135,7 @@ const rRows = await liveRows(RID);
 ok(rRows.length === 1, 'receipt persisted exactly one data row');
 ok(String(rRows[0].vehicle_id) === String(v1.id), `persisted row carries the vehicle UUID link (vehicle_id=${rRows[0].vehicle_id})`);
 ok(rRows[0].vehicle_plate === '123 أ ب', 'persisted row carries the رقم المركبة snapshot');
-ok(created.receipt.client_name === '123 أ ب', 'receipt header client/owner snapshot = vehicle number (صاحب المركبة resolved by number)');
+ok(created.receipt.client_name === '123 أ ب', 'receipt header client/owner snapshot = vehicle number (رقم المركبة resolved by number)');
 ok((await DB.getAll('vehicles')).length === 1, 'receipt save created no extra vehicle');
 
 // Edit/re-save the same receipt — vehicle/owner relationship must be preserved
@@ -190,7 +190,7 @@ ok(RECEIPTS_SRC.includes('const plates = vehicles.map(v => v.plate).filter(Boole
 ok(RECEIPTS_SRC.includes('await VehiclesModule.resolveVehicle(_currentUsername(), plate, clientOwner);'),
   'KEEP: receipt row pipeline resolves رقم المركبة → vehicle (verbatim production line)');
 ok(RECEIPTS_SRC.includes("owner_id     : String(finalOwner.id),") && RECEIPTS_SRC.includes('vehicle.plate'),
-  'KEEP: receipt row owner/client comes from the resolved vehicle record (صاحب المركبة)');
+  'KEEP: receipt row owner/client comes from the resolved vehicle record (رقم المركبة)');
 ok(!/receipt-car[^]*list="vehicleNameList"/.test(RECEIPTS_SRC), 'no vehicle-name datalist exists in the Receipt Form');
 
 console.log(failures === 0 ? '\n✅ ALL VEHICLE-IDENTITY ASSERTIONS PASSED' : `\n❌ ${failures} FAILURES`);

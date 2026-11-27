@@ -470,7 +470,7 @@ const COL_DEFS = [
   // index: 3 (owner column removed — owner comes from clientInput)
   { key: 'car',          label: 'رقم المركبة',        cls: 'receipt-car',          type: 'text',   minW: '80px',  printHide: false },
   // index: 5
-  { key: 'weight',       label: 'وزن وش',             cls: 'receipt-weight',       type: 'number', minW: '55px',  printHide: false, printConditional: true },
+  { key: 'weight',       label: 'الوزن',             cls: 'receipt-weight',       type: 'number', minW: '55px',  printHide: false, printConditional: true },
   // index: 7
   { key: 'deficit',      label: 'عجز',                cls: 'receipt-deficit',      type: 'number', minW: '45px',  printHide: false },
   // index: 9  ← اسم الشركة (office) — مخفي في الطباعة (Feature 4)
@@ -2784,7 +2784,7 @@ async function validateBeforeSave(rawData) {
   const invalidOwners = rawData.rows
     .filter(r => r._type !== 'separator' && !r.owner_id);
   if (invalidOwners.length > 0) {
-    alert('⚠️ يجب اختيار صاحب المركبة من القائمة لكل صف.');
+    alert('⚠️ يجب اختيار رقم المركبة من القائمة لكل صف.');
     return false;
   }
 

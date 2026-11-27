@@ -440,7 +440,7 @@ function renderReceiptsControls() {
         <input data-filter-tab="receipts" data-filter-key="global" type="text" value="${esc(f.global)}" placeholder="بحث في جميع الحقول" />
       </label>
       <label>
-        <input data-filter-tab="receipts" data-filter-key="owner" type="text" value="${esc(f.owner)}" placeholder="صاحب المركبة" list="receiptOwnersDatalist" />
+        <input data-filter-tab="receipts" data-filter-key="owner" type="text" value="${esc(f.owner)}" placeholder="رقم المركبة" list="receiptOwnersDatalist" />
       </label>
       <label>
         <input data-filter-tab="receipts" data-filter-key="company" type="text" value="${esc(f.company)}" placeholder="اسم المكتب" list="receiptCompaniesDatalist" />
@@ -555,7 +555,7 @@ function buildReceiptCardHtml(record, opts = {}) {
         <div class="record-card__heading">
           <h3>${esc(title)}</h3>
           <p style="font-size:1rem;font-weight:700;color:#1e3a8a;margin:0 0 4px;">
-            <span>صاحب المركبة: ${esc(record.owner_name || record.client_name || '—')}</span>
+            <span>رقم المركبة: ${esc(record.owner_name || record.client_name || '—')}</span>
           </p>
         </div>
         ${actionsHtml}
@@ -836,7 +836,7 @@ const _RECEIPT_PRINT_COLS = Object.freeze([
   { key: 'date',         label: 'التاريخ',       type: 'text',   printHide: false, conditional: false },
   { key: 'data',         label: 'اسم السائق',    type: 'text',   printHide: false, conditional: false },
   { key: 'car',          label: 'رقم المركبة',   type: 'text',   printHide: false, conditional: false },
-  { key: 'weight',       label: 'وزن وش',        type: 'number', printHide: false, conditional: true  },
+  { key: 'weight',       label: 'الوزن',        type: 'number', printHide: false, conditional: true  },
   { key: 'deficit',      label: 'عجز',           type: 'number', printHide: false, conditional: false },
   { key: 'loading',      label: 'التحميل',       type: 'text',   printHide: false, conditional: false },
   { key: 'taktik',       label: 'الجهة',         type: 'text',   printHide: false, conditional: false },
@@ -1083,7 +1083,7 @@ function _receiptPrintBuildHeader(record) {
         <span>التاريخ: <strong>${receiptDate} — ${dayName}</strong></span>
       </div>
       <div class="print-header-info" style="margin-top:4px;">
-        <span>صاحب المركبة: <strong>${ownerName}</strong></span>
+        <span>رقم المركبة: <strong>${ownerName}</strong></span>
         ${companyName ? `<span>المكتب: <strong>${companyName}</strong></span>` : ''}
       </div>
     </div>`;

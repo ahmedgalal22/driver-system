@@ -287,7 +287,7 @@ const _RECEIPT_COLS = Object.freeze([
   { key: 'date',         header: 'التاريخ',        type: 'text'   },
   { key: 'data',         header: 'اسم السائق',     type: 'text'   },
   { key: 'car',          header: 'رقم المركبة',    type: 'text'   },
-  { key: 'weight',       header: 'وزن وش',         type: 'number' },
+  { key: 'weight',       header: 'الوزن',         type: 'number' },
   { key: 'deficit',      header: 'عجز',            type: 'number' },
   { key: 'office',       header: 'اسم المكتب',     type: 'text'   },
   { key: 'loading',      header: 'التحميل',        type: 'text'   },
@@ -458,13 +458,13 @@ function exportVehicleOwners(owners, filename) {
 
   const sheetData = owners
     .filter(o => o && _str(o.name))
-    .map(o => ({ 'اسم صاحب المركبة': _str(o.name) }));
+    .map(o => ({ 'اسم رقم المركبة': _str(o.name) }));
 
   if (sheetData.length === 0) {
     throw new Error('لا توجد أسماء صالحة للتصدير.');
   }
 
-  const ws = XL.utils.json_to_sheet(sheetData, { header: ['اسم صاحب المركبة'] });
+  const ws = XL.utils.json_to_sheet(sheetData, { header: ['اسم رقم المركبة'] });
   const wb = XL.utils.book_new();
   XL.utils.book_append_sheet(wb, ws, 'أصحاب المركبات');
 
@@ -494,7 +494,7 @@ async function importVehicleOwners(file) {
 
   // The column name must match exactly. No fallback — a wrong column could
   // silently import garbage data into the DB.
-  const NAME_HEADER = 'اسم صاحب المركبة';
+  const NAME_HEADER = 'اسم رقم المركبة';
   if (!headers.includes(NAME_HEADER)) {
     throw new Error(
       `الملف لا يحتوي على العمود المطلوب: "${NAME_HEADER}".\n` +
@@ -615,16 +615,16 @@ async function importEntitiesExcel(file) {
  *     weight and deficit) → stored as DECIMALS.
  *   - Exported as-is (no conversion needed).
  *
- * "صاحب المركبة" comes from the parent record (record.owner_name ||
+ * "رقم المركبة" comes from the parent record (record.owner_name ||
  *  record.client_name), not from the row itself — it is injected per row.
  */
 const _ALL_RECEIPTS_COLS = Object.freeze([
   { header: 'رقم الكارتة',  getValue: (row, _rec) => _str(row.kartano ?? row.kartaNo ?? row.karta ?? '') },
   { header: 'التاريخ',       getValue: (row, _rec) => _str(row.date ?? row.rowdate ?? '') },
   { header: 'اسم السائق',   getValue: (row, _rec) => _str(row.data ?? row.driver ?? '') },
-  { header: 'صاحب المركبة', getValue: (_row, rec)  => _str(rec.owner_name ?? rec.client_name ?? '') },
+  { header: 'رقم المركبة', getValue: (_row, rec)  => _str(rec.owner_name ?? rec.client_name ?? '') },
   { header: 'رقم المركبة',  getValue: (row, _rec) => _str(row.car ?? row.vehicle_plate ?? row.carNo ?? '') },
-  { header: 'وزن وش',        getValue: (row, _rec) => _allReceiptsNum(row.weight) },
+  { header: 'الوزن',        getValue: (row, _rec) => _allReceiptsNum(row.weight) },
   { header: 'عجز',           getValue: (row, _rec) => _allReceiptsNum(row.deficit) },
   { header: 'اسم المكتب',   getValue: (row, _rec) => _str(row.office ?? '') },
   { header: 'التحميل',      getValue: (row, _rec) => _str(row.loading ?? '') },
@@ -657,7 +657,7 @@ function _allReceiptsNum(v) {
  * Builds a single flat Excel sheet where every row represents one
  * data row from one receipt.  Separator rows (_type === 'separator')
  * are excluded.  The parent receipt's owner name is injected into
- * every child row under the "صاحب المركبة" column.
+ * every child row under the "رقم المركبة" column.
  *
  * The caller is responsible for:
  *   1. Filtering records to those currently visible (after search/filter).
