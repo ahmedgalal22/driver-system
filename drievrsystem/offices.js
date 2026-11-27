@@ -157,23 +157,41 @@ async function updateOffice(username, id, patch) {
     throw new Error('[OfficesService] patch must be a plain object.');
   }
 
-  await getOfficeById(id, username); // ownership guard (throws on cross-user)
-
-  if ('name' in patch) {
-    const name = _requireText(patch.name, 'name');
-    const existing = await OfficeRepository.getAll(username);
-    const dup = existing.some((o) => String(o.id) !== String(id)
-      && String(o.name || '').trim().toLowerCase() === name.toLowerCase());
-    if (dup) throw new Error(`[OfficesService] duplicate office name: ${name}`);
-  }
-
   const nextPatch = {
     ...(patch.name !== undefined ? { name: _requireText(patch.name, 'name') } : {}),
     ...(patch.phone !== undefined ? { phone: _optionalText(patch.phone) } : {}),
   };
 
-  const updated = await OfficeRepository.update(String(id), nextPatch, { username });
-  window.dispatchEvent(new CustomEvent('offices:changed'));
+  let renameDetail = null;
+  const updated = await OfficeRepository.transaction(async (tx) => {
+    const office = await tx.getById(STORE, String(id));
+    if (!office || office.username !== username) {
+      throw new Error('[OfficesService] office not found or cross-user access forbidden.');
+    }
+    if (nextPatch.name !== undefined) {
+      const offices = await tx.getAll(STORE, { username });
+      const dup = offices.some((o) => String(o.id) !== String(id)
+        && String(o.name || '').trim().toLowerCase() === nextPatch.name.toLowerCase());
+      if (dup) throw new Error(`[OfficesService] duplicate office name: ${nextPatch.name}`);
+
+      if (nextPatch.name !== office.name) {
+        renameDetail = { username, previousName: office.name, officeName: nextPatch.name };
+        const receipts = await tx.getAll('receipts', { username });
+        const receiptIds = new Set(receipts.map((receipt) => String(receipt.id)));
+        const rows = await tx.getAll('receipt_rows');
+        const oldName = String(office.name || '').trim().toLowerCase();
+        for (const row of rows) {
+          if (receiptIds.has(String(row.receipt_id))
+            && String(row.office || '').trim().toLowerCase() === oldName) {
+            await tx.update('receipt_rows', row.row_id, { office: nextPatch.name });
+          }
+        }
+      }
+    }
+    return tx.update(STORE, String(id), nextPatch);
+  }, { username, stores: [STORE, 'receipts', 'receipt_rows'] });
+  if (renameDetail) window.dispatchEvent(new CustomEvent('receipts:changed'));
+  window.dispatchEvent(new CustomEvent('offices:changed', { detail: renameDetail }));
   return updated;
 }
 
@@ -472,6 +490,7 @@ const OfficesModule = Object.freeze({
 // ========================================
 
 let _searchQuery = '';
+let _listLoadVersion = 0;
 let _editingOfficeId = null;
 let _editingOfficeDraft = null;
 let _activeDetailsTab = 'balance';
@@ -495,6 +514,12 @@ function _fmt(n) {
 
 function _text(value) {
   return value == null ? '' : String(value);
+}
+
+function _escapeHtml(value) {
+  return _text(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
 }
 
 // _balanceClass — visual class helper for the رصيد الشركة tab (UI only).
@@ -532,7 +557,7 @@ function _renderListShell() {
             <tr>
               <th style="color:#fff;">اسم المكتب</th>
               <th style="color:#fff;">رقم الهاتف</th>
-              <th style="color:#fff;">إجمالي الوزن</th>
+              <th style="color:#fff;">الرصيد</th>
               <th style="color:#fff;">إجراءات</th>
             </tr>
           </thead>
@@ -605,7 +630,7 @@ function _renderDetailsShell(office) {
         <div class="flex items-center gap-3">
           <button type="button" data-action="office-back" style="background:#6b7280;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:0.8125rem;cursor:pointer;font-family:inherit;">← العودة</button>
           <div>
-            <h2 class="text-xl font-bold text-gray-800 mb-0">${office.name}</h2>
+            <h2 class="text-xl font-bold text-gray-800 mb-0">${_escapeHtml(office.name)}</h2>
             <p class="text-muted text-xs mb-0">عرض وإدارة البيانات الكاملة</p>
           </div>
         </div>
@@ -618,14 +643,14 @@ function _renderDetailsShell(office) {
           <div style="width:40px;height:40px;border-radius:50%;background:#22c55e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.125rem;flex-shrink:0;">🏢</div>
           <div>
             <p style="font-size:0.6875rem;color:#6b7280;margin:0;">اسم المكتب</p>
-            <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${office.name}</p>
+            <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${_escapeHtml(office.name)}</p>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:200px;">
           <div style="width:40px;height:40px;border-radius:50%;background:#0f766e;display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.125rem;flex-shrink:0;">📞</div>
           <div>
             <p style="font-size:0.6875rem;color:#6b7280;margin:0;">رقم الهاتف</p>
-            <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${office.phone || '—'}</p>
+            <p style="font-size:1.0625rem;font-weight:700;color:#1f2937;margin:0;">${_escapeHtml(office.phone || '—')}</p>
           </div>
         </div>
       </div>
@@ -851,45 +876,46 @@ async function loadOffices() {
   const session = _requireSession();
   if (!session) return;
 
+  const loadVersion = ++_listLoadVersion;
   _renderListShell();
 
   const searchEl = document.getElementById('officeSearch');
   if (searchEl) searchEl.value = _searchQuery || '';
 
-  const summary = await OfficesModule.getOfficeSummary();
+  const offices = await OfficesService.getOffices(session.username);
 
   const tbody = document.getElementById('officesTableBody');
   if (!tbody) return;
 
   const query = _searchQuery.trim().toLowerCase();
-  const rows = summary.rows.filter((item) => {
+  const filteredOffices = offices.filter((office) => {
     if (!query) return true;
-    const name = String(item.office.name || '').toLowerCase();
-    const phone = String(item.office.phone || '').toLowerCase();
+    const name = String(office.name || '').toLowerCase();
+    const phone = String(office.phone || '').toLowerCase();
     return name.includes(query) || phone.includes(query);
   });
+
+  const balances = await FinancialService.getOfficeBalances(filteredOffices.map((office) => office.id));
+  const rows = filteredOffices.map((office) => ({ office, balance: balances.get(String(office.id)).balance }));
+  if (loadVersion !== _listLoadVersion) return;
 
   tbody.innerHTML = rows.map((item) => {
     const office = item.office;
     const isEditing = _editingOfficeId && String(_editingOfficeId) === String(office.id);
     const nameVal = isEditing ? _editingOfficeDraft?.name ?? office.name : office.name;
-    const phoneVal = isEditing ? _editingOfficeDraft?.phone ?? office.phone : office.phone;
 
     return `
       <tr data-id="${office.id}" style="transition:background 0.15s;">
         <td ${!isEditing ? `data-action="office-details" data-id="${office.id}" style="cursor:pointer;color:#2563eb;font-weight:700;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background=''"` : ''}>
           ${isEditing
-            ? `<input type="text" class="input input-sm office-edit-name" value="${_text(nameVal)}" />`
-            : _text(office.name)
+            ? `<input type="text" class="input input-sm office-edit-name" value="${_escapeHtml(nameVal)}" />`
+            : _escapeHtml(office.name)
           }
         </td>
         <td style="color:#374151;">
-          ${isEditing
-            ? `<input type="text" class="input input-sm office-edit-phone" value="${_text(phoneVal)}" />`
-            : _text(office.phone || '—')
-          }
+          ${_escapeHtml(office.phone || '—')}
         </td>
-        <td style="color:#374151;">${_fmt(item.weight)}</td>
+        <td style="color:#374151;">${_fmt(item.balance)}</td>
         <td>
           ${isEditing
             ? `
@@ -898,6 +924,7 @@ async function loadOffices() {
             `
             : `
               <button type="button" data-action="office-details" data-id="${office.id}" class="btn-icon" title="تفاصيل" style="background:#dbeafe;color:#2563eb;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">📋</button>
+              <button type="button" data-action="office-edit" data-id="${office.id}" class="btn-icon" title="تعديل" aria-label="تعديل المكتب" style="background:#fef3c7;color:#d97706;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">✏️</button>
               <button type="button" data-action="office-delete" data-id="${office.id}" class="btn-icon" title="حذف" style="background:#fee2e2;color:#dc2626;width:28px;height:28px;border:none;border-radius:6px;cursor:pointer;">🗑️</button>
             `
           }
@@ -1194,9 +1221,8 @@ function attachOfficesPageListeners() {
       const row = target.closest('tr');
       const id = row?.dataset.id;
       const name = row?.querySelector('.office-edit-name')?.value;
-      const phone = row?.querySelector('.office-edit-phone')?.value;
       try {
-        await OfficesModule.updateOffice(id, { name, phone });
+        await OfficesModule.updateOffice(id, { name });
         _editingOfficeId = null;
         _editingOfficeDraft = null;
         await loadOffices();
@@ -1238,7 +1264,7 @@ function attachOfficesPageListeners() {
           const office = await OfficesModule.getOfficeDetails(_detailsOfficeId);
           printHTML(buildPrintDocument({
             title: 'طباعة تفاصيل المكتب',
-            body: '<h2 style="text-align:center;color:#0f766e;margin-bottom:12px;">' + (office?.name || '') + '</h2>' + content.innerHTML,
+            body: '<h2 style="text-align:center;color:#0f766e;margin-bottom:12px;">' + _escapeHtml(office?.name || '') + '</h2>' + content.innerHTML,
             orientation: 'portrait',
           }), { id: 'office-print-iframe' });
         }

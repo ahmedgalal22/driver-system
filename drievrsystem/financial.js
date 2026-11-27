@@ -1347,16 +1347,7 @@ async function getVehicleMonthlyReport(vehicleId, monthKey) {
  * vehicle_id:null — automatic receipt-row payments and explicit manual office
  * deposits/withdrawals.
  */
-async function getOfficeBalance(office_id) {
-  const officeKey = String(office_id ?? '').trim();
-  if (!officeKey) throw new Error('[FinancialService:getOfficeBalance] office_id is required.');
-
-  const entries = await DB.findByFields(STORE.LEDGER, {
-    client_type: 'office',
-    client_id: officeKey,
-    owner_id: officeKey,
-    is_reversed: false,
-  });
+function _officeBalanceProjection(officeKey, entries) {
   const active = entries
     .filter(e => e.deleted_at === null
       && e.vehicle_id === null
@@ -1385,6 +1376,32 @@ async function getOfficeBalance(office_id) {
     entry_count: active.length,
     entries: active.map(Money.decimalizeRecord),
   };
+}
+
+
+async function getOfficeBalance(office_id) {
+  const officeKey = String(office_id ?? '').trim();
+  if (!officeKey) throw new Error('[FinancialService:getOfficeBalance] office_id is required.');
+  const entries = await DB.findByFields(STORE.LEDGER, {
+    client_type: 'office', client_id: officeKey, owner_id: officeKey, is_reversed: false,
+  });
+  return _officeBalanceProjection(officeKey, entries);
+}
+
+// Load all requested offices from one ledger read, using exactly the same
+// projection as the single-office details view.
+async function getOfficeBalances(officeIds) {
+  const keys = [...new Set(officeIds.map(id => String(id ?? '').trim()))];
+  if (keys.some(key => !key)) throw new Error('[FinancialService:getOfficeBalances] office_id is required.');
+  if (!keys.length) return new Map();
+  const groups = new Map(keys.map(key => [key, []]));
+  const entries = await DB.findByFields(STORE.LEDGER, { client_type: 'office', is_reversed: false });
+  for (const entry of entries) {
+    if (groups.has(entry.client_id) && entry.owner_id === entry.client_id) {
+      groups.get(entry.client_id).push(entry);
+    }
+  }
+  return new Map(keys.map(key => [key, _officeBalanceProjection(key, groups.get(key))]));
 }
 
 // ─── MANUAL VEHICLE BALANCE MOVEMENTS ────────────────────────────────────────
@@ -2514,6 +2531,7 @@ export const FinancialService = Object.freeze({
   getLedgerIntegrityDiagnosticSnapshot,
   getVehicleMonthlyReport,
   getOfficeBalance,
+  getOfficeBalances,
   createManualVehicleBalanceEntry,
   updateVehicleMaintenanceEntry,
   deleteManualVehicleBalanceEntry,

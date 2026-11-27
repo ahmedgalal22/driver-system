@@ -1196,12 +1196,26 @@ function _selectedClient() {
   return _clientsCache.find(c => c.label === value || (c.name === value && _clientsCache.filter(x => x.name === value).length === 1)) || null;
 }
 
+function _escapeOfficeOption(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char]);
+}
+
+function _refreshRenamedOfficeInDraft(detail) {
+  if (!detail || detail.username !== _currentUsername() || !detail.previousName || !detail.officeName) return;
+  const oldName = String(detail.previousName).trim().toLowerCase();
+  document.querySelectorAll('#receiptTableBody .receipt-office').forEach(input => {
+    if (String(input.value || '').trim().toLowerCase() === oldName) input.value = detail.officeName;
+  });
+}
+
 async function loadOfficesForReceipt() {
   const username = _currentUsername();
   if (!username) return;
   const offices = await ReceiptsModule.getOffices(username);
   const dl      = document.getElementById('officesList');
-  if (dl) dl.innerHTML = offices.map(o => `<option value="${o.name}">`).join('');
+  if (dl) dl.innerHTML = offices.map(o => `<option value="${_escapeOfficeOption(o.name)}">`).join('');
 }
 
 // ─── RECEIPT: PER-ROW DRIVER AUTOCOMPLETE (Receipt Row → Driver) ─────────────
@@ -3545,7 +3559,8 @@ window.addEventListener('drivers:changed', (event) => {
     console.warn('[receipts] driver autocomplete refresh failed', err);
   });
 });
-window.addEventListener('offices:changed', () => {
+window.addEventListener('offices:changed', (event) => {
+  _refreshRenamedOfficeInDraft(event.detail);
   loadOfficesForReceipt();
 });
 
