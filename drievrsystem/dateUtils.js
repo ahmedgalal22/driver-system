@@ -94,6 +94,26 @@ function _getParts(date) {
 // ─── PUBLIC API ────────────────────────────────────────────────────────────────
 
 /**
+ * Payment posting requires a Cairo date, never the device-local fallback.
+ * Intl uses the runtime's local timezone database; no network access is needed.
+ */
+function cairoTodayStrict() {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+      timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    if (formatter.resolvedOptions().timeZone !== TIMEZONE) throw new Error('Incorrect timezone');
+    const parts = Object.fromEntries(formatter.formatToParts(new Date()).map(part => [part.type, part.value]));
+    if (!/^\d{4}$/.test(parts.year || '') || !/^\d{2}$/.test(parts.month || '') || !/^\d{2}$/.test(parts.day || '')) {
+      throw new Error('Incomplete date');
+    }
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (cause) {
+    throw new Error('تعذر تحديد تاريخ القاهرة محلياً؛ لم يتم تسجيل حركة الصرف.', { cause });
+  }
+}
+
+/**
  * Today's date in Egypt local time.
  * @returns {string} "YYYY-MM-DD"
  */
@@ -140,6 +160,7 @@ function toLocalDateTime(date) {
 // ─── EXPORT ────────────────────────────────────────────────────────────────────
 
 const DateUtils = Object.freeze({
+  cairoTodayStrict,
   todayLocal,
   nowLocal,
   toLocalDate,

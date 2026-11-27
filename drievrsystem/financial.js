@@ -429,10 +429,6 @@ async function _resolveReceiptVehicle(row, { tx } = {}) {
   return vehicle;
 }
 
-function _receiptPaymentDate(row, receiptDate = null) {
-  return row.date || receiptDate || DateUtils.todayLocal();
-}
-
 function _receiptCompanyAmount(row) {
   const net = Number(row.net);
   const sarf = Number(row.sarf);
@@ -444,7 +440,7 @@ function _receiptCompanyAmount(row) {
   return amount;
 }
 
-function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+function _buildReceiptPaymentCompanyLeg(username, row, office, paymentDate, appliedAt = DateUtils.nowLocal()) {
   const amount = _receiptCompanyAmount(row);
   return {
     username,
@@ -460,7 +456,7 @@ function _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate = nul
     amount,
     reference_type: RECEIPT_ROW_PAYMENT_COMPANY_REF_TYPE,
     reference_id: String(row.row_id),
-    date: _receiptPaymentDate(row, receiptDate),
+    date: paymentDate,
     applied_at: appliedAt,
     is_reversed: false,
     note: `صرف كارتة — الصافي + الصرف (${office.name || ''})`,
@@ -490,9 +486,9 @@ function _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDa
   };
 }
 
-async function _receiptPaymentAddCommands(username, row, receiptDate = null, { tx } = {}) {
+async function _receiptPaymentAddCommands(username, row, paymentDate, { tx } = {}) {
   const office = await _resolveReceiptPaymentOffice(row, { tx });
-  const payload = _buildReceiptPaymentCompanyLeg(username, row, office, receiptDate);
+  const payload = _buildReceiptPaymentCompanyLeg(username, row, office, paymentDate);
   return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
 }
 
@@ -550,7 +546,7 @@ async function _resolveReceiptRowCompany(row, { tx } = {}) {
 
 function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
   const now = DateUtils.nowLocal();
-  const date = row.date || receiptDate || DateUtils.todayLocal();
+  const date = receiptDate;
   const amount = _receiptCompanyAmount(row);
 
   return {
@@ -743,7 +739,7 @@ function _receiptCreationIdentity(row, receiptDate) {
     net: Number(row.net) || 0,
     sarf: Number(row.sarf) || 0,
     office: String(row.office || '').trim(),
-    date: row.date || receiptDate || null,
+    date: receiptDate,
   });
 }
 
@@ -760,14 +756,13 @@ function _receiptVehicleBalanceIdentity(row, receiptDate) {
   });
 }
 
-function _receiptPaymentIdentity(row, receiptDate) {
+function _receiptPaymentIdentity(row) {
   return JSON.stringify({
     payment_status: row.payment_status === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID,
     net: Number(row.net) || 0,
     sarf: Number(row.sarf) || 0,
     vehicle_id: String(row.vehicle_id || ''),
     office: String(row.office || '').trim(),
-    date: row.date || receiptDate || null,
   });
 }
 
@@ -820,8 +815,8 @@ async function updateReceipt(username, id, data) {
       || _receiptVehicleBalanceIdentity(oldRow, existingReceipt.receipt_date)
         !== _receiptVehicleBalanceIdentity(nextRow, receiptRecord.receipt_date);
     const paymentChanged = !nextRow
-      || _receiptPaymentIdentity(oldRow, existingReceipt.receipt_date)
-        !== _receiptPaymentIdentity(nextRow, receiptRecord.receipt_date);
+      || _receiptPaymentIdentity(oldRow)
+        !== _receiptPaymentIdentity(nextRow);
 
     if (creationChanged) {
       const creation = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
@@ -846,7 +841,7 @@ async function updateReceipt(username, id, data) {
       } else {
         _assertNoActiveReceiptPaymentEffects(payment, 'updateReceipt', oldRow.row_id);
       }
-      if (nextRow?.payment_status === PAYMENT_STATUS.PAID) paymentAddRows.push(nextRow);
+      if (nextRow?.payment_status === PAYMENT_STATUS.PAID) paymentAddRows.push({ row: nextRow, oldPaid });
     }
   }
 
@@ -889,7 +884,7 @@ async function updateReceipt(username, id, data) {
       if (!currentRow
         || _receiptCreationIdentity(oldRow, existingReceipt.receipt_date) !== _receiptCreationIdentity(currentRow, currentReceipt.receipt_date)
         || _receiptVehicleBalanceIdentity(oldRow, existingReceipt.receipt_date) !== _receiptVehicleBalanceIdentity(currentRow, currentReceipt.receipt_date)
-        || _receiptPaymentIdentity(oldRow, existingReceipt.receipt_date) !== _receiptPaymentIdentity(currentRow, currentReceipt.receipt_date)) {
+        || _receiptPaymentIdentity(oldRow) !== _receiptPaymentIdentity(currentRow)) {
         throw new Error('[FinancialService:updateReceipt] receipt row financial identity changed before mutation; reload and retry.');
       }
     }
@@ -913,10 +908,21 @@ async function updateReceipt(username, id, data) {
       )));
     }
     const paymentAddCommands = [];
-    for (const row of paymentAddRows) {
-      paymentAddCommands.push(...(await _receiptPaymentAddCommands(
-        username, row, receiptRecord.receipt_date, { tx }
-      )));
+    const newPaymentCommands = [];
+    for (const { row, oldPaid } of paymentAddRows) {
+      // A paid entry may need replacement after an amount or office edit.
+      // Preserve its original posting date; never derive it from receipt dates.
+      let paymentDate;
+      if (oldPaid) {
+        const payment = await _getReceiptPaymentPair(row.row_id, { tx });
+        paymentDate = payment.companyLegs[0]?.date;
+        if (typeof paymentDate !== 'string' || !paymentDate.trim()) {
+          throw new Error('[FinancialService:updateReceipt] existing company payment has no posting date; reconcile it before editing.');
+        }
+      }
+      const commands = await _receiptPaymentAddCommands(username, row, paymentDate, { tx });
+      paymentAddCommands.push(...commands);
+      if (!oldPaid) newPaymentCommands.push(...commands);
     }
 
     const vehicleBalanceReverseCommands = [];
@@ -942,6 +948,12 @@ async function updateReceipt(username, id, data) {
       )));
     }
 
+    // All asynchronous preparation is complete. Date new transitions at the
+    // final write boundary, while replacements retain their stored dates.
+    if (newPaymentCommands.length) {
+      const transitionDate = DateUtils.cairoTodayStrict();
+      for (const command of newPaymentCommands) command.payload.date = transitionDate;
+    }
     return WriteDataSource.executeWithinTransaction(tx, [
       receiptCommand,
       ...rowCommands,
@@ -2456,6 +2468,8 @@ async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
     if (target === PAYMENT_STATUS.PAID) {
       _assertNoActiveReceiptPaymentEffects(payment, 'setReceiptRowPaymentStatus', rowKey);
       const legs = await _receiptPaymentAddCommands(username, row, null, { tx });
+      const transitionDate = DateUtils.cairoTodayStrict();
+      for (const leg of legs) leg.payload.date = transitionDate;
       await tx.runOps([
         ...legs.map(command => ({ op: 'add', store: STORE.LEDGER, payload: command.payload })),
         { op: 'update', store: 'receipt_rows', id: rowKey, patch: { payment_status: PAYMENT_STATUS.PAID } },

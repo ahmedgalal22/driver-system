@@ -4,6 +4,7 @@ import { installIDB } from './idb-shim.mjs';
 installIDB();
 const { DB } = await import('./database.js');
 const { FinancialService } = await import('./financial.js');
+const { DateUtils } = await import('./dateUtils.js');
 const { ClientRepository } = await import('./services/clientRepository.js');
 const U = 'receipt-vehicle-deposit-date';
 const uuid = () => crypto.randomUUID();
@@ -79,12 +80,12 @@ assert.equal((await FinancialService.getVehicleMonthlyReport(vehicle.id, '2025-0
 assert.match(entities, /_escapeMaintenanceText\(movement\.date \|\| '—'\)/);
 console.log('PASS ledger display renderer and monthly report use persisted main date');
 
-// The company payment remains row-date based, and does not alter vehicle deposit.
+// The company payment uses the transition date, and does not alter vehicle deposit.
 await FinancialService.setReceiptRowPaymentStatus(U, different.row_id, 'paid');
 const company = (await entries(different.row_id)).find(e => e.reference_type === 'receipt_row_payment_company' && !e.is_reversed);
-assert.equal(company.date, '2025-05-25');
+assert.equal(company.date, DateUtils.todayLocal());
 assert.equal((await vehicles(different.row_id))[0].id, replacement.id);
-console.log('PASS company payment still uses its existing row-date behavior');
+console.log('PASS company payment uses the transition date');
 
 const manual = await FinancialService.createManualVehicleBalanceEntry(U, {
   vehicle_id: vehicle.id, entry_type: 'deposit', amount: 17, date: '2025-08-19', note: 'Manual',
