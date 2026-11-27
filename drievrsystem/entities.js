@@ -1583,7 +1583,8 @@ function _renderVehicleMonthlyReportContent(vehicle) {
           <span>الشهر</span>
           <input id="vehicleMonthlyReportMonth" type="month" class="input" value="${monthKey}">
         </label>
-        <button type="button" data-action="load-vehicle-monthly-report" class="btn vehicle-details-action">عرض التقرير</button>
+                <button type="button" data-action="load-vehicle-monthly-report" class="btn vehicle-details-action" style="background-color: #007bff; border-color: #007bff; color: #fff;">عرض التقرير</button>
+
         <button type="button" data-action="vehicle-monthly-report-current-month" class="btn vehicle-details-secondary-action">الشهر الحالي</button>
       </div>
     </header>
