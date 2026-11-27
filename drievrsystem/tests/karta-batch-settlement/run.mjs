@@ -252,6 +252,123 @@ ok(DATABASE_SRC.includes('const DB_VERSION = 17;')
   && !DATABASE_SRC.includes('batches'),
   'batch_id is ledger metadata only; no DB version, store, or index was added');
 
+console.log('\n— driver movements refresh after settlement —');
+// Exercise the actual handler, filter, and renderer with the real financial
+// service and IndexedDB shim. Only browser DOM/dialogs and Karta loading are doubles.
+const { Money } = await import('./money.js');
+const refreshDriver = { id: uuid(), username: U, name: 'Refresh driver' };
+await ClientRepository.saveDriver(refreshDriver, { username: U });
+const firstRefreshRow = mkRow({ driver: refreshDriver, vehicle: VA, price: 50 });
+await createRows([firstRefreshRow]);
+const elements = {
+  driverTransactionsBody: { innerHTML: '' },
+  driverFromDate: { value: '' },
+  driverToDate: { value: '' },
+  driverSearchQuery: { value: '' },
+};
+const document = { getElementById: id => elements[id] || null };
+const alerts = [];
+let ledgerReads = 0;
+let kartaReloads = 0;
+let failSettlement = false;
+const service = {
+  async createKartaSettlementBatch(...args) {
+    if (failSettlement) throw new Error('simulated settlement failure');
+    return FinancialService.createKartaSettlementBatch(...args);
+  },
+  async getDriverLedger(...args) {
+    ledgerReads++;
+    return FinancialService.getDriverLedger(...args);
+  },
+};
+const slice = (start, end) => {
+  const from = ENTITIES_SRC.indexOf(start);
+  const to = ENTITIES_SRC.indexOf(end, from);
+  if (from < 0 || to < 0) throw new Error(`Missing UI source: ${start}`);
+  return ENTITIES_SRC.slice(from, to);
+};
+const ui = new Function('FinancialService', 'Money', 'document', 'driverId', 'username', 'alerts', 'loadKartas', `
+  let _driverLedgerCache = [];
+  let selectedDriver = driverId;
+  let _currentKartas = [];
+  const _getCurrentDriverId = () => selectedDriver;
+  const _currentUsername = () => username;
+  const _hasActiveKartaDateFilter = () => false;
+  const _eligibleUnsettledKartasForBatch = () => _currentKartas.filter(k =>
+    k.status === 'unsettled' && Number(k.driver_settlement_price) > 0);
+  const _loadDriverKartasTab = async id => { _currentKartas = await loadKartas(id); };
+  const _fmt = n => Money.fmt(n);
+  const _dateLabel = value => String(value || '').split('T')[0];
+  const _ledgerNote = entry => entry.note || '';
+  const confirm = () => true;
+  const alert = message => alerts.push(message);
+  ${slice('function _renderDriverLedgerTable(', 'async function showDriverDetails(')}
+  ${slice('function _applyDriverFilters(', 'async function _loadDriverKartasTab(')}
+  ${slice('async function _settleUnsettledKartasBatch(', 'function _sumKartaPrices(')}
+  return {
+    init: async () => { _driverLedgerCache = await FinancialService.getDriverLedger(driverId); _applyDriverFilters(); await _loadDriverKartasTab(driverId); },
+    settle: _settleUnsettledKartasBatch,
+    loadKartas: _loadDriverKartasTab,
+    cache: () => _driverLedgerCache,
+    filter: _applyDriverFilters,
+    selected: () => selectedDriver,
+  };
+`)(service, Money, document, refreshDriver.id, U, alerts, async id => {
+  kartaReloads++;
+  return FinancialService.getDriverKartas(id);
+});
+await ui.init();
+ok(ui.cache().length === 0 && elements.driverTransactionsBody.innerHTML.includes('لا توجد حركات'),
+  'driver movements initially show the empty state');
+await ui.settle();
+ok(ui.cache().length === 1 && ui.cache()[0].reference_id === firstRefreshRow.row_id
+  && elements.driverTransactionsBody.innerHTML.includes('تسوية عامة للكارتات')
+  && !elements.driverTransactionsBody.innerHTML.includes('لا توجد حركات')
+  && ledgerReads === 2 && kartaReloads === 2 && ui.selected() === refreshDriver.id,
+  'first settlement appears immediately after commit and Karta tab still reloads for the selected driver');
+
+const secondRefreshRow = mkRow({ driver: refreshDriver, vehicle: VB, price: 75 });
+await createRows([secondRefreshRow]);
+await ui.loadKartas(refreshDriver.id);
+elements.driverSearchQuery.value = 'تسوية عامة';
+ui.filter();
+await ui.settle();
+ok(ui.cache().length === 2
+  && [firstRefreshRow.row_id, secondRefreshRow.row_id].every(id => ui.cache().some(entry => entry.reference_id === id))
+  && (elements.driverTransactionsBody.innerHTML.match(/<tr>/g) || []).length === 2
+  && elements.driverSearchQuery.value === 'تسوية عامة' && ui.selected() === refreshDriver.id,
+  'subsequent settlement appears alongside the first and preserves the active search and driver');
+
+elements.driverSearchQuery.value = 'no-match';
+elements.driverFromDate.value = '2099-01-01';
+ui.filter();
+const thirdRefreshRow = mkRow({ driver: refreshDriver, vehicle: VC, price: 25 });
+await createRows([thirdRefreshRow]);
+await ui.loadKartas(refreshDriver.id);
+await ui.settle();
+ok(ui.cache().length === 3 && elements.driverTransactionsBody.innerHTML.includes('لا توجد حركات')
+  && elements.driverSearchQuery.value === 'no-match' && elements.driverFromDate.value === '2099-01-01',
+  'refresh retains and reapplies date and search filters instead of displaying excluded rows');
+elements.driverSearchQuery.value = '';
+elements.driverFromDate.value = '';
+ui.filter();
+ok((elements.driverTransactionsBody.innerHTML.match(/<tr>/g) || []).length === 3,
+  'clearing filters reveals all cached settlements without reopening Driver Details');
+
+const failedRefreshRow = mkRow({ driver: refreshDriver, vehicle: VA, price: 15 });
+await createRows([failedRefreshRow]);
+await ui.loadKartas(refreshDriver.id);
+const readsBeforeFailure = ledgerReads;
+const reloadsBeforeFailure = kartaReloads;
+const htmlBeforeFailure = elements.driverTransactionsBody.innerHTML;
+failSettlement = true;
+await ui.settle();
+ok(ledgerReads === readsBeforeFailure && kartaReloads === reloadsBeforeFailure + 1
+  && elements.driverTransactionsBody.innerHTML === htmlBeforeFailure && ui.cache().length === 3
+  && alerts.at(-1) === 'simulated settlement failure'
+  && (await activeKartaByRow(failedRefreshRow.row_id)).length === 0,
+  'failed settlement does not refresh or claim success, and still reloads Kartas');
+
 console.log(failures === 0
   ? '\n✅ ALL KARTA-BATCH-SETTLEMENT ASSERTIONS PASSED'
   : `\n❌ ${failures} KARTA-BATCH-SETTLEMENT FAILURES`);

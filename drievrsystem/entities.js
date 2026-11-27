@@ -1097,6 +1097,16 @@ async function _settleUnsettledKartasBatch() {
     );
     if (result.settled_count > 0) {
       alert(`✅ تمت تسوية ${result.settled_count} كارتة بإجمالي ${_fmt(result.total)}`);
+      try {
+        const ledger = await FinancialService.getDriverLedger(driverId);
+        if (_getCurrentDriverId() === driverId) {
+          _driverLedgerCache = ledger || [];
+          _applyDriverFilters();
+        }
+      } catch (refreshErr) {
+        console.error('[entities] Failed to refresh driver ledger after settlement', refreshErr);
+        alert('تمت التسوية، لكن تعذر تحديث الحركات المالية. أعد فتح تفاصيل السائق لتحديثها.');
+      }
     } else {
       alert('لا توجد كارتات مؤهلة للتسوية.');
     }
