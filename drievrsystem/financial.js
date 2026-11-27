@@ -483,7 +483,7 @@ function _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDa
     amount: netCents,
     reference_type: RECEIPT_ROW_VEHICLE_BALANCE_REF_TYPE,
     reference_id: String(row.row_id),
-    date: _receiptPaymentDate(row, receiptDate),
+    date: receiptDate,
     applied_at: appliedAt,
     is_reversed: false,
     note: `إضافة كارتة للمركبة — الصافي (مركبة ${vehicle.plate || row.vehicle_plate || ''})`,
@@ -756,7 +756,7 @@ function _receiptVehicleBalanceIdentity(row, receiptDate) {
   return JSON.stringify({
     net: Number(row.net) || 0,
     vehicle_id: String(row.vehicle_id || ''),
-    date: row.date || receiptDate || null,
+    date: receiptDate,
   });
 }
 
