@@ -178,31 +178,44 @@ const afterRestore = await createBackupSnapshot(db, { canonicalStoreNames: canon
 assertSameSnapshot(beforeMutation.stores, afterRestore.stores, 'valid complete restore replaces every active store and preserves empty stores');
 ok(afterRestore.stores.receipt_rows[0].value.weight2 === 'raw stored value' && afterRestore.stores.receipt_rows[0].value.weightTotal === 999, 'receipt quantity and stored total survive backup and restore unchanged');
 
-// Unsupported accounts are skipped without affecting the rest of a valid restore.
-const mixedAccounts = clone(beforeMutation);
-mixedAccounts.stores.users.push({ key: 2, value: { id: 2, username: 'not-admin', password_hash: 'ignored', deleted_at: null } });
-// This identified non-admin entry has a malformed or absent key and is skipped.
-mixedAccounts.stores.users.push({ value: { username: 'other-account', password_hash: 'ignored' } });
-mixedAccounts._meta.recordCounts.users += 2;
-await write({ users: [{ id: 1, username: USER, password_hash: 'changed', deleted_at: null }],
-  vehicles: [{ id: 10, plate: 'CHANGED AGAIN', deleted_at: null }] });
-const validatedMixed = validateBackupSnapshot(db, mixedAccounts, { canonicalStoreNames: canonical });
-ok(validatedMixed.recordCounts.users === 1 && validatedMixed.stores.users.length === 1,
-  'validation excludes identifiable non-admin accounts before checking their malformed records');
+// Non-admin accounts must be rejected before any database mutation — single-admin system.
+// Exactly one admin account must be present.
+await write({ users: [{ id: 1, username: USER, password_hash: 'changed-for-reject-test', deleted_at: null }],
+  vehicles: [{ id: 10, plate: 'CHANGED-BEFORE-REJECT', deleted_at: null }] });
+const snapshotBeforeNonAdmin = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+const emptyUsers = clone(beforeMutation);
+emptyUsers.stores.users = [];
+emptyUsers._meta.recordCounts.users = 0;
+await expectReject(() => Promise.resolve(validateBackupSnapshot(db, emptyUsers, { canonicalStoreNames: canonical })),
+  /exactly one admin/, 'empty users array is rejected before any database mutation');
+const afterEmptyReject = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+assertSameSnapshot(snapshotBeforeNonAdmin.stores, afterEmptyReject.stores, 'rejected empty users backup does not change any store');
+const twoAdmins = clone(beforeMutation);
+twoAdmins.stores.users.push({ key: 2, value: { id: 2, username: USER, password_hash: 'second-admin', deleted_at: null } });
+twoAdmins._meta.recordCounts.users += 1;
+await expectReject(() => Promise.resolve(validateBackupSnapshot(db, twoAdmins, { canonicalStoreNames: canonical })),
+  /exactly one admin/, 'two admin records with different primary keys are rejected before any database mutation');
+const afterTwoAdminReject = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+assertSameSnapshot(snapshotBeforeNonAdmin.stores, afterTwoAdminReject.stores, 'rejected two-admin backup does not change any store');
+const nonAdminBackup = clone(beforeMutation);
+nonAdminBackup.stores.users.push({ key: 2, value: { id: 2, username: 'not-admin', password_hash: 'ignored', deleted_at: null } });
+nonAdminBackup._meta.recordCounts.users += 1;
+await expectReject(() => Promise.resolve(validateBackupSnapshot(db, nonAdminBackup, { canonicalStoreNames: canonical })),
+  /non-admin username/, 'non-admin account is rejected before any database mutation');
+const afterNonAdminReject = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+assertSameSnapshot(snapshotBeforeNonAdmin.stores.users, afterNonAdminReject.stores.users, 'rejected non-admin backup does not change users store');
+assertSameSnapshot(snapshotBeforeNonAdmin.stores.vehicles, afterNonAdminReject.stores.vehicles, 'rejected non-admin backup does not change business stores');
+const nonAdminWithBadKey = clone(beforeMutation);
+nonAdminWithBadKey.stores.users.push({ value: { username: 'other-account', password_hash: 'ignored' } });
+nonAdminWithBadKey._meta.recordCounts.users += 1;
+await expectReject(() => Promise.resolve(validateBackupSnapshot(db, nonAdminWithBadKey, { canonicalStoreNames: canonical })),
+  /non-admin username|undetermined username/, 'non-admin account with malformed key is still rejected');
+const afterSecondReject = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
+assertSameSnapshot(afterNonAdminReject.stores, afterSecondReject.stores, 'second rejected validation still does not change any store');
+// Restore summary no longer exposes account count — single-admin system.
 const appSource = readFileSync('./app.js', 'utf8');
-const summarySource = appSource.slice(appSource.indexOf('function _restoreSummary('), appSource.indexOf('/**\n * Parse and validate', appSource.indexOf('function _restoreSummary(')));
-const summarize = new Function(`${summarySource}\nreturn _restoreSummary;`)();
-const summary = summarize(mixedAccounts, validatedMixed);
-ok(summary.accountCount === 1 && summary.totalRecords === Object.values(validatedMixed.recordCounts).reduce((a, b) => a + b, 0)
-  && summary.totalRecords === Object.values(mixedAccounts._meta.recordCounts).reduce((a, b) => a + b, 0) - 2
-  && appSource.includes('${summary.accountCount}'), 'confirmation counts only records to be restored');
-await restoreAndVerifyBackup(db, validatedMixed);
-const mixedResult = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
-ok(mixedResult.stores.users.length === 1 && mixedResult.stores.users[0].value.username === 'admin'
-  && mixedResult.stores.users[0].value.password_hash === beforeMutation.stores.users[0].value.password_hash,
-  'restore skips non-admin accounts and restores admin unchanged');
-assertSameSnapshot(beforeMutation.stores.vehicles, mixedResult.stores.vehicles, 'mixed-account backup restores valid business data');
-assertSameSnapshot(beforeMutation.stores.receipt_rows, mixedResult.stores.receipt_rows, 'mixed-account backup preserves receipt rows');
+ok(!appSource.includes('accountCount'), 'restore summary does not expose accountCount');
+ok(!appSource.includes('عدد الحسابات'), 'restore confirmation does not display account count');
 for (const unknown of [{ key: 4, value: { id: 4 } }, { key: 4, value: { id: 4, username: null } }, { key: 4, value: null }]) {
   const ambiguous = clone(beforeMutation);
   ambiguous.stores.users.push(unknown);
@@ -214,20 +227,22 @@ const malformedAdmin = clone(beforeMutation);
 delete malformedAdmin.stores.users[0].value.id;
 await expectReject(() => Promise.resolve(validateBackupSnapshot(db, malformedAdmin, { canonicalStoreNames: canonical })),
   /key-path/, 'malformed admin account remains subject to validation');
-const malformedBusiness = clone(mixedAccounts);
+const malformedBusiness = clone(beforeMutation);
 delete malformedBusiness.stores.receipts[0].value.id;
 await expectReject(() => Promise.resolve(validateBackupSnapshot(db, malformedBusiness, { canonicalStoreNames: canonical })),
-  /key-path/, 'malformed business data remains subject to validation with skipped accounts');
+  /key-path/, 'malformed business data is rejected because of key-path error');
 const afterRejectedValidation = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
-assertSameSnapshot(mixedResult.stores, afterRejectedValidation.stores, 'rejected validation does not change any store');
+assertSameSnapshot(afterSecondReject.stores, afterRejectedValidation.stores, 'rejected validation does not change any store');
+await write({ users: [{ id: 1, username: USER, password_hash: beforeMutation.stores.users[0].value.password_hash, deleted_at: null }],
+  vehicles: [{ id: 10, plate: beforeMutation.stores.vehicles[0].value.plate, deleted_at: null }] });
 
 const beforeFailure = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });
 const writeFailure = clone(beforeFailure);
-writeFailure.stores.users.push({
-  key: 2,
-  value: { id: 2, username: USER, password_hash: 'duplicate', deleted_at: null },
+writeFailure.stores.offices.push({
+  key: 999,
+  value: { id: 999, name: 'Office Test', deleted_at: null },
 });
-writeFailure._meta.recordCounts.users++;
+writeFailure._meta.recordCounts.offices++;
 const validatedFailure = validateBackupSnapshot(db, writeFailure, { canonicalStoreNames: canonical });
 await expectReject(() => restoreValidatedBackup(db, validatedFailure), /restore.*store|transaction/, 'injected unique-index failure rejects restore after clear scheduling');
 const afterFailure = await createBackupSnapshot(db, { canonicalStoreNames: canonical, exportedBy: USER });

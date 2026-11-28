@@ -312,7 +312,6 @@ function _restoreSummary(backup, validated) {
     .reduce((sum, count) => sum + count, 0);
   return {
     storeCount: validated.storeNames.length,
-    accountCount: validated.recordCounts.users,
     totalRecords,
     exportDate: backup._meta.exportedAt
       ? new Date(backup._meta.exportedAt).toLocaleString('ar-EG')
@@ -387,8 +386,7 @@ async function _importFullBackup() {
     const message = `⚠️ النسخة الاحتياطية اجتازت التحقق الأولي\n\n`
       + `📅 تاريخ النسخة: ${summary.exportDate}\n`
       + `📦 عدد الجداول: ${summary.storeCount}\n`
-      + `📊 عدد السجلات: ${summary.totalRecords}\n`
-      + `👤 عدد الحسابات: ${summary.accountCount}\n\n`
+      + `📊 عدد السجلات: ${summary.totalRecords}\n\n`
       + `⚠️ سيتم استبدال جميع الجداول النشطة في عملية واحدة.\n`
       + `⚠️ أغلق أي تبويبات أخرى لنظام Karta قبل المتابعة.\n\n`
       + `هل تريد المتابعة؟`;

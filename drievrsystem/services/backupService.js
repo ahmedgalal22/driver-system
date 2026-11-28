@@ -255,19 +255,19 @@ export function validateBackupSnapshot(db, backup, { canonicalStoreNames } = {})
       throw _error(`backup record count for store "${storeName}" is invalid or inconsistent.`);
     }
 
-    // Only a clearly identified non-admin account may be skipped before
-    // record validation. An unknown identity must fail safely.
-    const restorable = storeName === 'users' ? entries.filter((entry, index) => {
-      if (!_isPlainObject(entry) || !_isPlainObject(entry.value)
-          || !Object.prototype.hasOwnProperty.call(entry.value, 'username')
-          || typeof entry.value.username !== 'string') {
-        throw _error(`backup account ${index} has an undetermined username.`);
-      }
-      return entry.value.username === 'admin';
-    }) : entries;
     const seenKeys = new Set();
     const keyPath = storeSchemas.get(storeName).keyPath;
-    normalizedStores[storeName] = restorable.map((entry, index) => {
+    normalizedStores[storeName] = entries.map((entry, index) => {
+      if (storeName === 'users') {
+        if (!_isPlainObject(entry) || !_isPlainObject(entry.value)
+            || !Object.prototype.hasOwnProperty.call(entry.value, 'username')
+            || typeof entry.value.username !== 'string') {
+          throw _error(`backup account ${index} has an undetermined username.`);
+        }
+        if (entry.value.username !== 'admin') {
+          throw _error(`backup account ${index} has a non-admin username.`);
+        }
+      }
       if (!_isPlainObject(entry) || !Object.prototype.hasOwnProperty.call(entry, 'key') || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
         throw _error(`backup entry ${index} in store "${storeName}" is invalid.`);
       }
@@ -292,16 +292,15 @@ export function validateBackupSnapshot(db, backup, { canonicalStoreNames } = {})
     });
   }
 
+  if (!normalizedStores['users'] || normalizedStores['users'].length !== 1) {
+    throw _error('backup must contain exactly one admin account.');
+  }
+
   return Object.freeze({
     storeNames: activeStoreNames,
     stores: normalizedStores,
     recordCounts: Object.fromEntries(activeStoreNames.map(name => [name, normalizedStores[name].length])),
   });
-}
-
-// Restore and verification must agree on the exact records allowed in users.
-function _restorableEntries(storeName, entries) {
-  return storeName === 'users' ? entries.filter(entry => entry.value?.username === 'admin') : entries;
 }
 
 export async function restoreValidatedBackup(db, validatedBackup) {
@@ -336,7 +335,7 @@ export async function restoreValidatedBackup(db, validatedBackup) {
       clearRequest.onerror = () => fail(`failed to clear store "${storeName}"`, clearRequest.error);
 
       const keyPath = store.keyPath;
-      for (const entry of _restorableEntries(storeName, validatedBackup.stores[storeName])) {
+      for (const entry of validatedBackup.stores[storeName]) {
         const putRequest = keyPath === null
           ? store.put(entry.value, entry.key)
           : store.put(entry.value);
@@ -369,7 +368,7 @@ export async function verifyRestoredBackup(db, validatedBackup) {
       _requestResult(store.getAllKeys(), `verify ${storeName} keys`),
       _requestResult(store.getAll(), `verify ${storeName} records`),
     ]);
-    const expected = _restorableEntries(storeName, validatedBackup.stores[storeName]);
+    const expected = validatedBackup.stores[storeName];
     if (keys.length !== expected.length || values.length !== expected.length) {
       throw _error(`post-restore count mismatch for store "${storeName}".`);
     }
