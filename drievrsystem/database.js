@@ -376,7 +376,17 @@ const DB = (() => {
   }
 
   function _wrap_error(context, err) {
-    return new Error(`[DB:${context}] ${err?.message || err}`);
+    try {
+      let msg;
+      try {
+        msg = err?.message ?? String(err ?? 'unknown error');
+      } catch (_) {
+        try { msg = String(err); } catch { msg = 'unknown error'; }
+      }
+      return new Error(`[DB:${context}] ${msg}`);
+    } catch (_) {
+      return new Error(`[DB:${context}] unknown error`);
+    }
   }
 
   function _debug_enabled() {
@@ -804,7 +814,14 @@ const DB = (() => {
         },
 
         async add(storeName, payload) {
-          const staged = _inject_meta(payload, true, meta);
+          let staged;
+          try {
+            staged = _inject_meta(payload, true, meta);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            finishReject(err);
+            throw err;
+          }
           guardAccount(_assertAdminAccount, storeName, staged);
           const id = await txReq(txStore(storeName).add(staged), `tx:add:${storeName}`);
           return { ...staged, id };
@@ -937,10 +954,6 @@ const DB = (() => {
         op: o.op || o.type,
       }));
       const storeNames = [...new Set(normalizedOps.map((o) => o.store))];
-      for (const op of normalizedOps) {
-        if (op.op === 'add') _assertAdminAccount(op.store, op.payload);
-        if (op.op === 'update' || op.op === 'delete') _assertAccountPatch(op.store, op.patch);
-      }
 
       // Validate all store names exist
       for (const name of storeNames) {
@@ -976,14 +989,13 @@ const DB = (() => {
             _debug_log('transaction:add:pre_inject', {
               store: op.store,
               metaUser: meta.username,
-              payloadUser: op.payload?.username,
             });
-            staged  = _inject_meta(op.payload, true, meta);
             try {
+              staged = _inject_meta(op.payload, true, meta);
               _assertAdminAccount(op.store, staged);
             } catch (err) {
               tx.abort();
-              return reject(_wrap_error('transaction:add', err.message || err));
+              return reject(_wrap_error('transaction:add', err));
             }
             request = store.add(staged);
             request.onsuccess = () => {
@@ -1011,14 +1023,25 @@ const DB = (() => {
                 metaUser: meta.username,
                 existingUser: existing?.username,
                 existingCreatedBy: existing?.created_by,
-                patchUser: op.patch?.username,
               });
-              if (op.patch && ('created_by' in op.patch || 'updated_by' in op.patch)) {
+              try {
+                if (op.patch && ('created_by' in op.patch || 'updated_by' in op.patch)) {
+                  tx.abort();
+                  return reject(_wrap_error('transaction:update', '[DB] payload must not contain audit fields'));
+                }
+                _assertAccountPatch(op.store, op.patch);
+              } catch (err) {
                 tx.abort();
-                return reject(_wrap_error('transaction:update', '[DB] payload must not contain audit fields'));
+                return reject(_wrap_error('transaction:update', err));
               }
 
-              const merged = _mergeUpdate(existing, op.patch);
+              let merged;
+              try {
+                merged = _mergeUpdate(existing, op.patch);
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:update', err));
+              }
               if (op.store === 'users' && merged.username !== 'admin') {
                 tx.abort();
                 return reject(_wrap_error('transaction:update', '[DB] only the admin account is supported'));
@@ -1070,14 +1093,26 @@ const DB = (() => {
                 tx.abort();
                 return reject(_wrap_error('transaction:delete', `Record ${op.id} not found in ${op.store}`));
               }
-              const now      = _now();
-              const deleted  = {
-                ...existing,
-                ...(op.patch || {}),
-                updated_at: now,
-                updated_by: meta.username,
-                deleted_at: now,
-              };
+              try {
+                _assertAccountPatch(op.store, op.patch);
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:delete', err));
+              }
+              let deleted;
+              try {
+                const now = _now();
+                deleted = {
+                  ...existing,
+                  ...(op.patch || {}),
+                  updated_at: now,
+                  updated_by: meta.username,
+                  deleted_at: now,
+                };
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:delete', err));
+              }
               if (op.store === 'users' && deleted.username !== 'admin') {
                 tx.abort();
                 return reject(_wrap_error('transaction:delete', '[DB] only the admin account is supported'));

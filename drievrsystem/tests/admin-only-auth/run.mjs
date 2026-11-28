@@ -131,6 +131,95 @@ ok(await rejects(() => DB.transaction([
   && !(await DB.getById('drivers', 'getter-batch-driver'))
   && !(await users()).some(u => u.id === 'getter-batch-user-2'),
   'batch getter bypass does not leave partial transaction data behind');
+console.log('\n— _inject_meta abort and final-stage validation —');
+// Callback: _inject_meta username mismatch (intruder vs admin) caught inside callback still aborts
+let caughtInjectCallback = false;
+let injectCallbackError = null;
+ok(await rejects(async () => DB.transaction(async tx => {
+  await tx.add('drivers', { id: 'inject-callback-driver', name: 'rollback' });
+  try {
+    await tx.add('users', { id: 'inject-callback-intruder', username: 'intruder', password_hash: 'fixture' });
+  } catch (e) {
+    caughtInjectCallback = true;
+    injectCallbackError = e;
+    // swallow but transaction must still abort via _inject_meta abort
+  }
+}, { username: 'admin', stores: ['drivers', 'users'] }))
+  && caughtInjectCallback && /username must match session user/.test(injectCallbackError?.message || '')
+  && !(await DB.getById('drivers', 'inject-callback-driver'))
+  && !(await users()).some(u => u.id === 'inject-callback-intruder'),
+  'callback add where _inject_meta rejects still aborts entire transaction when caught');
+// Batch: _inject_meta rejection in second op aborts earlier driver write
+ok(await rejects(() => DB.transaction([
+  { op: 'add', store: 'drivers', payload: { id: 'inject-batch-driver', name: 'rollback' } },
+  { op: 'add', store: 'users', payload: { id: 'inject-batch-intruder', username: 'intruder', password_hash: 'fixture' } },
+], { username: 'admin' }))
+  && !(await DB.getById('drivers', 'inject-batch-driver'))
+  && !(await users()).some(u => u.id === 'inject-batch-intruder'),
+  'batch add where _inject_meta rejects still aborts and removes prior driver write');
+// Changing-getter must reach final staged validation, not incidental reads
+function finalStageGetter(id) {
+  let reads = 0;
+  return {
+    id, password_hash: 'fixture',
+    get username() {
+      reads++;
+      // _inject check is read 1, spread is read 2; any extra pre-reads would shift intruder earlier
+      // and cause _inject to fail with a different message. We require read1=admin, read2=intruder
+      // so final guard (staged.username===intruder) is the failure point.
+      return reads === 1 ? 'admin' : 'intruder';
+    },
+    get _reads() { return reads; }
+  };
+}
+let finalCallbackError = null;
+try { await DB.transaction(tx => tx.add('users', finalStageGetter('final-callback')), { username: 'admin', stores: ['users'] }); } catch (e) { finalCallbackError = e; }
+ok(/only the admin account is supported/.test(finalCallbackError?.message || '') && !(await users()).some(u => u.id === 'final-callback'),
+  'callback changing-getter reaches final staged validation');
+let finalBatchError = null;
+try { await DB.transaction([{ op: 'add', store: 'users', payload: finalStageGetter('final-batch') }], { username: 'admin' }); } catch (e) { finalBatchError = e; }
+ok(/only the admin account is supported/.test(finalBatchError?.message || '') && !(await users()).some(u => u.id === 'final-batch'),
+  'batch changing-getter reaches final staged validation');
+// Valid admin record can still be created and updated (isolated, restored afterward)
+const originalForValidTest = await DB.getById('users', adminId);
+await DB.hardDelete('users', adminId);
+let validAdmin = null;
+try {
+  validAdmin = await DB.add('users', { id: 'valid-admin-add', username: 'admin', password_hash: 'fixture-valid' }, { username: 'admin' });
+} catch {}
+ok(validAdmin && validAdmin.username === 'admin' && (await DB.getById('users', 'valid-admin-add'))?.username === 'admin',
+  'valid admin add succeeds');
+let updatedValidAdmin = null;
+try {
+  updatedValidAdmin = await DB.update('users', validAdmin.id, { password_hash: 'fixture-updated' }, { username: 'admin' });
+} catch {}
+ok(updatedValidAdmin && updatedValidAdmin.password_hash === 'fixture-updated' && updatedValidAdmin.username === 'admin',
+  'valid admin update succeeds');
+await DB.hardDelete('users', 'valid-admin-add');
+await DB.add('users', { id: originalForValidTest.id, username: originalForValidTest.username, password_hash: originalForValidTest.password_hash }, { username: 'admin' });
+ok((await users()).length === 1 && (await DB.getById('users', originalForValidTest.id))?.username === 'admin',
+  'valid admin test cleaned up and original admin restored');
+console.log('\n— batch patch getter and delete rollback —');
+ok(await rejects(() => DB.transaction([
+  { op: 'add', store: 'drivers', payload: { id: 'update-getter-driver', name: 'rollback' } },
+  { op: 'update', store: 'users', id: adminId, patch: { get username() { throw new Error('getter boom'); } } },
+], { username: 'admin' }))
+  && !(await DB.getById('drivers', 'update-getter-driver')),
+  'batch update where username getter throws rolls back earlier write');
+ok(await rejects(() => DB.transaction([
+  { op: 'add', store: 'drivers', payload: { id: 'delete-rollback-driver', name: 'rollback' } },
+  { op: 'delete', store: 'users', id: adminId, patch: { username: 'intruder' } },
+], { username: 'admin' }))
+  && !(await DB.getById('drivers', 'delete-rollback-driver'))
+  && (await DB.getById('users', adminId))?.username === 'admin',
+  'batch delete that tries to change username rejects and rolls back prior write');
+let validBusinessUpdate = await DB.add('drivers', { id: 'valid-business-driver', name: 'original' }, { username: 'admin' });
+let updatedBusiness = await DB.transaction(tx => tx.update('drivers', validBusinessUpdate.id, { name: 'updated' }), { username: 'admin', stores: ['drivers'] });
+ok(updatedBusiness.name === 'updated' && (await DB.getById('drivers', 'valid-business-driver'))?.name === 'updated',
+  'valid business record update still works');
+let deletedBusiness = await DB.transaction(tx => tx.delete('drivers', validBusinessUpdate.id), { username: 'admin', stores: ['drivers'] });
+ok(deletedBusiness.deleted_at !== null && !(await DB.getById('drivers', 'valid-business-driver')),
+  'valid business record delete still works');
 await DB.delete('users', firstUsers[0].id, { username: 'admin' });
 const deletedAdmin = (await users())[0];
 await AuthService.initialize();
