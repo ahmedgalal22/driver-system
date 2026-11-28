@@ -727,27 +727,19 @@ const DB = (() => {
       let callbackResult;
       let done = false;
 
-      function finishReject(err) {
+      function fail(err) {
         if (done) return;
         done = true;
-        reject(err);
-      }
-
-      function guardAccount(check, storeName, value) {
-        try {
-          check(storeName, value);
-        } catch (err) {
-          // Abort immediately, even if the callback catches the rejection.
-          try { tx.abort(); } catch (_) {}
-          finishReject(err);
-          throw err;
-        }
+        try { tx.abort(); } catch (_) {}
+        const wrapped = err instanceof Error ? err : _wrap_error('transaction', err);
+        reject(wrapped);
       }
 
       function txStore(storeName) {
         if (!storeNames.includes(storeName)) {
           throw new Error(`[DB.transaction] Store "${storeName}" was not opened in this transaction.`);
         }
+        // This can throw if store does not exist (should have been validated above, but keep consistent)
         return tx.objectStore(storeName);
       }
 
@@ -756,7 +748,7 @@ const DB = (() => {
           request.onsuccess = () => resolveReq(request.result);
           request.onerror = () => {
             const err = _wrap_error(context, request.error);
-            try { tx.abort(); } catch (_) {}
+            fail(err);
             rejectReq(err);
           };
         });
@@ -764,179 +756,203 @@ const DB = (() => {
 
       const txApi = Object.freeze({
         async getAll(storeName, filters = null, options = {}) {
-          const all = await txReq(txStore(storeName).getAll(), `tx:getAll:${storeName}`);
-          const includeDeleted = options?.includeDeleted === true;
-          let result = includeDeleted ? all : all.filter((r) => r?.deleted_at === null);
-          if (filters) {
-            _assertNoPredicate(filters);
-            result = result.filter((r) =>
-              Object.entries(filters).every(([k, v]) => r?.[k] === v)
-            );
+          try {
+            const all = await txReq(txStore(storeName).getAll(), `tx:getAll:${storeName}`);
+            const includeDeleted = options?.includeDeleted === true;
+            let result = includeDeleted ? all : all.filter((r) => r?.deleted_at === null);
+            if (filters) {
+              _assertNoPredicate(filters);
+              result = result.filter((r) =>
+                Object.entries(filters).every(([k, v]) => r?.[k] === v)
+              );
+            }
+            return result;
+          } catch (err) {
+            fail(err);
+            throw err;
           }
-          return result;
         },
 
         async getById(storeName, id, options = {}) {
-          const record = await txReq(txStore(storeName).get(id), `tx:getById:${storeName}`);
-          if (!record) return null;
-          if (options?.includeDeleted !== true && record.deleted_at !== null) return null;
-          return record;
+          try {
+            const record = await txReq(txStore(storeName).get(id), `tx:getById:${storeName}`);
+            if (!record) return null;
+            if (options?.includeDeleted !== true && record.deleted_at !== null) return null;
+            return record;
+          } catch (err) {
+            fail(err);
+            throw err;
+          }
         },
 
         async getByIndex(storeName, indexName, value, options = {}) {
-          const index = txStore(storeName).index(indexName);
-          const queryValue = Array.isArray(value) ? IDBKeyRange.only(value) : value;
-          const all = await txReq(index.getAll(queryValue), `tx:getByIndex:${storeName}.${indexName}`);
-          return options?.includeDeleted === true
-            ? all
-            : all.filter((r) => r?.deleted_at === null);
+          try {
+            const index = txStore(storeName).index(indexName);
+            const queryValue = Array.isArray(value) ? IDBKeyRange.only(value) : value;
+            const all = await txReq(index.getAll(queryValue), `tx:getByIndex:${storeName}.${indexName}`);
+            return options?.includeDeleted === true
+              ? all
+              : all.filter((r) => r?.deleted_at === null);
+          } catch (err) {
+            fail(err);
+            throw err;
+          }
         },
 
         async findByFields(storeName, filters = {}, options = {}) {
-          if (typeof filters === 'function') {
-            throw new Error('[DB] predicate functions are forbidden');
+          try {
+            if (typeof filters === 'function') {
+              throw new Error('[DB] predicate functions are forbidden');
+            }
+            _assertNoPredicate(filters);
+            const all = await txReq(txStore(storeName).getAll(), `tx:findByFields:${storeName}`);
+            const includeDeleted = options?.includeDeleted === true;
+            return all.filter((record) => {
+              if (!includeDeleted && record?.deleted_at !== null) return false;
+              return Object.entries(filters || {}).every(([key, value]) => record?.[key] === value);
+            });
+          } catch (err) {
+            fail(err);
+            throw err;
           }
-          _assertNoPredicate(filters);
-          const all = await txReq(txStore(storeName).getAll(), `tx:findByFields:${storeName}`);
-          const includeDeleted = options?.includeDeleted === true;
-          return all.filter((record) => {
-            if (!includeDeleted && record?.deleted_at !== null) return false;
-            return Object.entries(filters || {}).every(([key, value]) => record?.[key] === value);
-          });
         },
 
         async add(storeName, payload) {
-          // For users store, inject-time validation (counts as first username read)
           try {
+            // Users-store inject validation includes getter/Proxy traps
             _assertUsersAddPayload(payload, storeName, meta);
+            let staged;
+            try {
+              staged = _inject_timestamps(payload, true);
+            } catch (e) {
+              throw e;
+            }
+            // Validate admin account after staging (second read for changing getters)
+            if (storeName === 'users' && staged?.username !== 'admin') {
+              throw new Error('[DB] only the admin account is supported');
+            }
+            const id = await txReq(txStore(storeName).add(staged), `tx:add:${storeName}`);
+            return { ...staged, id };
           } catch (err) {
-            try { tx.abort(); } catch (_) {}
-            finishReject(err);
+            fail(err);
             throw err;
           }
-          let staged;
-          try {
-            staged = _inject_timestamps(payload, true);
-          } catch (err) {
-            try { tx.abort(); } catch (_) {}
-            finishReject(err);
-            throw err;
-          }
-          guardAccount(_assertAdminAccount, storeName, staged);
-          const id = await txReq(txStore(storeName).add(staged), `tx:add:${storeName}`);
-          return { ...staged, id };
         },
 
         async update(storeName, id, patch, options = {}) {
-          guardAccount(_assertAccountPatch, storeName, patch);
-          const store = txStore(storeName);
-          let existing;
           try {
-            existing = await txReq(store.get(id), `tx:update:get:${storeName}`);
+            if (storeName === 'users' && patch && 'username' in patch && patch.username !== 'admin') {
+              throw new Error('[DB] only the admin account is supported');
+            }
+            const store = txStore(storeName);
+            const existing = await txReq(store.get(id), `tx:update:get:${storeName}`);
+            if (!existing) {
+              throw _wrap_error('tx:update', `Record ${id} not found in ${storeName}`);
+            }
+            if (options?.includeDeleted !== true && existing.deleted_at !== null) {
+              throw _wrap_error('tx:update', `Record ${id} is soft-deleted`);
+            }
+            let merged;
+            try {
+              merged = _mergeUpdate(existing, patch);
+            } catch (e) {
+              throw e;
+            }
+            if (storeName === 'users' && merged?.username !== 'admin') {
+              throw new Error('[DB] only the admin account is supported');
+            }
+            let updated;
+            try {
+              updated = _inject_timestamps(merged, false);
+            } catch (e) {
+              throw e;
+            }
+            await txReq(store.put(updated), `tx:update:put:${storeName}`);
+            return updated;
           } catch (err) {
-            try { tx.abort(); } catch (_) {}
+            fail(err);
             throw err;
           }
-          if (!existing) {
-            try { tx.abort(); } catch (_) {}
-            const err = _wrap_error('tx:update', `Record ${id} not found in ${storeName}`);
-            finishReject(err);
-            throw err;
-          }
-          if (options?.includeDeleted !== true && existing.deleted_at !== null) {
-            try { tx.abort(); } catch (_) {}
-            const err = _wrap_error('tx:update', `Record ${id} is soft-deleted`);
-            finishReject(err);
-            throw err;
-          }
-
-          let merged;
-          try {
-            merged = _mergeUpdate(existing, patch);
-          } catch (err) {
-            try { tx.abort(); } catch (_) {}
-            finishReject(err);
-            throw err;
-          }
-          guardAccount(_assertAdminAccount, storeName, merged);
-          let updated;
-          try {
-            updated = _inject_timestamps(merged, false);
-          } catch (err) {
-            try { tx.abort(); } catch (_) {}
-            finishReject(err);
-            throw err;
-          }
-          await txReq(store.put(updated), `tx:update:put:${storeName}`);
-          return updated;
         },
 
         async delete(storeName, id, patch = null) {
-          guardAccount(_assertAccountPatch, storeName, patch);
-          const store = txStore(storeName);
-          let existing;
           try {
-            existing = await txReq(store.get(id), `tx:delete:get:${storeName}`);
+            if (storeName === 'users' && patch && 'username' in patch && patch.username !== 'admin') {
+              throw new Error('[DB] only the admin account is supported');
+            }
+            const store = txStore(storeName);
+            const existing = await txReq(store.get(id), `tx:delete:get:${storeName}`);
+            if (!existing) {
+              throw _wrap_error('tx:delete', `Record ${id} not found in ${storeName}`);
+            }
+            if (existing.deleted_at !== null) {
+              throw _wrap_error('tx:delete', `Record ${id} already deleted`);
+            }
+            const now = _now();
+            let deleted;
+            try {
+              deleted = {
+                ...existing,
+                ...(patch || {}),
+                updated_at: now,
+                deleted_at: now,
+              };
+            } catch (e) {
+              throw e;
+            }
+            if (storeName === 'users' && deleted?.username !== 'admin') {
+              throw new Error('[DB] only the admin account is supported');
+            }
+            await txReq(store.put(deleted), `tx:delete:put:${storeName}`);
+            return deleted;
           } catch (err) {
-            try { tx.abort(); } catch (_) {}
+            fail(err);
             throw err;
           }
-          if (!existing) {
-            try { tx.abort(); } catch (_) {}
-            const err = _wrap_error('tx:delete', `Record ${id} not found in ${storeName}`);
-            finishReject(err);
-            throw err;
-          }
-          if (existing.deleted_at !== null) {
-            try { tx.abort(); } catch (_) {}
-            const err = _wrap_error('tx:delete', `Record ${id} already deleted`);
-            finishReject(err);
-            throw err;
-          }
-          const now = _now();
-          const deleted = {
-            ...existing,
-            ...(patch || {}),
-            updated_at: now,
-            deleted_at: now,
-          };
-          guardAccount(_assertAdminAccount, storeName, deleted);
-          await txReq(store.put(deleted), `tx:delete:put:${storeName}`);
-          return deleted;
         },
 
         async hardDelete(storeName, id) {
-          await txReq(txStore(storeName).delete(id), `tx:hardDelete:${storeName}`);
-          return { id, hardDeleted: true };
+          try {
+            await txReq(txStore(storeName).delete(id), `tx:hardDelete:${storeName}`);
+            return { id, hardDeleted: true };
+          } catch (err) {
+            fail(err);
+            throw err;
+          }
         },
 
         async runOps(ops = []) {
-          const normalizedOps = ops.map((o) => ({ ...o, op: o.op || o.type }));
-          const results = [];
-          for (const op of normalizedOps) {
-            switch (op.op) {
-              case 'add':
-                results.push(await this.add(op.store, op.payload));
-                break;
-              case 'update':
-                results.push(await this.update(op.store, op.id, op.patch));
-                break;
-              case 'delete':
-                results.push(await this.delete(op.store, op.id, op.patch || null));
-                break;
-              case 'hardDelete':
-                results.push(await this.hardDelete(op.store, op.id));
-                break;
-              default:
-                throw _wrap_error('tx:runOps', `Unknown op: ${op.op}`);
+          try {
+            const normalizedOps = ops.map((o) => ({ ...o, op: o.op || o.type }));
+            const results = [];
+            for (const op of normalizedOps) {
+              switch (op.op) {
+                case 'add':
+                  results.push(await this.add(op.store, op.payload));
+                  break;
+                case 'update':
+                  results.push(await this.update(op.store, op.id, op.patch));
+                  break;
+                case 'delete':
+                  results.push(await this.delete(op.store, op.id, op.patch || null));
+                  break;
+                case 'hardDelete':
+                  results.push(await this.hardDelete(op.store, op.id));
+                  break;
+                default:
+                  throw _wrap_error('tx:runOps', `Unknown op: ${op.op}`);
+              }
             }
+            return results;
+          } catch (err) {
+            fail(err);
+            throw err;
           }
-          return results;
         },
       });
 
-      tx.onerror = () => finishReject(_wrap_error('transaction', tx.error));
-      tx.onabort = () => finishReject(_wrap_error('transaction', 'Transaction aborted'));
+      tx.onerror = () => fail(_wrap_error('transaction', tx.error));
+      tx.onabort = () => fail(_wrap_error('transaction', 'Transaction aborted'));
       tx.oncomplete = () => {
         if (done) return;
         done = true;
@@ -949,29 +965,11 @@ const DB = (() => {
           callbackResult = result;
         })
         .catch((err) => {
-          try { tx.abort(); } catch (_) {}
-          finishReject(err);
+          fail(err);
         });
     });
   }
 
-  /**
-   * DB.transaction(ops)
-   * ─────────────────────────────────────────────────────────────────────────────
-   * Executes multiple operations atomically across one or more stores.
-   *
-   * ops: Array of operation descriptors:
-   *   { op: 'add',        store, payload }
-   *   { op: 'update',     store, id, patch }
-   *   { op: 'delete',     store, id }          ← soft-delete
-   *   { op: 'hardDelete', store, id }
-   *
-   * Returns an array of results in the same order as ops.
-   *
-   * All ops share a single IDBTransaction across all required stores,
-   * so any failure rolls back everything.
-   * ─────────────────────────────────────────────────────────────────────────────
-   */
   async function transactionBatch(ops, meta) {
     await _ensure_ready();
     return new Promise((resolve, reject) => {
@@ -1009,12 +1007,19 @@ const DB = (() => {
         }
 
         const op    = normalizedOps[currentOpIndex++];
-        const store = tx.objectStore(op.store);
+        let store;
+        try {
+          store = tx.objectStore(op.store);
+        } catch (err) {
+          tx.abort();
+          return reject(_wrap_error('transaction', err));
+        }
 
         let request;
         let staged; // record to be stored (before IDB assigns id)
 
-        switch (op.op) {
+        try {
+          switch (op.op) {
 
           case 'add': {
             try {
@@ -1025,7 +1030,12 @@ const DB = (() => {
               tx.abort();
               return reject(_wrap_error('transaction:add', err));
             }
-            request = store.add(staged);
+            try {
+              request = store.add(staged);
+            } catch (err) {
+              tx.abort();
+              return reject(_wrap_error('transaction:add', err));
+            }
             request.onsuccess = () => {
               results.push({ ...staged, id: request.result });
               runNext();
@@ -1038,7 +1048,13 @@ const DB = (() => {
           }
 
           case 'update': {
-            const getReq = store.get(op.id);
+            let getReq;
+            try {
+              getReq = store.get(op.id);
+            } catch (err) {
+              tx.abort();
+              return reject(_wrap_error('transaction:update:get', err));
+            }
             getReq.onsuccess = () => {
               const existing = getReq.result;
               if (!existing) {
@@ -1070,7 +1086,13 @@ const DB = (() => {
                 tx.abort();
                 return reject(_wrap_error('transaction:update', err));
               }
-              const putReq  = store.put(updated);
+              let putReq;
+              try {
+                putReq  = store.put(updated);
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:update', err));
+              }
               putReq.onsuccess = () => {
                 results.push(updated);
                 runNext();
@@ -1089,7 +1111,13 @@ const DB = (() => {
 
           case 'delete': {
             // soft-delete
-            const getReq = store.get(op.id);
+            let getReq;
+            try {
+              getReq = store.get(op.id);
+            } catch (err) {
+              tx.abort();
+              return reject(_wrap_error('transaction:delete:get', err));
+            }
             getReq.onsuccess = () => {
               const existing = getReq.result;
               if (!existing) {
@@ -1119,7 +1147,13 @@ const DB = (() => {
                 tx.abort();
                 return reject(_wrap_error('transaction:delete', '[DB] only the admin account is supported'));
               }
-              const putReq   = store.put(deleted);
+              let putReq;
+              try {
+                putReq   = store.put(deleted);
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:delete', err));
+              }
               putReq.onsuccess = () => {
                 results.push(deleted);
                 runNext();
@@ -1151,7 +1185,11 @@ const DB = (() => {
 
           default:
             tx.abort();
-            reject(_wrap_error('transaction', `Unknown op: ${op.op}`));
+            return reject(_wrap_error('transaction', `Unknown op: ${op.op}`));
+        }
+        } catch (err) {
+          tx.abort();
+          return reject(_wrap_error('transaction', err));
         }
       }
 

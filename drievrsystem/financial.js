@@ -670,8 +670,7 @@ async function _loadPriceDiscoveryCommands(receiptRows) {
   return commands;
 }
 
-async function createReceipt(...args) {
-  const data = args.length === 2 ? args[1] : args[0];
+async function createReceipt(data) {
   const receiptId = data.id || _uuid();
   const clean = _validate(data);
 
@@ -761,8 +760,7 @@ function _receiptPaymentIdentity(row) {
   });
 }
 
-async function updateReceipt(...args) {
-  const [id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function updateReceipt(id, data) {
   if (!id) throw new Error('[FinancialService:update] id is required.');
 
   const clean = _validate(data);
@@ -967,8 +965,7 @@ async function updateReceipt(...args) {
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
 
-async function deleteReceipt(...args) {
-  const id = args.length === 2 ? args[1] : args[0];
+async function deleteReceipt(id) {
   if (!id) throw new Error('[FinancialService:delete] id is required.');
 
   const existingRows = await _getExistingReceiptRows(id);
@@ -1496,8 +1493,7 @@ async function _getActiveManualVehicleBalanceEntries(reference_id) {
  * This is intentionally a single vehicle leg: it has no receipt-row, company,
  * driver, or Karta Settlement side effect.
  */
-async function createManualVehicleBalanceEntry(...args) {
-  const data = args.length === 2 ? args[1] : args[0];
+async function createManualVehicleBalanceEntry(data) {
   const payload = await _prepareManualVehicleBalancePayload(data);
   const [saved] = await DB.transaction([{
     op: 'add',
@@ -1513,8 +1509,7 @@ async function createManualVehicleBalanceEntry(...args) {
  * manual record is audit-reversed and a fresh record is created, so an amount
  * or vehicle correction never leaves duplicate active withdrawals.
  */
-async function updateVehicleMaintenanceEntry(...args) {
-  const [reference_id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function updateVehicleMaintenanceEntry(reference_id, data) {
 
   const active = await _getActiveManualVehicleBalanceEntries(reference_id);
   const previous = active.find(entry => entry.type === 'withdraw' && String(entry.maintenance_type || '').trim());
@@ -1543,8 +1538,7 @@ async function updateVehicleMaintenanceEntry(...args) {
 /**
  * Reverse one logical manual vehicle movement without removing its audit row.
  */
-async function deleteManualVehicleBalanceEntry(...args) {
-  const reference_id = args.length === 2 ? args[1] : args[0];
+async function deleteManualVehicleBalanceEntry(reference_id) {
 
   const active = await _getActiveManualVehicleBalanceEntries(reference_id);
   if (active.length === 0) {
@@ -1564,8 +1558,7 @@ async function deleteManualVehicleBalanceEntry(...args) {
  * Create one manual company movement in the existing vehicle_ledger. This is
  * company-only and cannot affect a vehicle, receipt row, driver, or settlement.
  */
-async function createManualOfficeBalanceEntry(...args) {
-  const data = args.length === 2 ? args[1] : args[0];
+async function createManualOfficeBalanceEntry(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createManualOfficeBalanceEntry] data must be a plain object.');
   }
@@ -1620,8 +1613,7 @@ async function createManualOfficeBalanceEntry(...args) {
 /**
  * Reverse one logical manual company movement while retaining its audit row.
  */
-async function deleteManualOfficeBalanceEntry(...args) {
-  const reference_id = args.length === 2 ? args[1] : args[0];
+async function deleteManualOfficeBalanceEntry(reference_id) {
 
   const referenceKey = String(reference_id || '').trim();
   if (!referenceKey) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] reference_id is required.');
@@ -1739,8 +1731,7 @@ async function _getActiveManualDriverBalanceEntries(reference_id) {
  * Create exactly one direct driver balance movement. A deposit raises the
  * driver's balance and a withdrawal lowers it; neither posts to a vehicle.
  */
-async function createManualDriverBalanceEntry(...args) {
-  const data = args.length === 2 ? args[1] : args[0];
+async function createManualDriverBalanceEntry(data) {
   const payload = await _prepareManualDriverBalancePayload(data);
   const [saved] = await DB.transaction([{
     op: 'add',
@@ -1755,8 +1746,7 @@ async function createManualDriverBalanceEntry(...args) {
  * Edit a direct driver movement through the established audit convention:
  * reverse its active row, then atomically add a replacement row.
  */
-async function updateManualDriverBalanceEntry(...args) {
-  const [reference_id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function updateManualDriverBalanceEntry(reference_id, data) {
 
   const active = await _getActiveManualDriverBalanceEntries(reference_id);
   if (active.length === 0) {
@@ -1781,8 +1771,7 @@ async function updateManualDriverBalanceEntry(...args) {
 /**
  * Reverse one direct driver movement while retaining its audit history.
  */
-async function deleteManualDriverBalanceEntry(...args) {
-  const reference_id = args.length === 2 ? args[1] : args[0];
+async function deleteManualDriverBalanceEntry(reference_id) {
 
   const active = await _getActiveManualDriverBalanceEntries(reference_id);
   if (active.length === 0) {
@@ -2110,8 +2099,7 @@ async function getDriverKartasSummary(driverId) {
  * Patch only the persisted Driver Details settlement price of one receipt row.
  * This write never creates or changes vehicle_ledger records.
  */
-async function updateDriverKartaSettlementPrice(...args) {
-  const [rowId, value] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function updateDriverKartaSettlementPrice(rowId, value) {
 
   const rowKey = String(rowId ?? '').trim();
   if (!rowKey) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] row_id is required.');
@@ -2146,8 +2134,7 @@ async function updateDriverKartaSettlementPrice(...args) {
  * its own receipt-row reference and vehicle withdrawal; batch_id only groups
  * the audit records created together.
  */
-async function createKartaSettlementBatch(...args) {
-  const [driverId, rowIds] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function createKartaSettlementBatch(driverId, rowIds) {
 
   const driverKey = String(driverId ?? '').trim();
   if (!driverKey) throw new Error('[FinancialService:createKartaSettlementBatch] driver_id is required.');
@@ -2394,8 +2381,7 @@ async function updateKartaSettlement(data) {
   };
 }
 
-async function reverseKartaSettlement(...args) {
-  const settlementReferenceId = args.length === 2 ? args[1] : args[0];
+async function reverseKartaSettlement(settlementReferenceId) {
 
   const rowId = String(settlementReferenceId || '').trim();
   if (!rowId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required.');
@@ -2433,8 +2419,7 @@ async function reverseKartaSettlement(...args) {
 // paid   → unpaid : reverse that company posting exactly once
 // Vehicle net is a separate creation-side effect and never changes here.
 // Status write and company posting commit in ONE atomic DB.transaction.
-async function setReceiptRowPaymentStatus(...args) {
-  const [rowId, targetStatus] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+async function setReceiptRowPaymentStatus(rowId, targetStatus) {
 
   const rowKey = String(rowId ?? '').trim();
   if (!rowKey) throw new Error('[FinancialService:setReceiptRowPaymentStatus] row_id is required.');

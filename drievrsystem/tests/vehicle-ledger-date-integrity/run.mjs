@@ -61,7 +61,7 @@ async function addLedger({
     note: 'تاريخ تشخيصي',
     ...(maintenance_type ? { maintenance_type } : {}),
   };
-  return DB.add('vehicle_ledger', payload, { username: U });
+  return DB.add('vehicle_ledger', payload);
 }
 
 console.log('\n— seed deterministic active vehicle-ledger date fixture —');
@@ -83,9 +83,9 @@ const manualVehicle = await addLedger({ type: 'deposit', amount: 2100, date: '20
 
 // Reversed/deleted rows must not enter active report population.
 const reversedInvalid = await addLedger({ type: 'withdraw', amount: 2200, date: 'bad-date', reference_type: 'reversed_invalid' });
-await DB.update('vehicle_ledger', reversedInvalid.id, { is_reversed: true, reversed_at: '2026-06-15T10:00:00', reversed_by: U }, { username: U });
+await DB.update('vehicle_ledger', reversedInvalid.id, { is_reversed: true, reversed_at: '2026-06-15T10:00:00', reversed_by: U });
 const deletedInvalid = await addLedger({ type: 'deposit', amount: 2300, date: 'also-bad', reference_type: 'deleted_invalid' });
-await DB.delete('vehicle_ledger', deletedInvalid.id, { username: U });
+await DB.delete('vehicle_ledger', deletedInvalid.id);
 
 // Driver-only and custom settlement rows are not vehicle-report arithmetic.
 await addLedger({

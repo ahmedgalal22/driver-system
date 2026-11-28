@@ -50,12 +50,12 @@ const OWNER_A = uuid();
 const OWNER_B = uuid();
 const V1 = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_A, owner_name: '111 أ ب' };
 const V2 = { id: uuid(), username: U, plate: '222 ج د', owner_id: OWNER_B, owner_name: '222 ج د' };
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
-await FinancialService.createManualVehicleBalanceEntry(U, {
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
+await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id, entry_type: 'deposit', amount: 100, date: '2026-08-10', note: 'إيداع V1',
 });
-await FinancialService.createManualVehicleBalanceEntry(U, {
+await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V2.id, entry_type: 'withdraw', amount: 40, date: '2026-08-10', note: 'سحب V2',
 });
 
@@ -77,7 +77,7 @@ const legacyOwner = await ClientRepository.saveOwner({
   username: U,
   vehicle_number: '333 ص ي',
   name: '333 ص ي',
-}, { username: U });
+});
 ok((await ClientRepository.getVehiclesByPlate(legacyOwner.vehicle_number)).length === 0,
   'fixture begins as a Vehicle Management row with no physical vehicles-store record');
 const resolveDetailVehicle = new Function('ClientRepository', '_currentUsername', 'sessionStorage', `

@@ -93,7 +93,7 @@ ok(canonicalRouteKey('الإسكندرية', 'دمنهور') === canonicalRouteK
 
 console.log('\n— automatic discovery —');
 const r1 = mkRow();
-await FinancialService.createReceipt(U, mkReceipt([r1]));
+await FinancialService.createReceipt( mkReceipt([r1]));
 let all = await routes();
 ok(all.length === 1 && all[0].loading === 'الإسكندرية' && all[0].destination === 'دمنهور' && all[0].price === 0,
   'new receipt route creates exactly one readable Load Price record at price zero');
@@ -103,14 +103,14 @@ ok(r1Creation.length === 1 && r1Creation[0].type === 'deposit' && r1Creation[0].
   'route discovery is master-data only: the sole ledger entry is the receipt-creation vehicle deposit (net = 10.00)');
 
 const duplicate = mkRow({ loading: 'اسكندريه', destination: ' دمنهور ' });
-await FinancialService.createReceipt(U, mkReceipt([duplicate]));
+await FinancialService.createReceipt( mkReceipt([duplicate]));
 ok((await routes()).length === 1,
   'saving a canonical duplicate route creates no duplicate record');
 
 const dupInReceiptA = mkRow({ loading: 'الإسكندرية', destination: 'دمنهور' });
 const dupInReceiptB = mkRow({ loading: 'اسكندرية', destination: 'دمنهور' });
 const different = mkRow({ loading: 'الإسكندرية', destination: 'السويس' });
-await FinancialService.createReceipt(U, mkReceipt([dupInReceiptA, dupInReceiptB, different]));
+await FinancialService.createReceipt( mkReceipt([dupInReceiptA, dupInReceiptB, different]));
 all = await routes();
 ok(all.length === 2,
   'multiple receipt rows create one active route per unique canonical route key');
@@ -119,23 +119,23 @@ ok(all.some(route => route.destination === 'السويس'),
 
 console.log('\n— price preservation and update discovery —');
 const damanhurRoute = all.find(route => canonicalRouteKey(route.loading, route.destination) === canonicalRouteKey('الإسكندرية', 'دمنهور'));
-await LoadPriceRepository.updatePrice(damanhurRoute.id, 50000, { username: U });
-await FinancialService.createReceipt(U, mkReceipt([mkRow({ loading: 'إسكندرية', destination: 'دمنهور' })]));
+await LoadPriceRepository.updatePrice(damanhurRoute.id, 50000);
+await FinancialService.createReceipt( mkReceipt([mkRow({ loading: 'إسكندرية', destination: 'دمنهور' })]));
 const priced = await LoadPriceRepository.getById(damanhurRoute.id);
 ok(priced.price === 50000 && (await routes()).length === 2,
   'future receipt discovery preserves the user-managed price without duplication');
 
-const updateSource = await FinancialService.createReceipt(U, mkReceipt([mkRow({ loading: 'طنطا', destination: 'القاهرة' })]));
+const updateSource = await FinancialService.createReceipt( mkReceipt([mkRow({ loading: 'طنطا', destination: 'القاهرة' })]));
 const updateRow = mkRow({ loading: 'طنطا', destination: 'المنصورة' });
-await FinancialService.updateReceipt(U, updateSource.receipt.id, mkReceipt([updateRow]));
+await FinancialService.updateReceipt( updateSource.receipt.id, mkReceipt([updateRow]));
 ok((await routes()).some(route => canonicalRouteKey(route.loading, route.destination) === canonicalRouteKey('طنطا', 'المنصورة')),
   'receipt update discovers routes from replacement rows without altering prior prices');
 
 console.log('\n— delete and recreate —');
-await LoadPriceRepository.delete(damanhurRoute.id, { username: U });
+await LoadPriceRepository.delete(damanhurRoute.id);
 ok((await routes()).every(route => route.id !== damanhurRoute.id),
   'deleted route is removed from active route reads through soft deletion');
-await FinancialService.createReceipt(U, mkReceipt([mkRow({ loading: 'الإسكندرية', destination: 'دمنهور' })]));
+await FinancialService.createReceipt( mkReceipt([mkRow({ loading: 'الإسكندرية', destination: 'دمنهور' })]));
 all = await routes();
 const recreated = all.find(route => canonicalRouteKey(route.loading, route.destination) === canonicalRouteKey('الإسكندرية', 'دمنهور'));
 const auditOld = (await DB.findByFields('loadPrices', { id: damanhurRoute.id }, { includeDeleted: true }))[0];

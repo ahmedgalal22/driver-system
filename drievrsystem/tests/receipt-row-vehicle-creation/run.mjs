@@ -23,9 +23,9 @@ const OWNER = uuid();
 const OFFICE = { id: uuid(), username: U, name: 'Office C', phone: null };
 const V1 = { id: uuid(), username: U, plate: 'C-1', owner_id: OWNER, owner_name: 'Owner C' };
 const V2 = { id: uuid(), username: U, plate: 'C-2', owner_id: OWNER, owner_name: 'Owner C' };
-await DB.add('offices', OFFICE, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await DB.add('offices', OFFICE);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const row = (over = {}) => ({
   _type: 'data', row_id: uuid(), owner_id: OWNER, owner_name: 'Owner C', driver_id: null,
@@ -57,7 +57,7 @@ const officeBalance = async () => cents((await FinancialService.getOfficeBalance
 
 console.log('\n— creation, payment, and idempotency —');
 const original = row();
-const created = await FinancialService.createReceipt(U, payload([original]));
+const created = await FinancialService.createReceipt( payload([original]));
 const receiptId = created.receipt.id;
 let stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 let state = await effects(stored.row_id);
@@ -71,30 +71,30 @@ ok((await vehicleBalance(V1.id)) === 10000 && (await officeBalance()) === -11500
   'creation changes vehicle +net and office -net-sarf');
 const initialVehicleId = state.vehicle[0].id;
 
-let result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'paid');
+let result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'paid');
 state = await effects(stored.row_id);
 ok(result.changed && state.payment.length === 1 && state.vehicle.length === 1 && state.legacyVehicle.length === 0,
   'unpaid to paid creates company payment only and retains vehicle creation entry');
 ok((await vehicleBalance(V1.id)) === 10000 && (await officeBalance()) === 0,
   'unpaid to paid changes office only and leaves vehicle balance unchanged');
 const companyPaymentId = state.payment[0].id;
-result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'paid');
+result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'paid');
 state = await effects(stored.row_id);
 ok(!result.changed && state.payment.length === 1 && state.payment[0].id === companyPaymentId,
   'repeated paid status creates no duplicate payment effect');
 
-result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'unpaid');
+result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'unpaid');
 state = await effects(stored.row_id);
 ok(result.changed && state.payment.length === 0 && state.vehicle.length === 1 && state.vehicle[0].id === initialVehicleId,
   'paid to unpaid reverses company payment only and retains vehicle creation entry');
 ok((await vehicleBalance(V1.id)) === 10000 && (await officeBalance()) === -11500,
   'paid to unpaid changes office only and leaves vehicle balance unchanged');
-result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'unpaid');
+result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'unpaid');
 ok(!result.changed && (await effects(stored.row_id)).vehicle.length === 1,
   'repeated unpaid status is idempotent');
 
 console.log('\n— edit identities —');
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15 }]));
+await FinancialService.updateReceipt( receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15 }]));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const netEditReversed = state.all.find(entry => entry.id === initialVehicleId);
@@ -106,7 +106,7 @@ ok((await vehicleBalance(V1.id)) === 12000 && (await officeBalance()) === -13500
   'net edit updates both creation-side balances exactly once');
 const netEditVehicleId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate }]));
+await FinancialService.updateReceipt( receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate }]));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const vehicleEditReversed = state.all.find(entry => entry.id === netEditVehicleId);
@@ -118,7 +118,7 @@ ok((await vehicleBalance(V1.id)) === 0 && (await vehicleBalance(V2.id)) === 1200
   'vehicle edit moves the creation balance exactly once');
 const vehicleEditId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
+await FinancialService.updateReceipt( receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 120, sarf: 15, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
 stored = (await DB.findByFields('receipt_rows', { receipt_id: receiptId }))[0];
 state = await effects(stored.row_id);
 const dateEditReversed = state.all.find(entry => entry.id === vehicleEditId);
@@ -128,7 +128,7 @@ ok(dateEditReversed?.is_reversed === true
 'date edit retains the prior creation entry as reversed and creates exactly one active entry with the updated business date');
 const dateEditVehicleId = state.vehicle[0].id;
 
-await FinancialService.updateReceipt(U, receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 115, sarf: 20, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
+await FinancialService.updateReceipt( receiptId, payload([{ ...original, row_id: stored.row_id, weight: 135, net: 115, sarf: 20, vehicle_id: V2.id, vehicle_plate: V2.plate, date: '2026-03-11' }], { receipt_date: '2026-03-11' }));
 state = await effects(stored.row_id);
 ok(state.vehicle.length === 1 && state.vehicle[0].id !== dateEditVehicleId,
   'sarf-only edit replaces the vehicle entry because net changes');
@@ -136,7 +136,7 @@ ok((await vehicleBalance(V2.id)) === 11500 && (await officeBalance()) === -13500
   'sarf-only edit changes net while leaving the company charge unchanged');
 
 console.log('\n— deletion and transaction rollback —');
-await FinancialService.deleteReceipt(U, receiptId);
+await FinancialService.deleteReceipt( receiptId);
 state = await effects(stored.row_id);
 const deletedRow = (await DB.findByFields('receipt_rows', { row_id: stored.row_id }, { includeDeleted: true }))[0];
 const deletionReversed = state.all.find(entry => entry.id === dateEditVehicleId);
@@ -149,11 +149,11 @@ ok(state.company.length === 0 && (await vehicleBalance(V2.id)) === 0 && (await o
   'unpaid deletion reverses both creation-side balances exactly once');
 
 const paidRow = row({ kartano: 'VC-2' });
-const paidReceipt = await FinancialService.createReceipt(U, payload([paidRow]));
+const paidReceipt = await FinancialService.createReceipt( payload([paidRow]));
 const paidStored = (await DB.findByFields('receipt_rows', { receipt_id: paidReceipt.receipt.id }))[0];
-await FinancialService.setReceiptRowPaymentStatus(U, paidStored.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( paidStored.row_id, 'paid');
 const beforePaidDelete = await effects(paidStored.row_id);
-ok(await rejects(() => FinancialService.deleteReceipt(U, paidReceipt.receipt.id)), 'paid receipt deletion remains blocked');
+ok(await rejects(() => FinancialService.deleteReceipt( paidReceipt.receipt.id)), 'paid receipt deletion remains blocked');
 const afterPaidDelete = await effects(paidStored.row_id);
 ok(JSON.stringify(beforePaidDelete) === JSON.stringify(afterPaidDelete), 'blocked paid deletion leaves financial effects unchanged');
 
@@ -181,8 +181,7 @@ ledgerStore.add = function failAfterCreationLegsBegin(record) {
 };
 let lateWriteRejected = false;
 try {
-  lateWriteRejected = await rejects(() => FinancialService.createReceipt(
-    U, payload(lateFailureRows, { id: lateFailureReceiptId })
+  lateWriteRejected = await rejects(() => FinancialService.createReceipt( payload(lateFailureRows, { id: lateFailureReceiptId })
   ));
 } finally {
   ledgerStore.add = originalLedgerAdd;
@@ -198,7 +197,7 @@ ok(JSON.stringify(afterLateWriteFailure) === JSON.stringify(beforeLateWriteFailu
 
 console.log('\n— legacy vehicle payment protection —');
 const legacyRow = row({ kartano: 'VC-LEGACY' });
-const legacyReceipt = await FinancialService.createReceipt(U, payload([legacyRow]));
+const legacyReceipt = await FinancialService.createReceipt( payload([legacyRow]));
 const legacyStored = (await DB.findByFields('receipt_rows', { receipt_id: legacyReceipt.receipt.id }))[0];
 await DB.add('vehicle_ledger', {
   username: U, owner_id: OWNER, client_id: legacyStored.vehicle_id, client_type: 'vehicle',
@@ -206,9 +205,9 @@ await DB.add('vehicle_ledger', {
   reference_type: 'receipt_row_payment_vehicle', effect: 'receipt_row_payment_vehicle',
   reference_id: legacyStored.row_id, date: legacyStored.date, applied_at: legacyStored.date,
   is_reversed: false,
-}, { username: U });
+});
 const legacyBefore = await effects(legacyStored.row_id);
-ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus(U, legacyStored.row_id, 'paid')),
+ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus( legacyStored.row_id, 'paid')),
   'legacy vehicle payment entry blocks status transition without reinterpretation');
 const legacyAfter = await effects(legacyStored.row_id);
 ok(JSON.stringify(legacyBefore) === JSON.stringify(legacyAfter)
@@ -217,12 +216,12 @@ ok(JSON.stringify(legacyBefore) === JSON.stringify(legacyAfter)
 
 console.log('\n— creation-effect invariant protection —');
 const missingCreationRow = row({ kartano: 'VC-MISSING-CREATION' });
-const missingCreationReceipt = await FinancialService.createReceipt(U, payload([missingCreationRow]));
+const missingCreationReceipt = await FinancialService.createReceipt( payload([missingCreationRow]));
 const missingCreationStored = (await DB.findByFields('receipt_rows', { receipt_id: missingCreationReceipt.receipt.id }))[0];
 const missingCreationState = await effects(missingCreationStored.row_id);
-await DB.update('vehicle_ledger', missingCreationState.vehicle[0].id, { is_reversed: true }, { username: U });
+await DB.update('vehicle_ledger', missingCreationState.vehicle[0].id, { is_reversed: true });
 const missingBeforeStatus = await effects(missingCreationStored.row_id);
-ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus(U, missingCreationStored.row_id, 'paid')),
+ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus( missingCreationStored.row_id, 'paid')),
   'missing vehicle creation effect rejects unpaid → paid');
 const missingAfterStatus = await effects(missingCreationStored.row_id);
 ok(JSON.stringify(missingAfterStatus) === JSON.stringify(missingBeforeStatus)
@@ -230,7 +229,7 @@ ok(JSON.stringify(missingAfterStatus) === JSON.stringify(missingBeforeStatus)
 'missing creation-effect rejection makes no office payment, vehicle mutation, or row-status change');
 
 const duplicateCreationRow = row({ kartano: 'VC-DUPLICATE-CREATION' });
-const duplicateCreationReceipt = await FinancialService.createReceipt(U, payload([duplicateCreationRow]));
+const duplicateCreationReceipt = await FinancialService.createReceipt( payload([duplicateCreationRow]));
 const duplicateCreationStored = (await DB.findByFields('receipt_rows', { receipt_id: duplicateCreationReceipt.receipt.id }))[0];
 await DB.add('vehicle_ledger', {
   username: U, owner_id: OWNER, owner_name: 'Owner C', client_id: duplicateCreationStored.vehicle_id,
@@ -239,9 +238,9 @@ await DB.add('vehicle_ledger', {
   reference_type: VEHICLE, reference_id: duplicateCreationStored.row_id,
   date: duplicateCreationStored.date, applied_at: duplicateCreationStored.date, is_reversed: false,
   note: 'قيد اختبار مكرر',
-}, { username: U });
+});
 const duplicateBeforeStatus = await effects(duplicateCreationStored.row_id);
-ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus(U, duplicateCreationStored.row_id, 'unpaid')),
+ok(await rejects(() => FinancialService.setReceiptRowPaymentStatus( duplicateCreationStored.row_id, 'unpaid')),
   'duplicate vehicle creation effects reject an unpaid → unpaid no-op');
 const duplicateAfterStatus = await effects(duplicateCreationStored.row_id);
 ok(JSON.stringify(duplicateAfterStatus) === JSON.stringify(duplicateBeforeStatus)

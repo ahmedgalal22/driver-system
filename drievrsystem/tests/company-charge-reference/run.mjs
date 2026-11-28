@@ -37,8 +37,8 @@ await DB.init();
 const OWNER_ID = uuid();
 const OFFICE = { id: uuid(), username: U, name: 'شركة الاختبار', phone: null };
 const VEHICLE = { id: uuid(), username: U, plate: '123 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await DB.add('offices', OFFICE, { username: U });
-await ClientRepository.saveVehicle(VEHICLE, { username: U });
+await DB.add('offices', OFFICE);
+await ClientRepository.saveVehicle(VEHICLE);
 
 const mkRow = (kartano, net, sarf) => ({
   _type: 'data', row_id: uuid(), owner_id: OWNER_ID, owner_name: 'مالك اختبار',
@@ -48,12 +48,12 @@ const mkRow = (kartano, net, sarf) => ({
 });
 const rowA = mkRow('1258', 100, 20);
 const rowB = mkRow('1260', 80, 10);
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-08-10', client_id: OWNER_ID, client_type: 'owner', client_name: 'مالك اختبار',
   total: 180, rows: [rowA, rowB],
 });
-await FinancialService.setReceiptRowPaymentStatus(U, rowA.row_id, 'paid');
-const manual = await FinancialService.createManualOfficeBalanceEntry(U, {
+await FinancialService.setReceiptRowPaymentStatus( rowA.row_id, 'paid');
+const manual = await FinancialService.createManualOfficeBalanceEntry( {
   office_id: OFFICE.id, entry_type: 'deposit', amount: 50, date: '2026-08-10', note: 'إيداع تشغيل',
 });
 

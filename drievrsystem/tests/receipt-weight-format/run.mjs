@@ -148,23 +148,23 @@ await assert.rejects(()=>ExcelService.importReceiptRows(new File()), /وزن م 
 // Actual IndexedDB-shim persistence and ledger lifecycle with new calculated net.
 const U='test', owner='owner', vehicle='vehicle', office='office', rowId='row-1';
 await DB.init();
-await DB.add('vehicles',{id:vehicle,username:U,plate:'V1',owner_id:owner},{username:U});
-await DB.add('offices',{id:office,username:U,name:'Office'},{username:U});
+await DB.add('vehicles',{id:vehicle,username:U,plate:'V1',owner_id:owner});
+await DB.add('offices',{id:office,username:U,name:'Office'});
 const row = {row_id:rowId, _type:'data', owner_id:owner, vehicle_id:vehicle, vehicle_plate:'V1', office:'Office', weight:10, weight2:7, deficit:200, weightTotal:weight(a), driver_price:a.noloon, advance:a.ohda, officeAmount:a.officeAmount, discount:a.discount, add:a.add, sarf:a.sarf, net:net(a)};
 const payload={client_id:owner,client_type:'owner',client_name:'Client',receipt_date:'2026-07-01',total:totals([a]).total,rows:[row]};
-const result=await FinancialService.createReceipt(U,payload);
+const result=await FinancialService.createReceipt(payload);
 let saved=await DB.getById('receipt_rows',rowId);
 assert.equal(saved.deficit,200); assert.equal(saved.weightTotal,9.8); assert.equal(saved.weight2,7); assert.equal(saved.net,18200);
 assert.equal((await DB.getById('receipts',result.receipt.id)).client_id,owner);
 let ledger=await DB.getByIndex('vehicle_ledger','by_reference_id',rowId);
 assert.equal(ledger.find(e=>e.reference_type==='receipt_row_vehicle_balance').amount,18200);
 assert.equal(ledger.find(e=>e.reference_type==='receipt_row_company_charge').amount,18400);
-await FinancialService.setReceiptRowPaymentStatus(U,rowId,'paid');
+await FinancialService.setReceiptRowPaymentStatus(rowId,'paid');
 ledger=await DB.getByIndex('vehicle_ledger','by_reference_id',rowId);
 assert.equal(ledger.find(e=>e.reference_type==='receipt_row_payment_company').amount,18400);
-await FinancialService.setReceiptRowPaymentStatus(U,rowId,'unpaid');
+await FinancialService.setReceiptRowPaymentStatus(rowId,'unpaid');
 const newRow={...row,deficit:500,weightTotal:weight({weight:10,deficit:500}),net:net({...a,deficit:500})};
-await FinancialService.updateReceipt(U,result.receipt.id,{...payload,total:newRow.net,rows:[newRow]});
+await FinancialService.updateReceipt(result.receipt.id,{...payload,total:newRow.net,rows:[newRow]});
 saved=await DB.getById('receipt_rows',rowId);
 assert.equal(saved.deficit,500); assert.equal(saved.weightTotal,9.5); assert.equal(saved.net,17600); assert.equal(saved.weight2,7);
 assert.equal((await DB.getById('receipts',result.receipt.id)).client_id,owner);
@@ -250,7 +250,7 @@ const editHarness = new Function('document','Money','calculateWeightTotal','calc
   return {loadReceiptForEdit, collectRawData, update, exportForm:_handleReceiptExcelExport};
 `)(editDocument,Money,weight,net,totals,FinancialService,ReceiptReadRepository,editClient,ExcelService,isSeparatorRow);
 const beforeEdit = await DB.getById('receipts',result.receipt.id);
-await DB.update('receipt_rows',rowId,{net:99900,driver_settlement_price:12345},{username:U});
+await DB.update('receipt_rows',rowId,{net:99900,driver_settlement_price:12345});
 await editHarness.loadReceiptForEdit(beforeEdit);
 assert.equal(tbody.rows.length,1);
 const loadedRow=tbody.rows[0];
@@ -266,7 +266,7 @@ assert.equal(captured.data[0]['الصافي'],176);
 const loadedRaw = await editHarness.collectRawData();
 assert.equal(loadedRaw.rows[0].net,176);
 assert.equal(loadedRaw.total,176);
-await editHarness.update(U,result.receipt.id,loadedRaw);
+await editHarness.update(result.receipt.id,loadedRaw);
 assert.equal((await DB.getById('receipt_rows',rowId)).net,17600);
 assert.equal((await DB.getById('receipts',result.receipt.id)).total,17600);
 loadedRow.querySelector('.receipt-deficit').value='200';
@@ -280,7 +280,7 @@ assert.equal(rawEdit.rows[0].weightTotal,9.8);
 assert.equal(rawEdit.rows[0].deficit,200);
 assert.equal(rawEdit.rows[0].net,182);
 assert.equal(rawEdit.total,182);
-await editHarness.update(U,result.receipt.id,rawEdit);
+await editHarness.update(result.receipt.id,rawEdit);
 const edited=await DB.getById('receipt_rows',rowId);
 const editedHeader=await DB.getById('receipts',result.receipt.id);
 assert.equal(edited.driver_settlement_price,12345);
@@ -296,7 +296,7 @@ console.log('PASS actual edit loader → live calculation → collectors → upd
 
 // Exercise each stored representation through real load, collect and update.
 for (const preserved of [7, '7.5', null, '', 'not numeric']) {
-  await DB.update('receipt_rows', rowId, {weight2:preserved}, {username:U});
+  await DB.update('receipt_rows', rowId, {weight2:preserved});
   await editHarness.loadReceiptForEdit(await DB.getById('receipts',result.receipt.id));
   const current=tbody.rows[0];
   current.querySelector('.receipt-deficit').value='500';
@@ -306,7 +306,7 @@ for (const preserved of [7, '7.5', null, '', 'not numeric']) {
   assert.equal(raw.rows[0].weightTotal,9.5);
   assert.equal(raw.rows[0].net,176);
   raw.rows[0].weightTotal=999; // stale command value must not override normalization
-  await editHarness.update(U,result.receipt.id,raw);
+  await editHarness.update(result.receipt.id,raw);
   const persisted=await DB.getById('receipt_rows',rowId);
   assert.equal(persisted.weight2,preserved);
   assert.equal(persisted.weightTotal,9.5);
@@ -417,7 +417,7 @@ console.log('PASS legacy Excel error cell rejection');
 // and ignore all caller-supplied computed amounts.
 const serviceRow={...row,row_id:'boundary-row',weightTotal:999,net:999};
 const servicePayload={...payload,total:999,rows:[serviceRow]};
-const direct=await FinancialService.createReceipt(U,servicePayload);
+const direct=await FinancialService.createReceipt(servicePayload);
 let directRow=await DB.getById('receipt_rows','boundary-row');
 assert.equal(directRow.weightTotal,9.8);
 assert.equal(directRow.net,18200);
@@ -425,7 +425,7 @@ assert.equal((await DB.getById('receipts',direct.receipt.id)).total,18200);
 let directLedger=await DB.getByIndex('vehicle_ledger','by_reference_id','boundary-row');
 assert.equal(directLedger.find(e=>e.reference_type==='receipt_row_vehicle_balance'&&!e.is_reversed).amount,18200);
 assert.equal(directLedger.find(e=>e.reference_type==='receipt_row_company_charge'&&!e.is_reversed).amount,18400);
-await FinancialService.updateReceipt(U,direct.receipt.id,{...servicePayload,total:1,rows:[{...serviceRow,deficit:500,net:999,weightTotal:999}]});
+await FinancialService.updateReceipt(direct.receipt.id,{...servicePayload,total:1,rows:[{...serviceRow,deficit:500,net:999,weightTotal:999}]});
 directRow=await DB.getById('receipt_rows','boundary-row');
 assert.equal(directRow.weightTotal,9.5);
 assert.equal(directRow.net,17600);
@@ -435,7 +435,7 @@ assert.equal(directLedger.find(e=>e.reference_type==='receipt_row_vehicle_balanc
 assert.equal(directLedger.find(e=>e.reference_type==='receipt_row_company_charge'&&!e.is_reversed).amount,17800);
 assert.equal((await DB.getById('receipts',direct.receipt.id)).client_id,owner);
 const {weight:removedInput,...incomplete}=serviceRow;
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[incomplete]}), /receipt calculation input weight is required/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[incomplete]}), /receipt calculation input weight is required/);
 console.log('PASS service input-derived receipt and ledger amounts');
 
 // Validate every duplicate, including whitespace before a generated suffix.
@@ -462,7 +462,7 @@ for (let target=0;target<2;target++) {
  await assert.rejects(()=>ExcelService.importReceiptRows(new File(XLSX.write(wb,{type:'array',bookType:'xlsx'}))),/وزن م الملغى/);
 }
 const multiRow={...serviceRow,row_id:'boundary-row-2',weight:1,deficit:0,driver_price:10,advance:0,officeAmount:0,discount:0,add:0,sarf:0};
-const multi=await FinancialService.createReceipt(U,{...servicePayload,total:999,rows:[{...serviceRow,row_id:'boundary-row-3'},multiRow]});
+const multi=await FinancialService.createReceipt({...servicePayload,total:999,rows:[{...serviceRow,row_id:'boundary-row-3'},multiRow]});
 assert.equal((await DB.getById('receipts',multi.receipt.id)).total,19200);
 assert.equal((await DB.getById('receipt_rows','boundary-row-2')).net,1000);
 console.log('PASS duplicate error cells and multi-row service totals');
@@ -471,7 +471,7 @@ console.log('PASS duplicate error cells and multi-row service totals');
 // those same rounded values before saving, while quantities retain precision.
 const precisionRow={...serviceRow,row_id:'precision-row',weight:10.1234,deficit:123.45,
  driver_price:1.235,advance:0.125,officeAmount:0.135,discount:0.145,add:1.225,sarf:0.155,net:999,weightTotal:999};
-const precisionReceipt=await FinancialService.createReceipt(U,{...servicePayload,rows:[precisionRow],total:999});
+const precisionReceipt=await FinancialService.createReceipt({...servicePayload,rows:[precisionRow],total:999});
 const precisionSaved=await DB.getById('receipt_rows','precision-row');
 const precisionUi={weight:precisionSaved.weight,deficit:precisionSaved.deficit,
  noloon:Money.toDecimal(precisionSaved.driver_price),ohda:Money.toDecimal(precisionSaved.advance),
@@ -484,18 +484,18 @@ assert.equal((await DB.getByIndex('vehicle_ledger','by_reference_id','precision-
 await editHarness.loadReceiptForEdit(await DB.getById('receipts',precisionReceipt.receipt.id));
 assert.equal(Number(tbody.rows[0].querySelector('.receipt-net').value),net(precisionUi));
 assert.equal(Number(elements.totalAmount.textContent),net(precisionUi));
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[{row_id:'amount-only',owner_id:owner,vehicle_id:vehicle,net:100}]}), /receipt calculation input weight is required/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[{row_id:'amount-only',owner_id:owner,vehicle_id:vehicle,net:100}]}), /receipt calculation input weight is required/);
 for (const invalid of ['',null,undefined,'x',Infinity,false]) {
- await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[{...serviceRow,driver_price:invalid}]}), /receipt calculation input driver_price is required/);
+ await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[{...serviceRow,driver_price:invalid}]}), /receipt calculation input driver_price is required/);
 }
 console.log('PASS cents precision, reopen and amount-only rejection');
 for (const key of ['weight','deficit','driver_price','advance','officeAmount','discount','add','sarf']) {
  const missing={...serviceRow}; delete missing[key];
- await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[missing]}),new RegExp(`receipt calculation input ${key} is required`));
- await assert.rejects(()=>FinancialService.updateReceipt(U,result.receipt.id,{...servicePayload,rows:[missing]}),new RegExp(`receipt calculation input ${key} is required`));
+ await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[missing]}),new RegExp(`receipt calculation input ${key} is required`));
+ await assert.rejects(()=>FinancialService.updateReceipt(result.receipt.id,{...servicePayload,rows:[missing]}),new RegExp(`receipt calculation input ${key} is required`));
 }
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[{...serviceRow,driver_price:1e200}]}), /safe monetary precision/);
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[{...serviceRow,weight:1e200}]}), /safe precision/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[{...serviceRow,driver_price:1e200}]}), /safe monetary precision/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[{...serviceRow,weight:1e200}]}), /safe precision/);
 for (const value of [1.005,1.235,-1.005,-1.235,1234567.895]) {
  assert.equal(Money.toCents(Money.round(value)),Money.toCents(value));
 }
@@ -513,7 +513,7 @@ assert.equal(isSeparatorRow(editableType),false);
 assert.equal(weight(editableType),9.8);
 assert.equal(net(editableType),182);
 assert.equal(totals([editableType,{...a,_type:'separator'},{...a,type:'separator'},{...a,row_type:'separator'}]).total,182);
-const mixed = await FinancialService.createReceipt(U,{...servicePayload,rows:[
+const mixed = await FinancialService.createReceipt({...servicePayload,rows:[
  {...serviceRow,row_id:'mixed-data',_type:'data',type:'separator'},
  {_type:'separator'}, {type:'separator'}, {row_type:'separator'},
 ]});
@@ -521,7 +521,7 @@ assert.equal((await DB.getById('receipts',mixed.receipt.id)).total,18200);
 assert.equal((await DB.getById('receipt_rows','mixed-data')).weightTotal,9.8);
 assert.equal((await DB.getById('receipt_rows','mixed-data')).net,18200);
 assert.equal((await ReceiptReadRepository.getReceiptRowsByReceipt(mixed.receipt.id)).length,1);
-await FinancialService.updateReceipt(U,mixed.receipt.id,{...servicePayload,rows:[
+await FinancialService.updateReceipt(mixed.receipt.id,{...servicePayload,rows:[
  {...serviceRow,row_id:'mixed-data',_type:'data',type:'separator',deficit:500},
  {_type:'separator'}, {type:'separator'}, {row_type:'separator'},
 ]});
@@ -560,11 +560,11 @@ for (const [key,cls,header,serviceKey] of [
       driver_price:importedRow.noloon,advance:importedRow.ohda};
     if(kind==='zero') {
       if(key==='weight' || key==='noloon') commandRow.add=300;
-      const accepted=await FinancialService.createReceipt(U,{...servicePayload,rows:[commandRow]});
+      const accepted=await FinancialService.createReceipt({...servicePayload,rows:[commandRow]});
       assert.equal((await DB.getById('receipt_rows',commandRow.row_id))[serviceKey],0);
       assert.ok(accepted.receipt.id);
     } else {
-      await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[commandRow]}),
+      await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[commandRow]}),
         new RegExp(`receipt calculation input ${serviceKey} is required`));
     }
     exportRow.querySelector=originalQuery;
@@ -577,15 +577,15 @@ console.log('PASS real XLSX blank, missing, invalid and zero export/import/save'
 // representation, rather than imposing a new arbitrary monetary maximum.
 const unstable=41123168407811.195;
 assert.notEqual(Money.toCents(unstable),Money.toCents(Money.round(unstable)));
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[{...serviceRow,row_id:'unstable',driver_price:unstable}]}),/cannot be represented consistently/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[{...serviceRow,row_id:'unstable',driver_price:unstable}]}),/cannot be represented consistently/);
 assert.equal(await DB.getById('receipt_rows','unstable'),null);
 const unsafeSum={...serviceRow,row_id:'unsafe-company-sum',weight:2,deficit:0,
   driver_price:45035996273705,advance:0,officeAmount:0,discount:0,add:0,sarf:1};
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[unsafeSum]}),/company amount exceeds safe precision/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[unsafeSum]}),/company amount exceeds safe precision/);
 assert.equal(await DB.getById('receipt_rows','unsafe-company-sum'),null);
 assert.equal((await DB.getByIndex('vehicle_ledger','by_reference_id','unsafe-company-sum')).length,0);
 const beforeUnsafeUpdate=await DB.getById('receipt_rows','boundary-row');
-await assert.rejects(()=>FinancialService.updateReceipt(U,direct.receipt.id,{...servicePayload,
+await assert.rejects(()=>FinancialService.updateReceipt(direct.receipt.id,{...servicePayload,
   rows:[{...unsafeSum,row_id:'boundary-row'}]}),/company amount exceeds safe precision/);
 assert.deepEqual(await DB.getById('receipt_rows','boundary-row'),beforeUnsafeUpdate);
 // Each row amount is representable, but their sum cannot be converted to a
@@ -593,7 +593,7 @@ assert.deepEqual(await DB.getById('receipt_rows','boundary-row'),beforeUnsafeUpd
 const totalA=45035996273700, totalB=45035996273700.01;
 assert.equal(Money.toCents(totalA),4503599627370000);
 assert.equal(Money.toCents(totalB),4503599627370001);
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[
  {...serviceRow,row_id:'unstable-total-a',office:null,weight:1,deficit:0,driver_price:totalA,advance:0,officeAmount:0,discount:0,add:0,sarf:0},
  {...serviceRow,row_id:'unstable-total-b',office:null,weight:1,deficit:0,driver_price:totalB,advance:0,officeAmount:0,discount:0,add:0,sarf:0},
 ]}),/receipt total exceeds safe precision/);
@@ -601,12 +601,12 @@ assert.equal(await DB.getById('receipt_rows','unstable-total-a'),null);
 // A safe integer company sum can still lose a cent when decimalized.
 const unstableCompany={...serviceRow,row_id:'unstable-company',weight:2,deficit:0,
   driver_price:45035996273700.05,advance:0,officeAmount:0,discount:0,add:0,sarf:45035996273700};
-await assert.rejects(()=>FinancialService.createReceipt(U,{...servicePayload,rows:[unstableCompany]}),/company amount exceeds safe precision/);
+await assert.rejects(()=>FinancialService.createReceipt({...servicePayload,rows:[unstableCompany]}),/company amount exceeds safe precision/);
 assert.equal(await DB.getById('receipt_rows','unstable-company'),null);
 const noOffice={...unsafeSum,row_id:'unsafe-payment',office:null};
-await FinancialService.createReceipt(U,{...servicePayload,rows:[noOffice]});
-await DB.update('receipt_rows','unsafe-payment',{office:'Office'},{username:U});
-await assert.rejects(()=>FinancialService.setReceiptRowPaymentStatus(U,'unsafe-payment','paid'),/company amount exceeds safe precision/);
+await FinancialService.createReceipt({...servicePayload,rows:[noOffice]});
+await DB.update('receipt_rows','unsafe-payment',{office:'Office'});
+await assert.rejects(()=>FinancialService.setReceiptRowPaymentStatus('unsafe-payment','paid'),/company amount exceeds safe precision/);
 assert.equal((await DB.getById('receipt_rows','unsafe-payment')).payment_status,'unpaid');
 assert.equal((await DB.getByIndex('vehicle_ledger','by_reference_id','unsafe-payment')).filter(e=>e.reference_type==='receipt_row_payment_company').length,0);
 console.log('PASS unstable cent representation and unsafe company ledger sums');
@@ -622,7 +622,7 @@ const unequal={...realistic,add:1000,sarf:999.99};
 assert.equal(net(unequal),Money.round((10-5/1000)*11+1000-999.99));
 const neutralRow={...serviceRow,row_id:'neutral-adjustment',weight:10,deficit:5,driver_price:11,
  advance:0,officeAmount:0,discount:0,add:1000,sarf:1000};
-const neutral=await FinancialService.createReceipt(U,{...servicePayload,rows:[neutralRow]});
+const neutral=await FinancialService.createReceipt({...servicePayload,rows:[neutralRow]});
 const neutralSaved=await DB.getById('receipt_rows','neutral-adjustment');
 assert.equal(neutralSaved.net,10995);
 assert.equal((await DB.getById('receipts',neutral.receipt.id)).total,10995);

@@ -34,7 +34,7 @@ if (!scenario) {
 const { installIDB } = await import('./idb-shim.mjs');
 installIDB();
 
-const USERNAME = 'office-boot-tester';
+const USERNAME = 'admin';
 let failures = 0;
 function ok(condition, label) {
   console.log(`${condition ? 'PASS' : 'FAIL'}  ${label}`);
@@ -116,7 +116,8 @@ function installDom() {
 const { byId } = installDom();
 globalThis.sessionStorage = createStorage();
 globalThis.localStorage = createStorage();
-globalThis.__OFFICE_BOOT_SESSION__ = { username: USERNAME };
+globalThis.localStorage.setItem('session', JSON.stringify({ username: 'admin' }));
+globalThis.__OFFICE_BOOT_SESSION__ = { username: 'admin' };
 globalThis.window = globalThis;
 globalThis.window.addEventListener = () => {};
 globalThis.window.removeEventListener = () => {};
@@ -137,7 +138,7 @@ async function allOfficeCount() {
 
 async function seedOffice(name) {
   const id = crypto.randomUUID();
-  return DB.add('offices', { id, username: USERNAME, name, phone: null }, { username: USERNAME });
+  return DB.add('offices', { id, name, phone: null });
 }
 
 let showOfficeDetailsCalls = [];
@@ -165,7 +166,7 @@ if (scenario === 'invalid') {
 }
 if (scenario === 'deleted') {
   seeded = await seedOffice('شركة اختبار محذوفة');
-  await DB.delete('offices', seeded.id, { username: USERNAME });
+  await DB.delete('offices', seeded.id);
   sessionStorage.setItem('financial_last_page', 'officeDetailsPage');
   sessionStorage.setItem('financial_last_page_ctx', JSON.stringify({
     page: 'officeDetailsPage',

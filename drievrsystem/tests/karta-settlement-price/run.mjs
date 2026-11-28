@@ -47,10 +47,10 @@ const DRIVER_A = { id: uuid(), username: U, name: 'السائق أ', phone: null
 const DRIVER_B = { id: uuid(), username: U, name: 'السائق ب', phone: null };
 const V1 = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const V2 = { id: uuid(), username: U, plate: '222 ج د', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER_A, { username: U });
-await ClientRepository.saveDriver(DRIVER_B, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await ClientRepository.saveDriver(DRIVER_A);
+await ClientRepository.saveDriver(DRIVER_B);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const mkRow = ({ row_id = uuid(), driver, vehicle, settlementPrice = undefined, kartano }) => ({
   _type: 'data',
@@ -83,7 +83,7 @@ const ROW_B = mkRow({
   driver: DRIVER_B, vehicle: V2, settlementPrice: 45.67, kartano: 'B-ONLY',
 });
 
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-09-30',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -129,15 +129,15 @@ const untouchedFields = {
   sarf: rawInitialUnsettled.sarf,
   kartano: rawInitialUnsettled.kartano,
 };
-const blankResult = await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, '');
+const blankResult = await FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, '');
 ok(blankResult.driver_settlement_price === null
   && (await DB.getById('receipt_rows', ROW_A_UNSETTLED.row_id)).driver_settlement_price === null,
   'blank settlement price is allowed and persists as unset while the row is unsettled');
-const zeroResult = await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, 0);
+const zeroResult = await FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, 0);
 ok(zeroResult.driver_settlement_price === 0
   && (await DB.getById('receipt_rows', ROW_A_UNSETTLED.row_id)).driver_settlement_price === 0,
   'zero settlement price is allowed and stored as zero cents while the row is unsettled');
-const decimalResult = await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, '200.25');
+const decimalResult = await FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, '200.25');
 const rawDecimal = await DB.getById('receipt_rows', ROW_A_UNSETTLED.row_id);
 ok(decimalResult.driver_settlement_price === 200.25 && rawDecimal.driver_settlement_price === 20025,
   'positive decimal settlement price is normalized through the existing cents convention');
@@ -145,9 +145,9 @@ ok(Object.entries(untouchedFields).every(([key, value]) => rawDecimal[key] === v
   'price update patches only driver_settlement_price and preserves all other receipt-row fields');
 
 const rowBeforeInvalid = await DB.getById('receipt_rows', ROW_A_UNSETTLED.row_id);
-ok(await rejects(() => FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, -1)),
+ok(await rejects(() => FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, -1)),
   'negative settlement price is rejected');
-ok(await rejects(() => FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, 'not-a-number')),
+ok(await rejects(() => FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, 'not-a-number')),
   'non-numeric settlement price is rejected');
 ok((await DB.getById('receipt_rows', ROW_A_UNSETTLED.row_id)).driver_settlement_price === rowBeforeInvalid.driver_settlement_price,
   'rejected values leave the persisted settlement price unchanged');
@@ -170,7 +170,7 @@ ok(rawDecimal.vehicle_id === V2.id && rawDecimal.vehicle_plate === V2.plate,
 const ledgerBeforeSettlement = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
 const v1BalanceBeforePriceOnly = (await FinancialService.rebuildVehicleBalance(V1.id)).balance;
 const v2BalanceBeforePriceOnly = (await FinancialService.rebuildVehicleBalance(V2.id)).balance;
-await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_UNSETTLED.row_id, 201);
+await FinancialService.updateDriverKartaSettlementPrice( ROW_A_UNSETTLED.row_id, 201);
 const ledgerAfterPriceOnly = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
 ok(JSON.stringify(ledgerAfterPriceOnly) === JSON.stringify(ledgerBeforeSettlement),
   'price-only update creates and changes no vehicle_ledger movement');
@@ -181,7 +181,7 @@ ok(v1BalanceBeforePriceOnly === 10 && v2BalanceBeforePriceOnly === 20
 
 console.log('\n— settlement status derives from existing active ledger effects —');
 const v1BalanceBeforeSettlement = (await FinancialService.rebuildVehicleBalance(V1.id)).balance;
-await FinancialService.createKartaSettlement(U, {
+await FinancialService.createKartaSettlement( {
   row_id: ROW_A_SETTLED.row_id,
   driver_id: DRIVER_A.id,
   vehicle_id: V1.id,
@@ -208,7 +208,7 @@ ok((await FinancialService.rebuildVehicleBalance(V1.id)).balance === v1BalanceBe
   'existing Karta Settlement keeps its unchanged Vehicle Balance withdrawal behavior (exactly -50.00 delta)');
 
 const ledgerBeforeSettledPriceEdit = await DB.getByIndex('vehicle_ledger', 'by_reference_id', ROW_A_SETTLED.row_id);
-await FinancialService.updateDriverKartaSettlementPrice(U, ROW_A_SETTLED.row_id, 333.33);
+await FinancialService.updateDriverKartaSettlementPrice( ROW_A_SETTLED.row_id, 333.33);
 const ledgerAfterSettledPriceEdit = await DB.getByIndex('vehicle_ledger', 'by_reference_id', ROW_A_SETTLED.row_id);
 ok((await FinancialService.getDriverKartas(DRIVER_A.id)).find(row => row.row_id === ROW_A_SETTLED.row_id)?.driver_settlement_price === 333.33
   && JSON.stringify(ledgerAfterSettledPriceEdit) === JSON.stringify(ledgerBeforeSettledPriceEdit),

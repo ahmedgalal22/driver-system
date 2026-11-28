@@ -24,10 +24,10 @@ const DRIVER_A = { id: uuid(), username: U, name: 'السائق أ', phone: null
 const DRIVER_B = { id: uuid(), username: U, name: 'السائق ب', phone: null };
 const V1 = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const V2 = { id: uuid(), username: U, plate: '222 ج د', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER_A, { username: U });
-await ClientRepository.saveDriver(DRIVER_B, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await ClientRepository.saveDriver(DRIVER_A);
+await ClientRepository.saveDriver(DRIVER_B);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const mkRow = ({ row_id = uuid(), driver = DRIVER_A, vehicle = V1, kartano = row_id }) => ({
   _type: 'data', row_id,
@@ -40,7 +40,7 @@ const mkRow = ({ row_id = uuid(), driver = DRIVER_A, vehicle = V1, kartano = row
 });
 
 async function createRow(row) {
-  await FinancialService.createReceipt(U, {
+  await FinancialService.createReceipt( {
     receipt_date: '2026-10-01', client_id: OWNER_ID, client_type: 'owner', client_name: 'مالك اختبار',
     total: 10, rows: [row],
   });
@@ -84,55 +84,55 @@ function vehicleLeg(row, amount = 5000, vehicle = V1) {
 
 console.log('\n— source, driver, and vehicle validation —');
 let before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: 'missing-row', driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'missing receipt row is rejected');
 ok((await ledgerSnapshot()) === before, 'missing receipt row writes no ledger entries');
 
 const DELETED_ROW = await createRow(mkRow({ kartano: 'DELETED' }));
-await DB.delete('receipt_rows', DELETED_ROW.row_id, { username: U });
+await DB.delete('receipt_rows', DELETED_ROW.row_id);
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: DELETED_ROW.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'deleted receipt row is rejected');
 ok((await ledgerSnapshot()) === before, 'deleted receipt row writes no ledger entries');
 
 const NO_DRIVER = await createRow(mkRow({ kartano: 'NO-DRIVER' }));
-await DB.update('receipt_rows', NO_DRIVER.row_id, { driver_id: null }, { username: U });
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+await DB.update('receipt_rows', NO_DRIVER.row_id, { driver_id: null });
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: NO_DRIVER.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'row without a driver is rejected');
 
 const WRONG_DRIVER = await createRow(mkRow({ kartano: 'WRONG-DRIVER' }));
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: WRONG_DRIVER.row_id, driver_id: DRIVER_B.id, amount: 50, date: '2026-10-01',
 })), 'selected driver must match receipt-row driver');
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: WRONG_DRIVER.row_id, amount: 50, date: '2026-10-01',
 })), 'missing selected driver is rejected');
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: WRONG_DRIVER.row_id, driver_id: DRIVER_A.id, amount: Infinity, date: '2026-10-01',
 })), 'non-finite settlement amount is rejected');
 
 const INACTIVE_DRIVER = { id: uuid(), username: U, name: 'سائق محذوف', phone: null };
-await ClientRepository.saveDriver(INACTIVE_DRIVER, { username: U });
+await ClientRepository.saveDriver(INACTIVE_DRIVER);
 const INACTIVE_DRIVER_ROW = await createRow(mkRow({ driver: INACTIVE_DRIVER, kartano: 'INACTIVE-DRIVER' }));
-await ClientRepository.deleteDriver(INACTIVE_DRIVER.id, { username: U });
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+await ClientRepository.deleteDriver(INACTIVE_DRIVER.id);
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: INACTIVE_DRIVER_ROW.row_id, driver_id: INACTIVE_DRIVER.id, amount: 50, date: '2026-10-01',
 })), 'inactive receipt-row driver is rejected');
 
 const NO_VEHICLE = await createRow(mkRow({ kartano: 'NO-VEHICLE' }));
-await DB.update('receipt_rows', NO_VEHICLE.row_id, { vehicle_id: null, vehicle_plate: null }, { username: U });
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+await DB.update('receipt_rows', NO_VEHICLE.row_id, { vehicle_id: null, vehicle_plate: null });
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: NO_VEHICLE.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'row without vehicle_id is rejected');
 
 const INACTIVE_VEHICLE = { id: uuid(), username: U, plate: '999 ز ح', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveVehicle(INACTIVE_VEHICLE, { username: U });
+await ClientRepository.saveVehicle(INACTIVE_VEHICLE);
 const INACTIVE_VEHICLE_ROW = await createRow(mkRow({ vehicle: INACTIVE_VEHICLE, kartano: 'INACTIVE-VEHICLE' }));
-await ClientRepository.deleteVehicle(INACTIVE_VEHICLE.id, { username: U });
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+await ClientRepository.deleteVehicle(INACTIVE_VEHICLE.id);
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: INACTIVE_VEHICLE_ROW.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'inactive receipt-row vehicle is rejected');
 
@@ -144,7 +144,7 @@ const validCreation = await activeCreation(VALID.row_id);
 ok(validCreation.length === 1 && validCreation[0].type === 'deposit' && validCreation[0].amount === 1000
   && validCreation[0].vehicle_id === V1.id,
   'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for the VALID row');
-const created = await FinancialService.createKartaSettlement(U, {
+const created = await FinancialService.createKartaSettlement( {
   row_id: VALID.row_id, driver_id: DRIVER_A.id, vehicle_id: V1.id, amount: 50,
   date: '2026-10-01', note: 'تسوية صحيحة',
 });
@@ -165,36 +165,36 @@ ok((await vehicleCents(V1.id)) === vehicleBeforeValidSettlement - 5000
   'vehicle decreases exactly once by the settlement amount (delta from the shared-vehicle creation baseline) while the Driver Balance projection remains unchanged');
 
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: VALID.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'complete active settlement rejects duplicate creation');
 ok((await ledgerSnapshot()) === before, 'duplicate settlement rejection writes nothing');
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: VALID.row_id, driver_id: DRIVER_A.id, vehicle_id: V2.id, amount: 50, date: '2026-10-01',
 })), 'caller supplied wrong vehicle ID is rejected');
 
 console.log('\n— partial and duplicate active pair detection —');
 const DRIVER_ONLY = await createRow(mkRow({ kartano: 'DRIVER-ONLY' }));
-await DB.add('vehicle_ledger', driverLeg(DRIVER_ONLY), { username: U });
+await DB.add('vehicle_ledger', driverLeg(DRIVER_ONLY));
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: DRIVER_ONLY.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'active driver leg without vehicle charge is rejected as partial state');
 ok((await ledgerSnapshot()) === before, 'partial driver-leg rejection writes nothing');
 
 const VEHICLE_ONLY = await createRow(mkRow({ kartano: 'VEHICLE-ONLY' }));
-await DB.add('vehicle_ledger', vehicleLeg(VEHICLE_ONLY), { username: U });
+await DB.add('vehicle_ledger', vehicleLeg(VEHICLE_ONLY));
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: VEHICLE_ONLY.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'active vehicle charge without driver leg is rejected as partial state');
 ok((await ledgerSnapshot()) === before, 'partial vehicle-leg rejection writes nothing');
 
 const MULTIPLE = await createRow(mkRow({ kartano: 'MULTIPLE' }));
-await DB.add('vehicle_ledger', driverLeg(MULTIPLE), { username: U });
-await DB.add('vehicle_ledger', driverLeg(MULTIPLE), { username: U });
+await DB.add('vehicle_ledger', driverLeg(MULTIPLE));
+await DB.add('vehicle_ledger', driverLeg(MULTIPLE));
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.createKartaSettlement(U, {
+ok(await rejects(() => FinancialService.createKartaSettlement( {
   row_id: MULTIPLE.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 })), 'multiple active settlement legs are rejected as duplicate state');
 ok((await ledgerSnapshot()) === before, 'duplicate-state rejection writes nothing');
@@ -204,11 +204,11 @@ const UPDATE_ROW = await createRow(mkRow({ vehicle: V1, kartano: 'UPDATE' }));
 // Baseline AFTER this row's creation deposit: settlement update/reversal
 // must net to zero against it, with the creation deposit itself untouched.
 const balanceAfterUpdateRowCreation = await vehicleCents(V1.id);
-await FinancialService.createKartaSettlement(U, {
+await FinancialService.createKartaSettlement( {
   row_id: UPDATE_ROW.row_id, driver_id: DRIVER_A.id, amount: 50, date: '2026-10-01',
 });
 const oldUpdateLegs = await activeLegs(UPDATE_ROW.row_id);
-const updated = await FinancialService.updateKartaSettlement(U, {
+const updated = await FinancialService.updateKartaSettlement( {
   row_id: UPDATE_ROW.row_id, driver_id: DRIVER_A.id, vehicle_id: V1.id,
   amount: 80, date: '2026-10-02', note: 'تعديل صحيح',
 });
@@ -223,11 +223,11 @@ ok(updated.settlement_reference_id === UPDATE_ROW.row_id
   && newUpdateLegs.find(entry => entry.effect === 'karta_settlement_charge')?.amount === 8000
   && updateRowCreationAfterUpdate.length === 1,
   'update reverses old Karta pair and writes a corrected pair using the row vehicle, leaving the creation deposit active');
-ok(await rejects(() => FinancialService.updateKartaSettlement(U, {
+ok(await rejects(() => FinancialService.updateKartaSettlement( {
   row_id: UPDATE_ROW.row_id, driver_id: DRIVER_A.id, vehicle_id: V2.id,
   amount: 90, date: '2026-10-02',
 })), 'update rejects caller attempt to move charge to another vehicle');
-await FinancialService.reverseKartaSettlement(U, UPDATE_ROW.row_id);
+await FinancialService.reverseKartaSettlement( UPDATE_ROW.row_id);
 const reversedUpdateLegs = await DB.getByIndex('vehicle_ledger', 'by_reference_id', UPDATE_ROW.row_id);
 const reversedUpdateKarta = reversedUpdateLegs.filter(isKartaLeg);
 const reversedUpdateCreation = reversedUpdateLegs.filter(isVehicleCreation);
@@ -239,9 +239,9 @@ ok(reversedUpdateKarta.length === 4
 
 console.log('\n— partial reversal is surfaced, not silently hidden —');
 const PARTIAL_REVERSE = await createRow(mkRow({ kartano: 'PARTIAL-REVERSE' }));
-await DB.add('vehicle_ledger', driverLeg(PARTIAL_REVERSE), { username: U });
+await DB.add('vehicle_ledger', driverLeg(PARTIAL_REVERSE));
 before = await ledgerSnapshot();
-ok(await rejects(() => FinancialService.reverseKartaSettlement(U, PARTIAL_REVERSE.row_id)),
+ok(await rejects(() => FinancialService.reverseKartaSettlement( PARTIAL_REVERSE.row_id)),
   'reversal rejects an inconsistent partial settlement pair');
 ok((await ledgerSnapshot()) === before, 'partial reversal rejection preserves evidence for a future repair workflow');
 

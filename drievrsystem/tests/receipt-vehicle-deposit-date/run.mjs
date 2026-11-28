@@ -12,8 +12,8 @@ await DB.init();
 const owner = uuid();
 const vehicle = { id: uuid(), username: U, plate: 'DATE-1', owner_id: owner, owner_name: 'Owner' };
 const office = { id: uuid(), username: U, name: 'Date Office' };
-await ClientRepository.saveVehicle(vehicle, { username: U });
-await DB.add('offices', office, { username: U });
+await ClientRepository.saveVehicle(vehicle);
+await DB.add('offices', office);
 const makeRow = (date) => ({
   _type: 'data', row_id: uuid(), owner_id: owner, vehicle_id: vehicle.id,
   vehicle_plate: vehicle.plate, office: office.name, date, driver_price: 1,
@@ -26,7 +26,7 @@ const vehicles = async rowId => (await entries(rowId)).filter(e => e.reference_t
 
 const different = makeRow('2025-04-24');
 const empty = makeRow('');
-const { receipt } = await FinancialService.createReceipt(U, payload('2025-03-10', [different, empty]));
+const { receipt } = await FinancialService.createReceipt( payload('2025-03-10', [different, empty]));
 let first = (await vehicles(different.row_id))[0];
 assert.equal(first.date, '2025-03-10');
 assert.equal((await vehicles(empty.row_id))[0].date, '2025-03-10');
@@ -37,7 +37,7 @@ console.log('PASS creation with different and empty table dates; stored ledger a
 
 // An informational date edit must not reverse or replace the vehicle movement.
 const changedRow = { ...different, date: '2025-05-25' };
-await FinancialService.updateReceipt(U, receipt.id, payload('2025-03-10', [changedRow, empty]));
+await FinancialService.updateReceipt( receipt.id, payload('2025-03-10', [changedRow, empty]));
 assert.equal((await DB.getById('receipt_rows', different.row_id)).date, '2025-05-25');
 assert.equal((await vehicles(different.row_id)).length, 1);
 assert.equal((await vehicles(different.row_id))[0].id, first.id);
@@ -47,7 +47,7 @@ console.log('PASS table-date-only edit preserves vehicle identity and stores inf
 
 // Main-date-only change must replace both old rows, despite the nonempty table date.
 const initialEmpty = (await vehicles(empty.row_id))[0];
-await FinancialService.updateReceipt(U, receipt.id, payload('2025-06-12', [changedRow, empty]));
+await FinancialService.updateReceipt( receipt.id, payload('2025-06-12', [changedRow, empty]));
 let replacement = (await vehicles(different.row_id))[0];
 assert.notEqual(replacement.id, first.id);
 assert.equal(replacement.date, '2025-06-12');
@@ -58,7 +58,7 @@ assert.equal((await DB.getById('receipt_rows', different.row_id)).date, '2025-05
 console.log('PASS main-date-only edit reverses and replaces vehicle entries');
 
 const added = makeRow('2025-07-28');
-await FinancialService.updateReceipt(U, receipt.id, payload('2025-06-12', [changedRow, empty, added]));
+await FinancialService.updateReceipt( receipt.id, payload('2025-06-12', [changedRow, empty, added]));
 assert.equal((await vehicles(different.row_id))[0].id, replacement.id);
 assert.equal((await vehicles(added.row_id))[0].date, '2025-06-12');
 assert.equal((await DB.getById('receipt_rows', added.row_id)).date, '2025-07-28');
@@ -81,13 +81,13 @@ assert.match(entities, /_escapeMaintenanceText\(movement\.date \|\| '—'\)/);
 console.log('PASS ledger display renderer and monthly report use persisted main date');
 
 // The company payment uses the transition date, and does not alter vehicle deposit.
-await FinancialService.setReceiptRowPaymentStatus(U, different.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( different.row_id, 'paid');
 const company = (await entries(different.row_id)).find(e => e.reference_type === 'receipt_row_payment_company' && !e.is_reversed);
 assert.equal(company.date, DateUtils.todayLocal());
 assert.equal((await vehicles(different.row_id))[0].id, replacement.id);
 console.log('PASS company payment uses the transition date');
 
-const manual = await FinancialService.createManualVehicleBalanceEntry(U, {
+const manual = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: vehicle.id, entry_type: 'deposit', amount: 17, date: '2025-08-19', note: 'Manual',
 });
 assert.equal(manual.date, '2025-08-19');

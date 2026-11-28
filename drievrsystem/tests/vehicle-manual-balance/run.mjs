@@ -29,9 +29,9 @@ const OWNER_ID = uuid();
 const OFFICE = { id: uuid(), username: U, name: 'شركة الاختبار', phone: null };
 const V1 = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const V2 = { id: uuid(), username: U, plate: '222 ج د', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await DB.add('offices', OFFICE, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await DB.add('offices', OFFICE);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const receiptRow = {
   _type: 'data',
@@ -50,7 +50,7 @@ const receiptRow = {
   net: 11,
   sarf: 7,
 };
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-08-10',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -67,12 +67,12 @@ const companyBalanceCents = async () =>
 console.log('\n— receipt-row baseline remains unchanged —');
 ok((await vehicleBalanceCents(V1.id)) === 1100 && (await companyBalanceCents()) === -1800,
   'unpaid receipt row creates independent company and vehicle creation effects before manual operations');
-await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( receiptRow.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 1100 && (await companyBalanceCents()) === 0,
   'receipt-row payment offsets the company charge without changing creation-side vehicle balance');
 
 console.log('\n— manual deposit / withdrawal —');
-const deposit = await FinancialService.createManualVehicleBalanceEntry(U, {
+const deposit = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id,
   entry_type: 'deposit',
   amount: 100,
@@ -89,7 +89,7 @@ ok((await vehicleBalanceCents(V1.id)) === 11100 && (await vehicleBalanceCents(V2
 ok((await companyBalanceCents()) === 0,
   'manual vehicle deposit does not affect the existing company balance projection');
 
-const withdrawal = await FinancialService.createManualVehicleBalanceEntry(U, {
+const withdrawal = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id,
   entry_type: 'withdraw',
   amount: 40,
@@ -121,26 +121,26 @@ ok((await vehicleBalanceCents(V1.id, ReloadedFinancialService)) === 7100
   'manual movements persist and rebuild correctly after a fresh FinancialService reload');
 
 console.log('\n— audit-preserving manual deletion/reversal —');
-await FinancialService.deleteManualVehicleBalanceEntry(U, deposit.reference_id);
+await FinancialService.deleteManualVehicleBalanceEntry( deposit.reference_id);
 ok((await vehicleBalanceCents(V1.id)) === -2900,
   'reversing the manual deposit removes only that manual effect while receipt payment and manual withdrawal remain');
 const depositAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', deposit.reference_id))[0];
-ok(depositAudit.is_reversed === true && depositAudit.reversed_at && depositAudit.reversed_by === U,
+ok(depositAudit.is_reversed === true && depositAudit.reversed_at && !('reversed_by' in depositAudit),
   'manual deletion follows the existing audit-preserving is_reversed convention');
 ok((await companyBalanceCents()) === 0,
   'manual reversal does not affect the separate company receipt-row-payment effect');
 
-await FinancialService.deleteManualVehicleBalanceEntry(U, withdrawal.reference_id);
+await FinancialService.deleteManualVehicleBalanceEntry( withdrawal.reference_id);
 ok((await vehicleBalanceCents(V1.id)) === 1100,
   'reversing the manual withdrawal restores the balance to the receipt-row creation baseline');
-await FinancialService.setReceiptRowPaymentStatus(U, receiptRow.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( receiptRow.row_id, 'unpaid');
 ok((await vehicleBalanceCents(V1.id)) === 1100 && (await companyBalanceCents()) === -1800,
   'company payment reversal leaves the independent vehicle creation balance unchanged after manual vehicle activity');
 
 console.log('\n— UI and domain isolation fingerprints —');
 ok(ENTITIES_SRC.includes('data-action="open-balance-entry"')
   && ENTITIES_SRC.includes('await _openVehicleBalanceEntryModal(openVehicleBalanceEntry.dataset.entryType);')
-  && ENTITIES_SRC.includes('FinancialService.createManualVehicleBalanceEntry(_currentUsername(), {'),
+  && ENTITIES_SRC.includes('FinancialService.createManualVehicleBalanceEntry'),
   'Vehicle Details manual buttons open the connected modal and save through FinancialService');
 ok(FINANCIAL_SRC.includes("const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balance';")
   && FINANCIAL_SRC.includes("const MANUAL_VEHICLE_EFFECT = 'manual_vehicle_balance';"),

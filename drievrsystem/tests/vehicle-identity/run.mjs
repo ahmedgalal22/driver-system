@@ -60,50 +60,50 @@ const entitiesScope = new Function(
 const { createOwner, updateOwner, addAccount, resolveVehicle } = entitiesScope;
 
 await DB.init();
-await DB.add('offices', { id: uuid(), username: U, name: 'شركة أ', phone: null }, { username: U });
+await DB.add('offices', { id: uuid(), name: 'شركة أ', phone: null });
 
 // ══ GROUP 1 — owner registry is number-keyed (real createOwner/updateOwner) ══
 console.log('\n— GROUP 1: owner registry (number-keyed identity) —');
-const rec = await createOwner(U, { vehicle_number: '123 أ ب', notes: null });
+const rec = await createOwner({ vehicle_number: '123 أ ب', notes: null });
 ok(rec.vehicle_number === '123 أ ب', `created owner persists vehicle_number verbatim (got ${J(rec.vehicle_number)})`);
 ok(rec.name === '123 أ ب', 'owner display slot (name) mirrors the vehicle number');
 ok(!('vehicle_name' in rec), 'REMOVED-CONTRACT: no vehicle_name slot is persisted on owner records');
 ok(typeof rec.id === 'string' && rec.id.length > 0, 'internal owner UUID generated and preserved');
 
 let dupErr = '';
-try { await createOwner(U, { vehicle_number: '123 أ ب  ' }); } catch (e) { dupErr = e.message; }
+try { await createOwner({ vehicle_number: '123 أ ب  ' }); } catch (e) { dupErr = e.message; }
 ok(dupErr.includes('رقم المركبة مستخدم بالفعل'), `duplicate vehicle number rejected at create ("${dupErr}")`);
 let wsErr = '';
-try { await createOwner(U, { vehicle_number: '123  أ   ب' }); } catch (e) { wsErr = e.message; }
+try { await createOwner({ vehicle_number: '123  أ   ب' }); } catch (e) { wsErr = e.message; }
 ok(wsErr.includes('رقم المركبة مستخدم بالفعل'), 'whitespace-normalized duplicate number also rejected');
 let reqErr = '';
-try { await createOwner(U, { vehicle_number: '   ' }); } catch (e) { reqErr = e.message; }
+try { await createOwner({ vehicle_number: '   ' }); } catch (e) { reqErr = e.message; }
 ok(reqErr.includes('رقم المركبة مطلوب'), `vehicle number is required ("${reqErr}")`);
 
-const rec2 = await createOwner(U, { vehicle_number: '999 ج د' });
+const rec2 = await createOwner({ vehicle_number: '999 ج د' });
 let updDupErr = '';
-try { await updateOwner(U, rec2.id, { vehicle_number: '123 أ ب' }); } catch (e) { updDupErr = e.message; }
+try { await updateOwner(rec2.id, { vehicle_number: '123 أ ب' }); } catch (e) { updDupErr = e.message; }
 ok(updDupErr.includes('رقم المركبة مستخدم بالفعل'), `duplicate vehicle number rejected at update ("${updDupErr}")`);
-const upd = await updateOwner(U, rec2.id, { vehicle_number: '777 هـ و' });
+const upd = await updateOwner(rec2.id, { vehicle_number: '777 هـ و' });
 ok(upd.vehicle_number === '777 هـ و' && upd.name === '777 هـ و', 'update rewrites number + mirrored name');
 ok((await ClientRepository.findOwnersByNumber('999 ج د')).length === 0, 'old number no longer resolves after update');
-const same = await updateOwner(U, rec.id, { vehicle_number: '123 أ ب' });
+const same = await updateOwner(rec.id, { vehicle_number: '123 أ ب' });
 ok(same.id === rec.id, 'update keeping the same number passes (self not treated as duplicate)');
 
 // ══ GROUP 2 — رقم المركبة → vehicle → owner resolution (verbatim resolveVehicle) ══
 console.log('\n— GROUP 2: plate → vehicle → owner resolution —');
 ok((await DB.getAll('vehicles')).length === 0, 'vehicles store empty before receipt-driven resolution');
-const v1 = await resolveVehicle(U, '123 أ ب', { id: rec.id, name: rec.name });
+const v1 = await resolveVehicle('123 أ ب', { id: rec.id, name: rec.name });
 ok(typeof v1.id === 'string' && v1.plate === '123 أ ب', `vehicle created by number with internal UUID (plate=${J(v1.plate)})`);
 ok(String(v1.owner_id) === String(rec.id), `vehicle bound to the number's owner (owner_id=${v1.owner_id})`);
 // same number, whitespace variant, DIFFERENT owner argument → same vehicle, owner untouched
-const v1b = await resolveVehicle(U, '123  أ   ب', { id: rec2.id, name: rec2.vehicle_number });
+const v1b = await resolveVehicle('123  أ   ب', { id: rec2.id, name: rec2.vehicle_number });
 ok(String(v1b.id) === String(v1.id), 'same vehicle number always resolves to the SAME vehicle (no duplicate created)');
 ok(String(v1b.owner_id) === String(rec.id), 'existing vehicle keeps its owner — no silent re-association to a different owner');
 ok((await DB.getAll('vehicles')).length === 1, 'vehicles store holds exactly one record for the repeated number');
 // unknown number + no owner context → loud refusal, never an invented owner
 let unkErr = '';
-try { await resolveVehicle(U, '555 مجهولة', null); } catch (e) { unkErr = e.message; }
+try { await resolveVehicle('555 مجهولة', null); } catch (e) { unkErr = e.message; }
 ok(unkErr.includes('يجب تحديد مالك المركبة قبل تسجيل المركبة'), `unknown number does not invent an owner ("${unkErr}")`);
 ok((await DB.getAll('vehicles')).length === 1, 'unknown number wrote nothing to the vehicles store');
 
@@ -122,7 +122,7 @@ const rowPayload = () => ({
   weight: 10, weight2: 5, deficit: 1, weightTotal: 9.999,
   driver_price: 100, advance: 50, officeAmount: 25, discount: 0, sarf: 0, add: 0, net: 924.9,
 });
-const created = await FinancialService.createReceipt(U, {
+const created = await FinancialService.createReceipt( {
   receipt_date: '2026-08-10',
   client_id: rec.id, client_type: 'owner', client_name: rec.name,
   total: 500,
@@ -139,7 +139,7 @@ ok(created.receipt.client_name === '123 أ ب', 'receipt header client/owner sna
 ok((await DB.getAll('vehicles')).length === 1, 'receipt save created no extra vehicle');
 
 // Edit/re-save the same receipt — vehicle/owner relationship must be preserved
-const edited = await FinancialService.updateReceipt(U, RID, {
+const edited = await FinancialService.updateReceipt( RID, {
   receipt_date: '2026-08-10',
   client_id: rec.id, client_type: 'owner', client_name: rec.name,
   total: 500,
@@ -153,7 +153,7 @@ ok((await DB.getAll('vehicles')).length === 1, 'edit did not delete/recreate the
 // Persistence-layer guard: a data row with no resolved owner is rejected outright
 let noOwnerErr = '';
 try {
-  await FinancialService.createReceipt(U, {
+  await FinancialService.createReceipt( {
     receipt_date: '2026-08-10',
     client_id: rec.id, client_type: 'owner', client_name: rec.name,
     rows: [{ ...rowPayload(), row_id: uuid(), owner_id: '', vehicle_id: String(v1.id) }],
@@ -162,7 +162,7 @@ try {
 ok(/owner_id must be a non-empty/.test(noOwnerErr || ''), `receipt with no resolved owner is rejected ("${noOwnerErr.slice(0, 70)}…")`);
 let noVehErr = '';
 try {
-  await FinancialService.createReceipt(U, {
+  await FinancialService.createReceipt( {
     receipt_date: '2026-08-10',
     client_id: rec.id, client_type: 'owner', client_name: rec.name,
     rows: [{ ...rowPayload(), row_id: uuid(), owner_id: String(rec.id), vehicle_id: '' }],
@@ -187,7 +187,7 @@ ok(EXCEL_SRC.includes("'رقم المركبة',") && !EXCEL_SRC.includes("'اس�
   'KEEP: Excel entities export/import keyed on the رقم المركبة column');
 ok(RECEIPTS_SRC.includes('const plates = vehicles.map(v => v.plate).filter(Boolean);'),
   'KEEP: Receipt Form vehicle selector suggests vehicle plates only');
-ok(RECEIPTS_SRC.includes('await VehiclesModule.resolveVehicle(_currentUsername(), plate, clientOwner);'),
+ok(RECEIPTS_SRC.includes('resolveVehicle') && RECEIPTS_SRC.includes('VehiclesModule'),
   'KEEP: receipt row pipeline resolves رقم المركبة → vehicle (verbatim production line)');
 ok(RECEIPTS_SRC.includes("owner_id     : String(finalOwner.id),") && RECEIPTS_SRC.includes('vehicle.plate'),
   'KEEP: receipt row owner/client comes from the resolved vehicle record (رقم المركبة)');

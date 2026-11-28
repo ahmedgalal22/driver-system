@@ -31,15 +31,15 @@ const ok = (cond, label) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`)
 const uuid = () => crypto.randomUUID();
 
 // ═══ SEED via the REAL frozen write path ═══════════════════════════════════
-const officeA = await DB.add('offices', { name: 'شركة أ' }, { username: U });
-const officeB = await DB.add('offices', { name: 'شركة ب' }, { username: U });
+const officeA = await DB.add('offices', { name: 'شركة أ' });
+const officeB = await DB.add('offices', { name: 'شركة ب' });
 
 // Receipt creation resolves each row vehicle and posts its net deposit to
 // that authoritative vehicle (receipt_row_vehicle_balance), so every
 // fixture vehicle must be a registered vehicle record — identical seeding
 // to the proven write-path harness (tests/write-path/run.mjs).
 for (const [id, plate] of [['veh-1', '111 أ ب'], ['veh-2', '222 ج د'], ['veh-3', '333 هـ و'], ['veh-9', '999 ز ح']]) {
-  await DB.add('vehicles', { id, username: U, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' }, { username: U });
+  await DB.add('vehicles', { id, username: U, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' });
 }
 
 const row1 = () => ({ row_id: uuid(), _type: 'data', owner_id: 'owner-1', owner_name: 'مالك اختبار',
@@ -66,16 +66,16 @@ const hdr = (over = {}) => ({
   ...over,
 });
 
-const R1 = (await FinancialService.createReceipt(U, hdr({ rows: [row1(), row2()] }))).receipt.id;
+const R1 = (await FinancialService.createReceipt( hdr({ rows: [row1(), row2()] }))).receipt.id;
 // update 2→3 rows (same arithmetic family as the proven write-path harness)
-await FinancialService.updateReceipt(U, R1, hdr({
+await FinancialService.updateReceipt( R1, hdr({
   total: 1800,
   rows: [row1(), row2(), row3()],
 }));
-const R2 = (await FinancialService.createReceipt(U, hdr({
+const R2 = (await FinancialService.createReceipt( hdr({
   total: 100, rows: [rowX()],
 }))).receipt.id;
-await FinancialService.deleteReceipt(U, R2);
+await FinancialService.deleteReceipt( R2);
 
 // ─── GROUP 1: repository semantics over real normalized data ───────────────
 console.log('\n— GROUP 1: ReceiptReadRepository semantics (real modules, real data) —');
@@ -226,7 +226,7 @@ const headerR1 = await ReceiptRepository.getById(R1); // kept for GROUP 5
 const receiptCountBeforeUnknown = (await ReceiptRepository.getAll(U)).length;
 let threw = null;
 try {
-  await FinancialService.createReceipt(U, hdr({ total: 100,
+  await FinancialService.createReceipt( hdr({ total: 100,
     rows: [{ ...rowX(), office: 'شركة وهمية' }] }));
 } catch (e) { threw = e.message; }
 ok(/unknown office/.test(threw || '')

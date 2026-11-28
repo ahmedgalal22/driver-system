@@ -36,8 +36,8 @@ await DB.init();
 const OWNER_ID = uuid();
 const DRIVER = { id: uuid(), username: U, name: 'سائق اختبار', phone: null };
 const VEHICLE = { id: uuid(), username: U, plate: '123 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER, { username: U });
-await ClientRepository.saveVehicle(VEHICLE, { username: U });
+await ClientRepository.saveDriver(DRIVER);
+await ClientRepository.saveVehicle(VEHICLE);
 
 const vehicleBalanceCents = async () => Math.round((await FinancialService.rebuildVehicleBalance(VEHICLE.id)).balance * 100);
 const directRows = async () => (await DB.getAll('vehicle_ledger', {}, { includeDeleted: true }))
@@ -45,7 +45,7 @@ const directRows = async () => (await DB.getAll('vehicle_ledger', {}, { includeD
 
 console.log('\n— direct Deposit —');
 const beforeVehicle = await vehicleBalanceCents();
-const deposit = await FinancialService.createManualDriverBalanceEntry(U, {
+const deposit = await FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id,
   entry_type: 'deposit',
   amount: 123.45,
@@ -76,7 +76,7 @@ ok((await vehicleBalanceCents()) === beforeVehicle
   'direct Deposit changes neither Vehicle Balance nor Vehicle Ledger');
 
 console.log('\n— direct Withdrawal —');
-const withdrawal = await FinancialService.createManualDriverBalanceEntry(U, {
+const withdrawal = await FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id,
   entry_type: 'withdraw',
   amount: 200.25,
@@ -106,26 +106,26 @@ ok((await vehicleBalanceCents()) === beforeVehicle
 
 console.log('\n— input validation —');
 const countBeforeInvalid = (await directRows()).length;
-ok(await rejects(() => FinancialService.createManualDriverBalanceEntry(U, {
+ok(await rejects(() => FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id, entry_type: 'deposit', amount: 0, date: '2026-09-23', note: '',
 })), 'zero direct Driver amount is rejected');
-ok(await rejects(() => FinancialService.createManualDriverBalanceEntry(U, {
+ok(await rejects(() => FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id, entry_type: 'withdraw', amount: -1, date: '2026-09-23', note: '',
 })), 'negative direct Driver amount is rejected');
-ok(await rejects(() => FinancialService.createManualDriverBalanceEntry(U, {
+ok(await rejects(() => FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id, entry_type: 'deposit', amount: Infinity, date: '2026-09-23', note: '',
 })), 'non-finite direct Driver amount is rejected');
-ok(await rejects(() => FinancialService.createManualDriverBalanceEntry(U, {
+ok(await rejects(() => FinancialService.createManualDriverBalanceEntry( {
   driver_id: 'missing-driver', entry_type: 'deposit', amount: 1, date: '2026-09-23', note: '',
 })), 'invalid Driver ID is rejected before a ledger write');
-ok(await rejects(() => FinancialService.createManualDriverBalanceEntry(U, {
+ok(await rejects(() => FinancialService.createManualDriverBalanceEntry( {
   driver_id: DRIVER.id, entry_type: 'deposit', amount: 1, date: 'not-a-date', note: '',
 })), 'invalid direct Driver date is rejected');
 ok((await directRows()).length === countBeforeInvalid,
   'invalid direct Driver inputs create no ledger history');
 
 console.log('\n— audit-preserving edit and delete —');
-const replacement = await FinancialService.updateManualDriverBalanceEntry(U, deposit.reference_id, {
+const replacement = await FinancialService.updateManualDriverBalanceEntry( deposit.reference_id, {
   driver_id: DRIVER.id,
   entry_type: 'deposit',
   amount: 250.5,
@@ -135,7 +135,7 @@ const replacement = await FinancialService.updateManualDriverBalanceEntry(U, dep
 const depositHistory = await DB.getByIndex('vehicle_ledger', 'by_reference_id', deposit.reference_id);
 const afterEdit = await FinancialService.getDriverBalance(DRIVER.id);
 ok(depositHistory.length === 1 && depositHistory[0].is_reversed === true
-  && depositHistory[0].reversed_at && depositHistory[0].reversed_by === U,
+  && depositHistory[0].reversed_at && !('reversed_by' in depositHistory[0]),
   'editing reverses the prior direct Driver movement instead of deleting it');
 ok(replacement.reference_id !== deposit.reference_id
   && replacement.type === 'deposit'
@@ -147,15 +147,15 @@ ok(afterEdit.balance === 50.25 && afterEdit.deposit_total === 250.5 && afterEdit
 ok((await vehicleBalanceCents()) === beforeVehicle,
   'editing a direct Driver movement still has no Vehicle Balance effect');
 
-await FinancialService.deleteManualDriverBalanceEntry(U, withdrawal.reference_id);
+await FinancialService.deleteManualDriverBalanceEntry( withdrawal.reference_id);
 const withdrawalHistory = await DB.getByIndex('vehicle_ledger', 'by_reference_id', withdrawal.reference_id);
 ok(withdrawalHistory.length === 1 && withdrawalHistory[0].is_reversed === true
-  && withdrawalHistory[0].reversed_at && withdrawalHistory[0].reversed_by === U,
+  && withdrawalHistory[0].reversed_at && !('reversed_by' in withdrawalHistory[0]),
   'deleting a direct Withdrawal follows is_reversed audit history convention');
 ok((await FinancialService.getDriverBalance(DRIVER.id)).balance === 250.5,
   'reversing a direct Withdrawal removes only its negative Driver Balance effect');
 
-await FinancialService.deleteManualDriverBalanceEntry(U, replacement.reference_id);
+await FinancialService.deleteManualDriverBalanceEntry( replacement.reference_id);
 ok((await FinancialService.getDriverBalance(DRIVER.id)).balance === 0
   && (await FinancialService.getDriverLedger(DRIVER.id)).length === 0,
   'reversing the replacement Deposit returns the direct Driver balance projection to zero');
@@ -189,7 +189,7 @@ const kartaRow = {
   net: 10,
   sarf: 0,
 };
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-09-25',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -203,7 +203,7 @@ const kartaRowCreation = (await DB.getByIndex('vehicle_ledger', 'by_reference_id
 ok(kartaRowCreation.length === 1 && kartaRowCreation[0].type === 'deposit'
   && kartaRowCreation[0].amount === 1000 && vehicleAfterReceiptCents === vehicleBeforeKartaReceiptCents + 1000,
   'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for the Karta row');
-await FinancialService.createKartaSettlement(U, {
+await FinancialService.createKartaSettlement( {
   row_id: kartaRow.row_id,
   driver_id: DRIVER.id,
   vehicle_id: VEHICLE.id,
@@ -222,9 +222,9 @@ ok((await vehicleBalanceCents()) === vehicleAfterReceiptCents - 1000
   'existing Karta behavior remains separate from direct Driver Balance movements (vehicle delta exactly -10.00, driver direct balance untouched)');
 
 console.log('\n— UI and scope fingerprints —');
-ok(ENTITIES_SRC.includes('FinancialService.createManualDriverBalanceEntry(username, data)')
-  && ENTITIES_SRC.includes('FinancialService.updateManualDriverBalanceEntry(username, _editingDriverBalanceReferenceId, data)')
-  && ENTITIES_SRC.includes('FinancialService.deleteManualDriverBalanceEntry(username, refId)'),
+ok(ENTITIES_SRC.includes('FinancialService.createManualDriverBalanceEntry(data)')
+  && ENTITIES_SRC.includes('FinancialService.updateManualDriverBalanceEntry(_editingDriverBalanceReferenceId, data)')
+  && ENTITIES_SRC.includes('FinancialService.deleteManualDriverBalanceEntry(refId)'),
   'Driver Details delegates create, edit, and reversal to FinancialService');
 ok(INDEX_SRC.includes('>💰 إيداع</button>')
   && INDEX_SRC.includes('>💸 سحب</button>')

@@ -59,7 +59,7 @@ async function addLedger({
     ...(maintenance_type ? { maintenance_type } : {}),
     is_reversed: false,
     note,
-  }, { username: U });
+  });
 }
 
 console.log('\n— seed deterministic monthly Vehicle Ledger fixture —');
@@ -84,7 +84,7 @@ await DB.add('receipt_rows', {
   vehicle_id: VEHICLE_A,
   vehicle_plate: '111 أ ب',
   driver_settlement_price: 999999,
-}, { username: U });
+});
 
 // September outflows = 6,690 cents.
 await addLedger({ type: 'withdraw', amount: 4000, date: '2026-09-05', effect: 'karta_settlement_charge', reference_type: 'receipt_row', reference_id: KARTA_ROW_ID, note: 'تسوية كارتة' });
@@ -105,9 +105,9 @@ const invalidType = await addLedger({ type: 'deposit', amount: 555, date: 202609
 
 // Exclusions: reversed, deleted, other vehicle, driver-only, custom tracking leg.
 const reversed = await addLedger({ type: 'deposit', amount: 99999, date: '2026-09-10', reference_type: 'reversed' });
-await DB.update('vehicle_ledger', reversed.id, { is_reversed: true, reversed_at: '2026-09-11T10:00:00', reversed_by: U }, { username: U });
+await DB.update('vehicle_ledger', reversed.id, { is_reversed: true, reversed_at: '2026-09-11T10:00:00', reversed_by: U });
 const deleted = await addLedger({ type: 'withdraw', amount: 99999, date: '2026-09-10', reference_type: 'deleted' });
-await DB.delete('vehicle_ledger', deleted.id, { username: U });
+await DB.delete('vehicle_ledger', deleted.id);
 await addLedger({ vehicle_id: VEHICLE_B, type: 'deposit', amount: 88888, date: '2026-09-10', reference_type: 'other-vehicle' });
 await addLedger({ vehicle_id: NEGATIVE_VEHICLE, type: 'withdraw', amount: 500, date: '2026-09-10', reference_type: 'negative-balance' });
 await addLedger({ vehicle_id: null, type: 'deposit', amount: 77777, date: '2026-09-10', effect: 'manual_driver_balance', reference_type: 'manual_driver_balance' });

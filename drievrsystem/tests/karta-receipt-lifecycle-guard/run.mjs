@@ -22,8 +22,8 @@ await DB.init();
 const OWNER_ID = uuid();
 const DRIVER = { id: uuid(), username: U, name: 'سائق اختبار', phone: null };
 const VEHICLE = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER, { username: U });
-await ClientRepository.saveVehicle(VEHICLE, { username: U });
+await ClientRepository.saveDriver(DRIVER);
+await ClientRepository.saveVehicle(VEHICLE);
 
 const mkRow = ({ row_id = uuid(), price = 50, kartano = row_id }) => ({
   _type: 'data', row_id,
@@ -47,7 +47,7 @@ function payload(rows) {
 }
 
 async function createReceipt(rows) {
-  return FinancialService.createReceipt(U, payload(rows));
+  return FinancialService.createReceipt( payload(rows));
 }
 
 const all = async (store, filters = {}) => DB.findByFields(store, filters, { includeDeleted: true });
@@ -76,7 +76,7 @@ const activeCreation = async (rowId) => (await historyByRow(rowId))
   .filter(entry => isVehicleCreation(entry) && entry.is_reversed === false && entry.deleted_at === null);
 
 async function settleSingle(row) {
-  return FinancialService.createKartaSettlement(U, {
+  return FinancialService.createKartaSettlement( {
     row_id: row.row_id,
     driver_id: DRIVER.id,
     amount: 50,
@@ -89,14 +89,14 @@ console.log('\n— ordinary receipt lifecycle remains unchanged without Karta se
 const NO_SETTLE_UPDATE = mkRow({ kartano: 'NO-SETTLE-UPDATE' });
 const noSettleUpdateReceipt = await createReceipt([NO_SETTLE_UPDATE]);
 const replacement = mkRow({ kartano: 'NO-SETTLE-UPDATE-NEW' });
-await FinancialService.updateReceipt(U, noSettleUpdateReceipt.receipt.id, payload([replacement]));
+await FinancialService.updateReceipt( noSettleUpdateReceipt.receipt.id, payload([replacement]));
 ok((await DB.getById('receipt_rows', replacement.row_id))?.kartano === 'NO-SETTLE-UPDATE-NEW'
   && (await DB.getById('receipt_rows', NO_SETTLE_UPDATE.row_id)) === null,
   'receipt update with no active Karta settlement succeeds normally');
 
 const NO_SETTLE_DELETE = mkRow({ kartano: 'NO-SETTLE-DELETE' });
 const noSettleDeleteReceipt = await createReceipt([NO_SETTLE_DELETE]);
-await FinancialService.deleteReceipt(U, noSettleDeleteReceipt.receipt.id);
+await FinancialService.deleteReceipt( noSettleDeleteReceipt.receipt.id);
 ok((await DB.getById('receipts', noSettleDeleteReceipt.receipt.id)) === null
   && (await DB.getById('receipt_rows', NO_SETTLE_DELETE.row_id)) === null,
   'receipt delete with no active Karta settlement succeeds normally');
@@ -106,7 +106,7 @@ const SINGLE_UPDATE = mkRow({ kartano: 'SINGLE-UPDATE' });
 const singleUpdateReceipt = await createReceipt([SINGLE_UPDATE]);
 await settleSingle(SINGLE_UPDATE);
 const singleUpdateBefore = await snapshot(singleUpdateReceipt.receipt.id);
-ok(await rejects(() => FinancialService.updateReceipt(U, singleUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'SHOULD-NOT-EXIST' })]))),
+ok(await rejects(() => FinancialService.updateReceipt( singleUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'SHOULD-NOT-EXIST' })]))),
   'receipt update with active single Karta settlement is rejected');
 ok((await snapshot(singleUpdateReceipt.receipt.id)) === singleUpdateBefore
   && (await activeKarta(SINGLE_UPDATE.row_id)).length === 2,
@@ -116,7 +116,7 @@ const SINGLE_DELETE = mkRow({ kartano: 'SINGLE-DELETE' });
 const singleDeleteReceipt = await createReceipt([SINGLE_DELETE]);
 await settleSingle(SINGLE_DELETE);
 const singleDeleteBefore = await snapshot(singleDeleteReceipt.receipt.id);
-ok(await rejects(() => FinancialService.deleteReceipt(U, singleDeleteReceipt.receipt.id)),
+ok(await rejects(() => FinancialService.deleteReceipt( singleDeleteReceipt.receipt.id)),
   'receipt delete with active single Karta settlement is rejected');
 ok((await snapshot(singleDeleteReceipt.receipt.id)) === singleDeleteBefore
   && (await DB.getById('receipt_rows', SINGLE_DELETE.row_id))
@@ -126,9 +126,9 @@ ok((await snapshot(singleDeleteReceipt.receipt.id)) === singleDeleteBefore
 console.log('\n— active batch settlement blocks update and delete exactly the same way —');
 const BATCH_UPDATE = mkRow({ price: 100, kartano: 'BATCH-UPDATE' });
 const batchUpdateReceipt = await createReceipt([BATCH_UPDATE]);
-await FinancialService.createKartaSettlementBatch(U, DRIVER.id, [BATCH_UPDATE.row_id]);
+await FinancialService.createKartaSettlementBatch( DRIVER.id, [BATCH_UPDATE.row_id]);
 const batchUpdateBefore = await snapshot(batchUpdateReceipt.receipt.id);
-ok(await rejects(() => FinancialService.updateReceipt(U, batchUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'BATCH-UPDATE-NEW' })]))),
+ok(await rejects(() => FinancialService.updateReceipt( batchUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'BATCH-UPDATE-NEW' })]))),
   'receipt update with active batch Karta settlement is rejected');
 ok((await snapshot(batchUpdateReceipt.receipt.id)) === batchUpdateBefore
   && (await activeKarta(BATCH_UPDATE.row_id)).length === 2,
@@ -136,9 +136,9 @@ ok((await snapshot(batchUpdateReceipt.receipt.id)) === batchUpdateBefore
 
 const BATCH_DELETE = mkRow({ price: 100, kartano: 'BATCH-DELETE' });
 const batchDeleteReceipt = await createReceipt([BATCH_DELETE]);
-await FinancialService.createKartaSettlementBatch(U, DRIVER.id, [BATCH_DELETE.row_id]);
+await FinancialService.createKartaSettlementBatch( DRIVER.id, [BATCH_DELETE.row_id]);
 const batchDeleteBefore = await snapshot(batchDeleteReceipt.receipt.id);
-ok(await rejects(() => FinancialService.deleteReceipt(U, batchDeleteReceipt.receipt.id)),
+ok(await rejects(() => FinancialService.deleteReceipt( batchDeleteReceipt.receipt.id)),
   'receipt delete with active batch Karta settlement is rejected');
 ok((await snapshot(batchDeleteReceipt.receipt.id)) === batchDeleteBefore
   && (await DB.getById('receipt_rows', BATCH_DELETE.row_id))
@@ -151,7 +151,7 @@ const MULTI_SETTLED = mkRow({ kartano: 'MULTI-SETTLED' });
 const multiReceipt = await createReceipt([MULTI_UNSETTLED, MULTI_SETTLED]);
 await settleSingle(MULTI_SETTLED);
 const multiBefore = await snapshot(multiReceipt.receipt.id);
-ok(await rejects(() => FinancialService.updateReceipt(U, multiReceipt.receipt.id, payload([
+ok(await rejects(() => FinancialService.updateReceipt( multiReceipt.receipt.id, payload([
   mkRow({ kartano: 'MULTI-REPLACEMENT-A' }),
   mkRow({ kartano: 'MULTI-REPLACEMENT-B' }),
 ]))), 'one active settled row blocks replacement of the entire receipt atomically');
@@ -164,9 +164,9 @@ console.log('\n— explicit reversal restores ordinary receipt update/delete wor
 const REVERSE_UPDATE = mkRow({ kartano: 'REVERSE-UPDATE' });
 const reverseUpdateReceipt = await createReceipt([REVERSE_UPDATE]);
 await settleSingle(REVERSE_UPDATE);
-await FinancialService.reverseKartaSettlement(U, REVERSE_UPDATE.row_id);
+await FinancialService.reverseKartaSettlement( REVERSE_UPDATE.row_id);
 const REVERSE_UPDATE_NEW = mkRow({ kartano: 'REVERSE-UPDATE-NEW' });
-await FinancialService.updateReceipt(U, reverseUpdateReceipt.receipt.id, payload([REVERSE_UPDATE_NEW]));
+await FinancialService.updateReceipt( reverseUpdateReceipt.receipt.id, payload([REVERSE_UPDATE_NEW]));
 const reversedUpdateHistory = await historyByRow(REVERSE_UPDATE.row_id);
 const reversedUpdateKarta = reversedUpdateHistory.filter(isKartaLeg);
 const reversedUpdateCreation = reversedUpdateHistory.filter(isVehicleCreation);
@@ -183,8 +183,8 @@ ok(reversedUpdateHistory.length === 3
 const REVERSE_DELETE = mkRow({ kartano: 'REVERSE-DELETE' });
 const reverseDeleteReceipt = await createReceipt([REVERSE_DELETE]);
 await settleSingle(REVERSE_DELETE);
-await FinancialService.reverseKartaSettlement(U, REVERSE_DELETE.row_id);
-await FinancialService.deleteReceipt(U, reverseDeleteReceipt.receipt.id);
+await FinancialService.reverseKartaSettlement( REVERSE_DELETE.row_id);
+await FinancialService.deleteReceipt( reverseDeleteReceipt.receipt.id);
 const reversedDeleteHistory = await historyByRow(REVERSE_DELETE.row_id);
 const reversedDeleteKarta = reversedDeleteHistory.filter(isKartaLeg);
 const reversedDeleteCreation = reversedDeleteHistory.filter(isVehicleCreation);
@@ -203,9 +203,9 @@ await DB.add('vehicle_ledger', {
   type: 'driver_karta_payment', amount: -5000, price: 5000, vehicle_id: VEHICLE.id,
   reference_type: 'receipt_row', reference_id: PARTIAL_UPDATE.row_id,
   date: '2026-10-05', applied_at: '2026-10-05T10:00:00', is_reversed: false, note: 'حالة جزئية',
-}, { username: U });
+});
 const partialUpdateBefore = await snapshot(partialUpdateReceipt.receipt.id);
-ok(await rejects(() => FinancialService.updateReceipt(U, partialUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'PARTIAL-NEW' })]))),
+ok(await rejects(() => FinancialService.updateReceipt( partialUpdateReceipt.receipt.id, payload([mkRow({ kartano: 'PARTIAL-NEW' })]))),
   'partial active Karta state blocks receipt update');
 ok((await snapshot(partialUpdateReceipt.receipt.id)) === partialUpdateBefore,
   'partial-state update rejection changes no receipt or ledger record');
@@ -217,9 +217,9 @@ await DB.add('vehicle_ledger', {
   vehicle_id: VEHICLE.id, vehicle_plate: VEHICLE.plate, type: 'withdraw', effect: 'karta_settlement_charge', amount: 5000,
   reference_type: 'receipt_row', reference_id: PARTIAL_DELETE.row_id,
   date: '2026-10-05', applied_at: '2026-10-05T10:00:00', is_reversed: false, note: 'حالة جزئية',
-}, { username: U });
+});
 const partialDeleteBefore = await snapshot(partialDeleteReceipt.receipt.id);
-ok(await rejects(() => FinancialService.deleteReceipt(U, partialDeleteReceipt.receipt.id)),
+ok(await rejects(() => FinancialService.deleteReceipt( partialDeleteReceipt.receipt.id)),
   'partial active Karta state blocks receipt delete');
 ok((await snapshot(partialDeleteReceipt.receipt.id)) === partialDeleteBefore
   && (await DB.getById('receipt_rows', PARTIAL_DELETE.row_id)),

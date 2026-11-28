@@ -10,7 +10,7 @@ const { WriteDataSource } = await import('./services/writeDataSource.js');
 const { ReceiptRepository } = await import('./services/receiptRepository.js');
 const { PersistenceCommandType } = await import('./services/persistenceCommand.js');
 
-const U = 'admin';
+const U = 'tester';
 let failures = 0;
 const ok = (cond, label) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`); if (!cond) failures++; };
 const uuid = () => crypto.randomUUID();
@@ -19,10 +19,10 @@ const uuid = () => crypto.randomUUID();
 // charge is written, so all fixture companies must exist as active offices.
 await DB.init();
 for (const name of ['شركة أ', 'شركة ب', 'شركة ج']) {
-  await DB.add('offices', { id: uuid(), username: U, name, phone: null }, { username: U });
+  await DB.add('offices', { id: uuid(), name, phone: null });
 }
 for (const [id, plate] of [['veh-1', '111 أ ب'], ['veh-2', '222 ج د'], ['veh-3', '333 هـ و']]) {
-  await DB.add('vehicles', { id, username: U, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' }, { username: U });
+  await DB.add('vehicles', { id, plate, owner_id: 'owner-1', owner_name: 'مالك اختبار' });
 }
 
 function makePayload(over = {}) {
@@ -54,12 +54,12 @@ const ledgerOfRows = async rows => (await Promise.all(
 // ─── STEP 1: createReceipt ───────────────────────────────────────────────────
 console.log('\n— STEP 1: createReceipt (header + 2 rows + ledger) —');
 const p1 = makePayload();
-const createRes = await FinancialService.createReceipt(U, p1);
+const createRes = await FinancialService.createReceipt( p1);
 const rid = createRes.receipt.id;
 const header1 = await DB.getById('receipts', rid);
 const rows1 = await rowsOf(rid);
 const ledger1 = await ledgerOfRows(rows1);
-ok(!!header1 && header1.username === U, 'receipt header persisted with username');
+ok(!!header1 && !('username' in header1), 'receipt header has no username');
 ok(header1.total === 115000 && header1.net_due === undefined && header1.previous_balance === undefined && header1.paid === undefined && header1.payout_status === undefined
   && header1.account_type === undefined && header1.shipping_number === undefined && header1.company_info === undefined
   && header1.receipt_number === undefined,
@@ -71,12 +71,12 @@ ok(ledger1.length === 4
   && ledger1.filter(entry => entry.reference_type === 'receipt_row_vehicle_balance').length === 2,
   `createReceipt writes one company and one vehicle creation entry per row (got ${ledger1.length})`);
 
-const lz = await FinancialService.createReceipt(U, makePayload({
+const lz = await FinancialService.createReceipt( makePayload({
   total: 100,
   rows: [ { ...makePayload().rows[0], weight: 10, driver_price: 10, net: 100 } ],
 })).then(r => r.receipt.id);
 ok((await ledgerOfRows(await rowsOf(lz))).length === 2, 'second receipt emits its company and vehicle creation entries');
-const before = (await DB.getAll('receipts', { username: U })).length;
+const before = (await DB.getAll('receipts')).length;
 ok(before === 2, `2 receipts visible after two creates (got ${before})`);
 
 // ─── STEP 2: updateReceipt ───────────────────────────────────────────────────
@@ -90,7 +90,7 @@ const p1u = makePayload({
       driver_price: 10, advance: 0, loading: 'طنطا', destination: 'المنصورة',
       office: 'شركة ج', weight: 65, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 650, sarf: 0 } ],
 });
-const updRes = await FinancialService.updateReceipt(U, rid, p1u);
+const updRes = await FinancialService.updateReceipt( rid, p1u);
 const header2 = await DB.getById('receipts', rid);
 const rows2 = await rowsOf(rid);
 const rows2All = await rowsOf(rid, true);
@@ -110,13 +110,13 @@ ok(!!updRes.receipt && updRes.receipt.total === 1800, 'updateReceipt returns dec
 // ─── STEP 3: updateReceipt with minimal payload still succeeds ───────────────
 // rows with FRESH row_ids (production-realistic: the form mints new ids on every save — reusing ids would collide with the soft-deleted audit rows by design)
 const p1v = makePayload({ id: rid, total: 1800 });
-await FinancialService.updateReceipt(U, rid, p1v);
+await FinancialService.updateReceipt( rid, p1v);
 const header3 = await DB.getById('receipts', rid);
 ok(header3.payout_status === undefined && header3.paid === undefined, `REMOVED-CONTRACT (Paid phase): no payout/payment fields on updated header (payout_status=${header3.payout_status}, paid=${header3.paid})`);
 
 // ─── STEP 4: deleteReceipt ───────────────────────────────────────────────────
 console.log('\n— STEP 4: deleteReceipt (soft-delete rows + header) —');
-const delRes = await FinancialService.deleteReceipt(U, rid);
+const delRes = await FinancialService.deleteReceipt( rid);
 ok(delRes.deleted === true && delRes.reversed === undefined, `REMOVED-CONTRACT (Paid phase): deleteReceipt reverses nothing — no payment legs exist (return keys: ${Object.keys(delRes).join(',')})`);
 ok((await DB.getById('receipts', rid)) === null, 'deleted receipt no longer readable (getById → null)');
 ok((await rowsOf(rid)).length === 0, 'all rows of deleted receipt excluded from live reads');
@@ -124,72 +124,68 @@ ok((await rowsOf(rid, true)).length === 7, `deleted rows retained as soft-delete
 const deletedLedger = await ledgerOfRows(await rowsOf(rid, true));
 ok(deletedLedger.length > 0 && deletedLedger.every(entry => entry.is_reversed === true),
   'deleted receipt retains only reversed creation-side ledger audit entries');
-const remaining = await DB.getAll('receipts', { username: U });
+const remaining = await DB.getAll('receipts');
 ok(remaining.length === 1 && remaining[0].id === lz, 'second receipt unaffected');
 
 // ─── STEP 5: WriteDataSource guards ──────────────────────────────────────────
 console.log('\n— STEP 5: WriteDataSource command-validation guards —');
 let threw = null;
-try { await WriteDataSource.execute([{ type: 'Add', aggregate: 'Nope', id: 'x', payload: {} }], { username: U }); }
+try { await WriteDataSource.execute([{ type: 'Add', aggregate: 'Nope', id: 'x', payload: {} }]); }
 catch (e) { threw = e.message; }
 ok(/Unknown aggregate/.test(threw || ''), `unknown aggregate rejected: "${threw}"`);
 threw = null;
-try { await WriteDataSource.execute([{ type: 'Explode', aggregate: 'Receipt', id: 'x' }], { username: U }); }
+try { await WriteDataSource.execute([{ type: 'Explode', aggregate: 'Receipt', id: 'x' }]); }
 catch (e) { threw = e.message; }
 ok(/Unknown command type/.test(threw || ''), `unknown command type rejected: "${threw}"`);
-ok(JSON.stringify(await WriteDataSource.execute([], { username: U })) === '[]', 'empty command list → [] (no-op)');
-ok((await DB.getAll('receipts', { username: U })).length === 1, 'guards wrote nothing (store untouched)');
+ok(JSON.stringify(await WriteDataSource.execute([])) === '[]', 'empty command list → [] (no-op)');
+ok((await DB.getAll('receipts')).length === 1, 'guards wrote nothing (store untouched)');
 
 // ─── STEP 6: update on missing receipt fails atomically ──────────────────────
 threw = null;
-try { await FinancialService.updateReceipt(U, 'does-not-exist', makePayload({ rows: makePayload().rows })); }
+try { await FinancialService.updateReceipt( 'does-not-exist', makePayload({ rows: makePayload().rows })); }
 catch (e) { threw = e.message; }
 ok(!!threw, `update of missing receipt rejected atomically (${(threw || '').slice(0, 60)}…)`);
 
-// ─── STEP 7: one administrator can access and edit existing records ───────────
-console.log('\n— STEP 7: shared reads and updates preserve audit metadata —');
+// ─── STEP 7: admin-only access — business records have no username ownership ───
+console.log('\n— STEP 7: admin-only access — business records have no ownership metadata —');
 const { ClientRepository } = await import('./services/clientRepository.js');
 const { OfficeRepository } = await import('./services/officeRepository.js');
 const { DashboardRepository } = await import('./services/dashboardRepository.js');
-const auditOrigin = 'audit-origin';
 const admin = 'admin';
-const auditDriver = await ClientRepository.saveDriver({ id: uuid(), username: auditOrigin, name: 'Audit driver' }, { username: auditOrigin });
-const auditOffice = await DB.add('offices', { id: uuid(), username: auditOrigin, name: 'Audit office' }, { username: auditOrigin });
-const auditTreasury = await DB.add('mainCapitalTreasury', { id: uuid(), username: auditOrigin, type: 'deposit', amount: 100 }, { username: auditOrigin });
-const auditPayload = makePayload({ rows: [{ ...makePayload().rows[0], row_id: uuid() }] });
-const auditReceipt = (await FinancialService.createReceipt(auditOrigin, auditPayload)).receipt;
-ok((await ClientRepository.getDrivers(admin)).some(d => d.id === auditDriver.id)
-  && (await OfficeRepository.getAll(admin)).some(o => o.id === auditOffice.id)
-  && (await ReceiptRepository.getAll(admin)).some(r => r.id === auditReceipt.id)
-  && (await DashboardRepository.getCapitalTransactions(admin)).some(t => t.id === auditTreasury.id),
-  'driver, office, receipt and treasury reads include active records regardless of audit username');
-const receiptReadInTx = await DB.transaction(tx => ReceiptRepository.getAll(admin, { tx }), { username: admin, stores: ['receipts'] });
-ok(receiptReadInTx.some(r => r.id === auditReceipt.id), 'transactional receipt read ignores audit username');
-const unique = await ClientRepository.createDriverUnique(admin, 'Audit driver');
-ok(unique.id === auditDriver.id, 'driver quick-add avoids duplicates across audit metadata values');
-const oldReceipt = await DB.getById('receipts', auditReceipt.id);
-const oldDriver = await DB.getById('drivers', auditDriver.id);
-await ClientRepository.updateDriver(auditDriver.id, { phone: '123', username: admin }, { username: admin });
-const updatedDriver = await DB.getById('drivers', auditDriver.id);
-ok(updatedDriver.username === auditOrigin && updatedDriver.created_by === oldDriver.created_by
-  && updatedDriver.updated_by === admin && updatedDriver.phone === '123',
-  'standalone update preserves original username and creator while recording the acting admin');
-await DB.transaction(tx => tx.update('offices', auditOffice.id, { phone: '456', username: admin }),
-  { username: admin, stores: ['offices'] });
-const updatedOffice = await DB.getById('offices', auditOffice.id);
-ok(updatedOffice.username === auditOrigin && updatedOffice.created_by === auditOrigin && updatedOffice.updated_by === admin,
-  'callback transaction update preserves historical username and creator');
-await DB.transaction([{ op: 'update', store: 'mainCapitalTreasury', id: auditTreasury.id, patch: { note: 'edited', username: admin } }], { username: admin });
-const updatedTreasury = await DB.getById('mainCapitalTreasury', auditTreasury.id);
-ok(updatedTreasury.username === auditOrigin && updatedTreasury.created_by === auditOrigin && updatedTreasury.updated_by === admin,
-  'batch transaction update preserves historical username and creator');
-await FinancialService.updateReceipt(admin, auditReceipt.id, auditPayload);
-const updatedReceipt = await DB.getById('receipts', auditReceipt.id);
-ok(updatedReceipt.username === auditOrigin && updatedReceipt.created_by === oldReceipt.created_by && updatedReceipt.updated_by === admin,
-  'financial receipt edit retains its original username and creator with admin audit metadata');
-await DashboardRepository.deleteTransaction(auditTreasury.id, { username: admin });
-ok(!(await DashboardRepository.getCapitalTransactions(admin)).some(t => t.id === auditTreasury.id),
-  'admin can delete a treasury transaction regardless of audit username through the existing soft-delete path');
+const driverRec = await ClientRepository.saveDriver({ id: uuid(), name: 'Shared driver' });
+const officeRec = await DB.add('offices', { id: uuid(), name: 'Shared office', phone: null });
+const treasuryRec = await DB.add('mainCapitalTreasury', { id: uuid(), type: 'deposit', amount: 100, date: '2026-01-01', note: null, is_reversed: false, reversed_at: null, deleted_at: null });
+const sharedPayload = makePayload({ rows: [{ ...makePayload().rows[0], row_id: uuid() }] });
+const sharedReceipt = (await FinancialService.createReceipt(sharedPayload)).receipt;
+ok(!('username' in driverRec) && !('username' in officeRec) && !('username' in treasuryRec) && !('username' in sharedReceipt),
+  'driver, office, receipt and treasury records have no username ownership');
+ok((await ClientRepository.getDrivers()).some(d => d.id === driverRec.id)
+  && (await OfficeRepository.getAll()).some(o => o.id === officeRec.id)
+  && (await ReceiptRepository.getAll()).some(r => r.id === sharedReceipt.id)
+  && (await DashboardRepository.getCapitalTransactions()).some(t => t.id === treasuryRec.id),
+  'all records readable without username filter');
+const unique = await ClientRepository.createDriverUnique('Shared driver');
+ok(unique.id === driverRec.id, 'driver quick-add deduplicates correctly');
+const oldDriver = await DB.getById('drivers', driverRec.id);
+await ClientRepository.updateDriver(driverRec.id, { phone: '123' });
+const updatedDriver = await DB.getById('drivers', driverRec.id);
+ok(!('username' in updatedDriver) && updatedDriver.phone === '123',
+  'standalone update has no username');
+await DB.transaction(async tx => { await tx.update('offices', officeRec.id, { phone: '456' }); }, { stores: ['offices'] });
+const updatedOffice = await DB.getById('offices', officeRec.id);
+ok(!('username' in updatedOffice) && updatedOffice.phone === '456',
+  'callback transaction update has no username');
+await DB.transaction([{ op: 'update', store: 'mainCapitalTreasury', id: treasuryRec.id, patch: { note: 'edited' } }]);
+const updatedTreasury = await DB.getById('mainCapitalTreasury', treasuryRec.id);
+ok(!('username' in updatedTreasury),
+  'batch transaction update has no username');
+await FinancialService.updateReceipt(sharedReceipt.id, sharedPayload);
+const updatedReceipt = await DB.getById('receipts', sharedReceipt.id);
+ok(!('username' in updatedReceipt),
+  'financial receipt edit has no username');
+await DashboardRepository.deleteTransaction(treasuryRec.id);
+ok(!(await DashboardRepository.getCapitalTransactions()).some(t => t.id === treasuryRec.id),
+  'admin can delete a treasury transaction');
 
 console.log(`\n${failures === 0 ? '✅ ALL WRITE-PATH ASSERTIONS PASSED' : '❌ FAILURES: ' + failures}`);
 process.exit(failures === 0 ? 0 : 1);

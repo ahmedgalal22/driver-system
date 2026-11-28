@@ -1037,7 +1037,7 @@ function _printCapitalTreasury() {
 
   rows.forEach(tr => {
     const cells = tr.querySelectorAll('td');
-    if (cells.length < 5) return;
+    if (cells.length < 4) return;
     const date = (cells[0]?.textContent || '').trim();
     const type = (cells[1]?.textContent || '').trim();
     const amountText = (cells[2]?.textContent || '').trim();

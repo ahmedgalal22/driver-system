@@ -34,10 +34,10 @@ const OFFICE_B = { id: uuid(), username: U, name: 'شركة ب', phone: null };
 const V1 = { id: uuid(), username: U, plate: '123 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const V2 = { id: uuid(), username: U, plate: '456 ت ج', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 
-await DB.add('offices', OFFICE_A, { username: U });
-await DB.add('offices', OFFICE_B, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await DB.add('offices', OFFICE_A);
+await DB.add('offices', OFFICE_B);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const mkRow = (over = {}) => ({
   _type: 'data',
@@ -69,7 +69,7 @@ const r3 = mkRow({
   sarf: 5,
 });
 
-const receipt = await FinancialService.createReceipt(U, {
+const receipt = await FinancialService.createReceipt( {
   receipt_date: '2026-08-10',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -94,7 +94,7 @@ ok((await FinancialService.getVehicleLedger(V1.id)).length === 2
   'unpaid rows produce company creation charges and vehicle creation movements');
 
 console.log('\n— first paid row —');
-await FinancialService.setReceiptRowPaymentStatus(U, r1.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( r1.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await vehicleBalanceCents(V2.id)) === 2000,
   'unpaid → paid leaves creation-side vehicle balances unchanged');
 ok((await officeBalanceCents(OFFICE_A.id)) === -1800 && (await officeBalanceCents(OFFICE_B.id)) === -2500,
@@ -112,7 +112,7 @@ ok(firstOffice.entries.length === 3
   'company projection exposes both receipt-created charges and the independent paid-row net+sarf leg');
 
 console.log('\n— multiple independent paid rows —');
-await FinancialService.setReceiptRowPaymentStatus(U, r2.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( r2.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await officeBalanceCents(OFFICE_A.id)) === 0,
   'multiple paid rows leave their creation-side vehicle balances unchanged while offsetting company charges');
 const officeAAfterTwo = await FinancialService.getOfficeBalance(OFFICE_A.id);
@@ -123,22 +123,22 @@ ok(officeAAfterTwo.entries.length === 4
   && chargeRefsA.join(',') === [r1.row_id, r2.row_id].sort().join(','),
   'identical receipt rows retain independent company-charge UUID traceability');
 
-await FinancialService.setReceiptRowPaymentStatus(U, r3.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( r3.row_id, 'paid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await vehicleBalanceCents(V2.id)) === 2000,
   'different vehicles remain isolated (V1=22.00; V2=20.00)');
 ok((await officeBalanceCents(OFFICE_A.id)) === 0 && (await officeBalanceCents(OFFICE_B.id)) === 0,
   'different companies remain isolated while each paid-row deposit offsets only its own charge');
 
 console.log('\n— reversals —');
-await FinancialService.setReceiptRowPaymentStatus(U, r2.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( r2.row_id, 'unpaid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await officeBalanceCents(OFFICE_A.id)) === -1800,
   'paid → unpaid removes only that row company payment while vehicle creation balances remain active');
 ok((await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.length === 3
   && (await FinancialService.getOfficeBalance(OFFICE_A.id)).entries.filter(entry => entry.reference_type === 'receipt_row_company_charge').length === 2,
   'reversed payment entry no longer contributes while independent company charges remain in the projection');
 
-await FinancialService.setReceiptRowPaymentStatus(U, r1.row_id, 'unpaid');
-await FinancialService.setReceiptRowPaymentStatus(U, r3.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( r1.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( r3.row_id, 'unpaid');
 ok((await vehicleBalanceCents(V1.id)) === 2200 && (await vehicleBalanceCents(V2.id)) === 2000,
   'reversing all paid rows leaves creation-side vehicle effects active');
 ok((await officeBalanceCents(OFFICE_A.id)) === -3600 && (await officeBalanceCents(OFFICE_B.id)) === -2500,

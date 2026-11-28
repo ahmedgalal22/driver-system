@@ -139,7 +139,7 @@ ok(DRIVER_PAGE.includes('data-action="open-driver-balance-entry"')
   && DRIVER_PAGE.includes('data-action="karta-status-filter"')
   && DRIVER_PAGE.includes('data-action="settle-unsettled-kartas"'),
   'manual balance actions and Karta filtering/settlement hooks remain intact');
-ok(ENTITIES.includes('FinancialService.createManualDriverBalanceEntry(username, data)')
+ok(ENTITIES.includes('FinancialService.createManualDriverBalanceEntry(data)')
   && ENTITIES.includes('FinancialService.createKartaSettlementBatch('),
   'existing Driver Details financial action paths remain connected without new accounting logic');
 

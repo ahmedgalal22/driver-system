@@ -45,10 +45,10 @@ ok(DB_SRC.includes('const DB_VERSION = 17;') && !!DB.STORES.mainCapitalTreasury,
   'v17 retains the Dashboard-only mainCapitalTreasury store');
 ok(DB.STORES.mainCapitalTreasury.keyPath === 'id'
    && DB.STORES.mainCapitalTreasury.autoIncrement === false
-   && DB.STORES.mainCapitalTreasury.indexes.some(i => i.name === 'by_username')
+   && !DB.STORES.mainCapitalTreasury.indexes.some(i => i.name === 'by_username')
    && DB.STORES.mainCapitalTreasury.indexes.some(i => i.name === 'by_type')
    && DB.STORES.mainCapitalTreasury.indexes.some(i => i.name === 'by_deleted'),
-  'mainCapitalTreasury keeps the historical UUID key and username/type/deleted indexes');
+  'mainCapitalTreasury keeps the historical UUID key and type/deleted indexes (no username for single-admin)');
 ok(!/name\s*:\s*'treasury'/.test(DB_SRC)
    && !existsSync('./treasury.js')
    && !existsSync('./services/treasuryRepository.js')
@@ -77,16 +77,17 @@ const addCapital = materialize(sourceAddCapital, '_addCapitalTransaction', {
   window: { dispatchEvent: event => emitted.push(event.type) },
 });
 
-await addCapital(U, CAPITAL_ENTRY_TYPE.DEPOSIT, 250.75, 'رأس مال افتتاحي', '2026-08-01');
-await addCapital(U, CAPITAL_ENTRY_TYPE.WITHDRAW, 50.25, 'سحب تشغيلي', '2026-08-02');
-await addCapital(AUDIT_ORIGIN, CAPITAL_ENTRY_TYPE.DEPOSIT, 999, 'قيد اختبار', '2026-08-03');
+await addCapital(CAPITAL_ENTRY_TYPE.DEPOSIT, 250.75, 'رأس مال افتتاحي', '2026-08-01');
+await addCapital(CAPITAL_ENTRY_TYPE.WITHDRAW, 50.25, 'سحب تشغيلي', '2026-08-02');
+await addCapital(CAPITAL_ENTRY_TYPE.DEPOSIT, 999, 'قيد اختبار', '2026-08-03');
 
-const ownLive = await DashboardRepository.getCapitalTransactions(U);
+const ownLive = await DashboardRepository.getCapitalTransactions();
 const deposit = ownLive.find(entry => entry.note === 'رأس مال افتتاحي');
 const withdrawal = ownLive.find(entry => entry.note === 'سحب تشغيلي');
-ok(ownLive.length === 3 && ownLive.some(entry => entry.username === AUDIT_ORIGIN)
-   && (await DashboardRepository.getCapitalTransactions(AUDIT_ORIGIN)).length === 3,
-  'getCapitalTransactions includes active entries regardless of audit username');
+ok(ownLive.length === 3
+   && (await DashboardRepository.getCapitalTransactions()).length === 3
+   && !('username' in (ownLive[0] || {})),
+  'getCapitalTransactions includes active entries without username ownership (single-admin)');
 ok(deposit?.type === 'deposit' && deposit.amount === 25075
    && withdrawal?.type === 'withdraw' && withdrawal.amount === 5025,
   'Capital deposit and withdrawal use the real dashboard source function and persist cent amounts');
@@ -110,10 +111,10 @@ const renderCapital = materialize(sourceRenderCapital, '_renderCapitalTreasury',
   Money,
   STATE,
   CAPITAL_ENTRY_TYPE,
-  _getCapitalTransactions: username => DashboardRepository.getCapitalTransactions(username),
+  _getCapitalTransactions: () => DashboardRepository.getCapitalTransactions(),
   _esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
 });
-await renderCapital(U);
+await renderCapital();
 ok(balanceEl.textContent.includes('1,199.50') || balanceEl.textContent.includes('1199.50'),
   'Capital balance is all active deposits minus all active withdrawals');
 ok(tableBody.innerHTML.includes('سحب تشغيلي') && !tableBody.innerHTML.includes('رأس مال افتتاحي'),
@@ -122,16 +123,16 @@ ok(DASHBOARD_SRC.includes("filtered.sort((a, b) => {") && DASHBOARD_SRC.includes
   'Capital transaction history remains newest-first by created_at');
 
 console.log('\n— soft deletion —');
-await DashboardRepository.deleteTransaction(deposit.id, { username: U });
-const liveAfterDelete = await DashboardRepository.getCapitalTransactions(U);
+await DashboardRepository.deleteTransaction(deposit.id);
+const liveAfterDelete = await DashboardRepository.getCapitalTransactions();
 const includingDeleted = await DB.findByFields('mainCapitalTreasury', { id: deposit.id }, { includeDeleted: true });
 ok(liveAfterDelete.length === 2 && liveAfterDelete.some(entry => entry.id === withdrawal.id)
-   && liveAfterDelete.some(entry => entry.username === AUDIT_ORIGIN),
+   && liveAfterDelete.length === 2,
   'deleted Capital transaction is excluded while other entries remain visible');
 ok(includingDeleted.length === 1 && includingDeleted[0].deleted_at !== null,
   'Capital delete uses the existing soft-delete behavior');
 STATE.capitalSearchQuery = '';
-await renderCapital(U);
+await renderCapital();
 ok(balanceEl.textContent.includes('948.75') && tableBody.innerHTML.includes('سحب تشغيلي'),
   'soft-deleted deposit no longer contributes to Capital balance or table');
 
@@ -144,7 +145,6 @@ const printableRows = [{
       { textContent: 'إيداع' },
       { textContent: '+250.75' },
       { textContent: 'رأس مال افتتاحي' },
-      { textContent: U },
     ];
   },
 }, {
@@ -155,7 +155,6 @@ const printableRows = [{
       { textContent: 'سحب' },
       { textContent: '-50.25' },
       { textContent: 'سحب تشغيلي' },
-      { textContent: U },
     ];
   },
 }];
@@ -201,7 +200,6 @@ const attachBindings = {
   _saveCapitalTransactionFromModal: async () => {},
   confirm: () => false,
   _deleteCapitalTransaction: async () => {},
-  _currentUsername: () => U,
   _printCapitalTreasury: () => {},
   _renderCapitalTreasury: async () => {},
 };

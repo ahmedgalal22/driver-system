@@ -177,15 +177,15 @@ for (const sourceRecord of FIXTURE_RECORDS) {
   const isDeleted = payload.deleted_at !== null;
   payload.is_reversed = false;
   payload.deleted_at = null;
-  const saved = await DB.add('vehicle_ledger', payload, { username: U });
+  const saved = await DB.add('vehicle_ledger', payload);
   if (isReversed) {
     await DB.update('vehicle_ledger', saved.id, {
       is_reversed: true,
       reversed_at: '2026-06-01T10:00:00',
       reversed_by: U,
-    }, { username: U });
+    });
   }
-  if (isDeleted) await DB.delete('vehicle_ledger', saved.id, { username: U });
+  if (isDeleted) await DB.delete('vehicle_ledger', saved.id);
 }
 
 const beforeDatabaseDiagnostic = await DB.findByFields('vehicle_ledger', {}, { includeDeleted: true });

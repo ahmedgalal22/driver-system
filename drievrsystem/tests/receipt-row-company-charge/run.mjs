@@ -23,10 +23,10 @@ const OFFICE_A = { id: uuid(), username: U, name: 'شركة أ', phone: null };
 const OFFICE_B = { id: uuid(), username: U, name: 'شركة ب', phone: null };
 const V1 = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const V2 = { id: uuid(), username: U, plate: '222 ج د', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await DB.add('offices', OFFICE_A, { username: U });
-await DB.add('offices', OFFICE_B, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await DB.add('offices', OFFICE_A);
+await DB.add('offices', OFFICE_B);
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 const mkRow = (over = {}) => ({
   _type: 'data',
@@ -64,7 +64,7 @@ const chargesFor = async (rowId, activeOnly = true) =>
 
 console.log('\n— one row / creation charge —');
 const row1 = mkRow({ kartano: 'A-1', weight: 120, net: 100, sarf: 20 });
-const receipt1 = await FinancialService.createReceipt(U, mkReceipt([row1]));
+const receipt1 = await FinancialService.createReceipt( mkReceipt([row1]));
 ok(!!receipt1.receipt?.id, 'receipt persists through the real receipt creation path');
 const row1Charge = (await chargesFor(row1.row_id))[0];
 ok(!!row1Charge
@@ -83,12 +83,12 @@ ok((await vehicleBalanceCents(V1.id)) === 10000,
   'receipt creation adds the row net to vehicle balance independently of the company charge');
 
 console.log('\n— payment-status independence —');
-await FinancialService.setReceiptRowPaymentStatus(U, row1.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( row1.row_id, 'paid');
 ok((await chargesFor(row1.row_id)).length === 1 && (await chargesFor(row1.row_id))[0].id === row1Charge.id,
   'unpaid → paid does not create a second receipt-row company charge');
 ok((await officeBalanceCents(OFFICE_A.id)) === 0,
   'existing payment-status company deposit offsets the independent receipt-created withdrawal while paid');
-await FinancialService.setReceiptRowPaymentStatus(U, row1.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( row1.row_id, 'unpaid');
 ok((await chargesFor(row1.row_id)).length === 1 && (await chargesFor(row1.row_id))[0].is_reversed === false,
   'paid → unpaid does not reverse the independent receipt-row company charge');
 ok((await officeBalanceCents(OFFICE_A.id)) === -12000,
@@ -97,7 +97,7 @@ ok((await officeBalanceCents(OFFICE_A.id)) === -12000,
 console.log('\n— multiple rows and companies —');
 const row2 = mkRow({ kartano: 'A-2', weight: 90, net: 80, sarf: 10 });
 const row3 = mkRow({ kartano: 'B-1', vehicle_id: V2.id, vehicle_plate: V2.plate, office: OFFICE_B.name, weight: 55, net: 50, sarf: 5 });
-await FinancialService.createReceipt(U, mkReceipt([row2, row3]));
+await FinancialService.createReceipt( mkReceipt([row2, row3]));
 ok((await chargesFor(row2.row_id)).length === 1 && (await chargesFor(row3.row_id)).length === 1,
   'multiple receipt rows create one independently traceable company charge per row UUID');
 ok((await officeBalanceCents(OFFICE_A.id)) === -21000 && (await officeBalanceCents(OFFICE_B.id)) === -5500,
@@ -107,24 +107,24 @@ ok((await vehicleBalanceCents(V1.id)) === 18000 && (await vehicleBalanceCents(V2
 
 console.log('\n— no company / unresolvable company safety —');
 const noCompanyRow = mkRow({ kartano: 'NONE', office: null, weight: 44, net: 40, sarf: 4 });
-await FinancialService.createReceipt(U, mkReceipt([noCompanyRow]));
+await FinancialService.createReceipt( mkReceipt([noCompanyRow]));
 ok((await chargesFor(noCompanyRow.row_id)).length === 0,
   'rows without a company create no company ledger entry');
-const receiptsBeforeUnknown = (await DB.getAll('receipts', { username: U })).length;
+const receiptsBeforeUnknown = (await DB.getAll('receipts')).length;
 let unknownError = '';
 try {
-  await FinancialService.createReceipt(U, mkReceipt([mkRow({ office: 'شركة غير مسجلة', weight: 11, net: 10, sarf: 1 })]));
+  await FinancialService.createReceipt( mkReceipt([mkRow({ office: 'شركة غير مسجلة', weight: 11, net: 10, sarf: 1 })]));
 } catch (error) { unknownError = error.message; }
-ok(/unknown office/.test(unknownError) && (await DB.getAll('receipts', { username: U })).length === receiptsBeforeUnknown,
+ok(/unknown office/.test(unknownError) && (await DB.getAll('receipts')).length === receiptsBeforeUnknown,
   'unresolvable company fails before the atomic receipt write and never fabricates an office');
 
 console.log('\n— edit lifecycle —');
 const lifecycleOld = mkRow({ kartano: 'EDIT-OLD', office: OFFICE_A.name, weight: 32, net: 30, sarf: 2 });
-const lifecycleReceipt = await FinancialService.createReceipt(U, mkReceipt([lifecycleOld]));
+const lifecycleReceipt = await FinancialService.createReceipt( mkReceipt([lifecycleOld]));
 const lifecycleId = lifecycleReceipt.receipt.id;
 const oldCharge = (await chargesFor(lifecycleOld.row_id))[0];
 const lifecycleNew = mkRow({ kartano: 'EDIT-NEW', office: OFFICE_B.name, weight: 13, net: 10, sarf: 3 });
-await FinancialService.updateReceipt(U, lifecycleId, mkReceipt([lifecycleNew]));
+await FinancialService.updateReceipt( lifecycleId, mkReceipt([lifecycleNew]));
 const oldAudit = await chargesFor(lifecycleOld.row_id, false);
 const newCharge = (await chargesFor(lifecycleNew.row_id))[0];
 ok(oldAudit.length === 1 && oldAudit[0].is_reversed === true
@@ -134,7 +134,7 @@ ok((await chargesFor(lifecycleNew.row_id)).length === 1,
   'receipt edit creates no duplicate active company charge for the new row');
 
 console.log('\n— delete lifecycle and manual-office independence —');
-const manual = await FinancialService.createManualOfficeBalanceEntry(U, {
+const manual = await FinancialService.createManualOfficeBalanceEntry( {
   office_id: OFFICE_A.id,
   entry_type: 'deposit',
   amount: 20,
@@ -142,7 +142,7 @@ const manual = await FinancialService.createManualOfficeBalanceEntry(U, {
   note: 'حركة يدوية مستقلة',
 });
 const beforeDeleteManualBalance = await officeBalanceCents(OFFICE_A.id);
-await FinancialService.deleteReceipt(U, lifecycleId);
+await FinancialService.deleteReceipt( lifecycleId);
 ok((await chargesFor(lifecycleNew.row_id)).length === 0
   && (await chargesFor(lifecycleNew.row_id, false)).every(entry => entry.is_reversed === true),
   'receipt deletion reverses its active company charge while preserving audit history');

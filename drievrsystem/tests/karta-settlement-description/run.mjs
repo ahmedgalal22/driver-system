@@ -35,8 +35,8 @@ await DB.init();
 const OWNER_ID = uuid();
 const DRIVER = { id: uuid(), username: U, name: 'أحمد محمد', phone: null };
 const VEHICLE = { id: uuid(), username: U, plate: '123 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER, { username: U });
-await ClientRepository.saveVehicle(VEHICLE, { username: U });
+await ClientRepository.saveDriver(DRIVER);
+await ClientRepository.saveVehicle(VEHICLE);
 
 const kartaRow = {
   _type: 'data',
@@ -56,7 +56,7 @@ const kartaRow = {
   net: 10,
   sarf: 0,
 };
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-08-10',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -74,7 +74,7 @@ ok(creationBeforeSettle.length === 1 && creationBeforeSettle[0].type === 'deposi
 ok(before.balance === 10 && before.deposit_total === 10 && before.withdraw_total === 0,
   'vehicle balance before Karta Settlement is exactly the receipt-creation net deposit (+10.00)');
 
-const createdSettlement = await FinancialService.createKartaSettlement(U, {
+const createdSettlement = await FinancialService.createKartaSettlement( {
   row_id: kartaRow.row_id,
   driver_id: DRIVER.id,
   vehicle_id: VEHICLE.id,
@@ -118,12 +118,12 @@ ok(afterCreate.balance === before.balance - 50
   && afterCreate.deposit_total === before.deposit_total,
   'vehicle balance behavior remains unchanged: Karta Settlement charges exactly 50.00 as a withdrawal (delta from the creation baseline)');
 
-await FinancialService.reverseKartaSettlement(U, kartaRow.row_id);
+await FinancialService.reverseKartaSettlement( kartaRow.row_id);
 const reversed = await DB.getByIndex('vehicle_ledger', 'by_reference_id', kartaRow.row_id);
 const reversedKarta = reversed.filter(isKartaLeg);
 const creationAfterReverse = reversed.filter(isVehicleCreation);
 ok(reversedKarta.length === 2 && reversedKarta.every(entry => entry.is_reversed === true
-  && entry.reversed_at && entry.reversed_by === U),
+  && entry.reversed_at && !('reversed_by' in entry)),
   'Karta Settlement reversal still flags both original Karta entries as reversed exactly once');
 ok(creationAfterReverse.length === 1 && creationAfterReverse[0].is_reversed === false
   && reversed.length === 3,

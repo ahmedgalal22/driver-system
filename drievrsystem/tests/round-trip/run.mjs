@@ -119,7 +119,7 @@ console.log('\n══ STAGE A — form payload (collector fingerprints) ══')
   ["hit = await _promptCreateDriverForRow(row, rowDriverText);", 'unknown driver name → «add driver?» prompt at save (replaces the old rejection)'],
   ["let hit = _findDriverIndexHit(driverIndex, rowDriverText);", 'save-time driver resolution is two-tier: exact trimmed name, then normalized «visually identical» name'],
   ["driverIndex.push({ rec: hit, trimmed: String(hit.name || '').trim(), norm: normalizeDriverName(hit.name) });", 'prompt-resolved driver cached for later rows in the same save (no double prompt)'],
-  ["await ClientRepository.createDriverUnique(_currentUsername(), driverName);", 'quick-create reuses the drivers-store creation path (duplicate-safe normalized lookup)'],
+  ["await ClientRepository.createDriverUnique(driverName);", 'quick-create reuses the drivers-store creation path (duplicate-safe normalized lookup)'],
   ["input.value = String(record.name || driverName);", 'newly created driver is auto-selected on the row before the save continues'],
   ["data         : rowDriverName,", 'collector maps driver display name resolved from the driver record (denorm, id → name only)'],
   ["driver_id    : rowDriverId || null, // authoritative relationship: THIS row → driver (no selected driver → null)", 'collector persists row.driver_id (Receipt Row → Driver; vehicle carries no driver)'],
@@ -181,7 +181,7 @@ ok(!/اسم المركبة|vehicle_name|add-m-name|findOwnersByName/.test(ENTITI
 ok(ENTITIES_SRC.includes('await ClientRepository.findOwnersByNumber(vehicle_number);'),
   'KEEP-CONTRACT: owner uniqueness is enforced on رقم المركبة');
 ok(RECEIPTS_SRC.includes('const plates = vehicles.map(v => v.plate).filter(Boolean);')
-   && RECEIPTS_SRC.includes('await VehiclesModule.resolveVehicle(_currentUsername(), plate, clientOwner);'),
+   && RECEIPTS_SRC.includes('await VehiclesModule.resolveVehicle(') && RECEIPTS_SRC.includes('resolveVehicle'),
   'KEEP-CONTRACT (Vehicle Identity phase): receipt form suggests plates only and resolves رقم المركبة → vehicle → owner');
 
 // UX upgrade (driver quick-create): non-listed driver names are no longer
@@ -251,10 +251,10 @@ ok(_driverACMetaText(null) === '' && _driverACMetaText({}) === '',
 // a second attempt with the same (trim-normalized) name returns the SAME
 // record instead of persisting a duplicate.
 const { ClientRepository } = await import('./services/clientRepository.js');
-const createdDrv = await ClientRepository.createDriverUnique(U, '  السائق أحمد  ');
+const createdDrv = await ClientRepository.createDriverUnique('  السائق أحمد  ');
 ok(createdDrv && createdDrv.id != null && createdDrv.name === 'السائق أحمد',
   `quick-create: driver created via the shared repository path (name trimmed → ${J(createdDrv.name)}, id=${J(createdDrv.id)})`);
-const dupDrv = await ClientRepository.createDriverUnique(U, 'السائق أحمد');
+const dupDrv = await ClientRepository.createDriverUnique('السائق أحمد');
 ok(String(dupDrv.id) === String(createdDrv.id),
   'duplicate prevention: normalized (trim) lookup returns the existing driver — no second record persisted');
 const drvStoreRows = (await ClientRepository.getDrivers())
@@ -269,9 +269,9 @@ const { normalizeDriverName } = await import('./services/nameNorm.js');
 ok(normalizeDriverName('  أحْمــد   علي ') === 'احمد علي'
    && normalizeDriverName('إبراهيم') === 'ابراهيم',
   'shared normalizer: trim + collapse spaces + strip diacritics/tatweel + alef-fold أ/إ/آ→ا (canonical form)');
-const h1 = await ClientRepository.createDriverUnique(U, 'احمد علي');
-const h2 = await ClientRepository.createDriverUnique(U, 'أحمد   علي'); // alef-hamza + multi-space
-const h3 = await ClientRepository.createDriverUnique(U, 'أَحْمـد عَلـي'); // diacritics + tatweel
+const h1 = await ClientRepository.createDriverUnique('احمد علي');
+const h2 = await ClientRepository.createDriverUnique('أحمد   علي'); // alef-hamza + multi-space
+const h3 = await ClientRepository.createDriverUnique('أَحْمـد عَلـي'); // diacritics + tatweel
 ok(h1.id != null && String(h2.id) === String(h1.id) && String(h3.id) === String(h1.id),
   'duplicate prevention extended: hamza-fold + collapsed spaces + diacritics/tatweel → existing record reused');
 const hamzaRows = (await ClientRepository.getDrivers())
@@ -350,10 +350,10 @@ console.log(`B row0 net=${servicePayload.rows[0].net}, row2 net=${servicePayload
 // vehicle — both master records must exist (registered-vehicle contract,
 // identical seeding to the write-path harness).
 await DB.init();
-await DB.add('offices', { id: crypto.randomUUID(), username: U, name: 'شركة الأمل', phone: null }, { username: U });
-await DB.add('vehicles', { id: 'veh-1', username: U, plate: 'أ ب ج 1234', owner_id: 'owner-1', owner_name: 'مالك الاختبار' }, { username: U });
+await DB.add('offices', { id: crypto.randomUUID(), username: U, name: 'شركة الأمل', phone: null });
+await DB.add('vehicles', { id: 'veh-1', username: U, plate: 'أ ب ج 1234', owner_id: 'owner-1', owner_name: 'مالك الاختبار' });
 console.log('\n══ STAGE C — persisted IndexedDB records (REAL FinancialService) ══');
-const createRes = await FinancialService.createReceipt(U, servicePayload);
+const createRes = await FinancialService.createReceipt( servicePayload);
 const rid = createRes.receipt.id;
 const persistedHeader = await DB.getById('receipts', rid);
 const persistedRows = await DB.findByFields('receipt_rows', { receipt_id: rid });

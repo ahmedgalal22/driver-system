@@ -22,12 +22,12 @@ const { loadOffices, attachOfficesPageListeners, OfficesService } = await import
 await DB.init();
 const U = 'office-list-user';
 const specialName = `New "office" & <partners> 'Ltd'`;
-const office = { id: crypto.randomUUID(), username: U, name: 'Original', phone: ' 123 ', hamolaRows: [{ id: 'h', loading_place: 'Tanta' }], custom: { a: [1, 2] } };
-const other = { id: crypto.randomUUID(), username: U, name: 'Other', phone: null };
-await DB.add('offices', office, { username: U });
-await DB.add('offices', other, { username: U });
-await FinancialService.createManualOfficeBalanceEntry(U, { office_id: office.id, entry_type: 'deposit', amount: 25.5, date: '2026-01-01', note: 'test' });
-await FinancialService.createManualOfficeBalanceEntry(U, { office_id: other.id, entry_type: 'withdraw', amount: 4, date: '2026-01-01', note: 'test' });
+const office = { id: crypto.randomUUID(), name: 'Original', phone: ' 123 ', hamolaRows: [{ id: 'h', loading_place: 'Tanta' }], custom: { a: [1, 2] } };
+const other = { id: crypto.randomUUID(), name: 'Other', phone: null };
+await DB.add('offices', office);
+await DB.add('offices', other);
+await FinancialService.createManualOfficeBalanceEntry( { office_id: office.id, entry_type: 'deposit', amount: 25.5, date: '2026-01-01', note: 'test' });
+await FinancialService.createManualOfficeBalanceEntry( { office_id: other.id, entry_type: 'withdraw', amount: 4, date: '2026-01-01', note: 'test' });
 let ledgerReads = 0;
 const nativeTransaction = DB._db.transaction.bind(DB._db);
 DB._db.transaction = (stores, mode) => {
@@ -47,30 +47,30 @@ console.log('PASS list uses existing projection for positive and negative balanc
 
 const owner = crypto.randomUUID();
 const vehicle = { id: crypto.randomUUID(), username: U, plate: 'T-1', owner_id: owner, owner_name: 'Owner' };
-await ClientRepository.saveVehicle(vehicle, { username: U });
+await ClientRepository.saveVehicle(vehicle);
 const row = { row_id: crypto.randomUUID(), owner_id: owner, vehicle_id: vehicle.id, vehicle_plate: vehicle.plate,
   office: office.name, driver_price: 1, advance: 0, weight: 115, deficit: 0, officeAmount: 0, discount: 0, add: 0, net: 100, sarf: 15 };
 const row2 = { ...row, row_id: crypto.randomUUID() };
 const payload = rows => ({ receipt_date: '2026-01-01', client_id: owner, client_type: 'owner', client_name: 'Owner', rows });
-const rec1 = (await FinancialService.createReceipt(U, payload([row]))).receipt;
-const rec2 = (await FinancialService.createReceipt(U, payload([row2]))).receipt;
-await FinancialService.setReceiptRowPaymentStatus(U, row.row_id, 'paid');
+const rec1 = (await FinancialService.createReceipt( payload([row]))).receipt;
+const rec2 = (await FinancialService.createReceipt( payload([row2]))).receipt;
+await FinancialService.setReceiptRowPaymentStatus( row.row_id, 'paid');
 // Summary and rename deliberately use case-insensitive, trimmed matching.
-await DB.update('receipt_rows', row2.row_id, { office: '  oRiGiNaL  ' }, { username: U });
+await DB.update('receipt_rows', row2.row_id, { office: '  oRiGiNaL  ' });
 const deletedRow = { row_id: crypto.randomUUID(), receipt_id: rec1.id, office: 'Original' };
-await DB.add('receipt_rows', deletedRow, { username: U });
-await DB.delete('receipt_rows', deletedRow.row_id, { username: U });
+await DB.add('receipt_rows', deletedRow);
+await DB.delete('receipt_rows', deletedRow.row_id);
 const unrelated = { row_id: crypto.randomUUID(), receipt_id: rec2.id, office: 'Other' };
-await DB.add('receipt_rows', unrelated, { username: U });
-const deletedReceipt = await DB.add('receipts', { id: crypto.randomUUID(), username: U }, { username: U });
+await DB.add('receipt_rows', unrelated);
+const deletedReceipt = await DB.add('receipts', { id: crypto.randomUUID() });
 const rowOfDeletedReceipt = { row_id: crypto.randomUUID(), receipt_id: deletedReceipt.id, office: 'Original' };
-await DB.add('receipt_rows', rowOfDeletedReceipt, { username: U });
-await DB.delete('receipts', deletedReceipt.id, { username: U });
+await DB.add('receipt_rows', rowOfDeletedReceipt);
+await DB.delete('receipts', deletedReceipt.id);
 const foreign = { row_id: crypto.randomUUID(), receipt_id: crypto.randomUUID(), office: 'Original' };
-await DB.add('receipt_rows', foreign, { username: 'audit-origin' });
-const foreignReceipt = await DB.add('receipts', { id: crypto.randomUUID(), username: 'audit-origin' }, { username: 'audit-origin' });
+await DB.add('receipt_rows', foreign);
+const foreignReceipt = await DB.add('receipts', { id: crypto.randomUUID(), username: 'audit-origin' });
 const foreignLinkedRow = { row_id: crypto.randomUUID(), receipt_id: foreignReceipt.id, username: 'audit-origin', office: 'Original' };
-await DB.add('receipt_rows', foreignLinkedRow, { username: 'audit-origin' });
+await DB.add('receipt_rows', foreignLinkedRow);
 const beforeOffice = await DB.getById('offices', office.id);
 const beforeRows = await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id)));
 const beforeBalance = (await FinancialService.getOfficeBalance(office.id)).balance;
@@ -87,20 +87,20 @@ for (const failAt of ['after-first-row', 'office-write']) {
       return result;
     },
   }), meta);
-  try { await assert.rejects(OfficesService.updateOffice(U, office.id, { name: specialName }), /injected/); }
+  try { await assert.rejects(OfficesService.updateOffice( office.id, { name: specialName }), /injected/); }
   finally { OfficeRepository.transaction = originalTransaction; }
   assert.ok(writes >= 1);
   assert.deepEqual(await DB.getById('offices', office.id), beforeOffice);
   assert.deepEqual(await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id))), beforeRows);
 }
 // Inject a real unique-index collision at the final put after linked row writes.
-await DB.add('offices', { id: crypto.randomUUID(), username: 'audit-origin', name: 'Global collision' }, { username: 'audit-origin' });
+await DB.add('offices', { id: crypto.randomUUID(), name: 'Global collision' });
 OfficeRepository.transaction = (callback, meta) => originalTransaction(async tx => callback({
   ...tx, async update(store, id, patch) {
     return tx.update(store, id, store === 'offices' ? { ...patch, name: 'Global collision' } : patch);
   },
 }), meta);
-try { await assert.rejects(OfficesService.updateOffice(U, office.id, { name: specialName })); }
+try { await assert.rejects(OfficesService.updateOffice( office.id, { name: specialName })); }
 finally { OfficeRepository.transaction = originalTransaction; }
 assert.deepEqual(await DB.getById('offices', office.id), beforeOffice);
 assert.deepEqual(await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id))), beforeRows);
@@ -130,15 +130,13 @@ assert.equal((await DB.getById('receipt_rows', unrelated.row_id)).office, 'Other
 assert.equal((await DB.getById('receipt_rows', foreign.row_id)).office, 'Original');
 const renamedForeign = await DB.getById('receipt_rows', foreignLinkedRow.row_id);
 assert.equal(renamedForeign.office, specialName);
-assert.equal(renamedForeign.username, 'audit-origin');
-assert.equal(renamedForeign.updated_by, U);
 assert.equal((await DB.getById('receipt_rows', rowOfDeletedReceipt.row_id)).office, 'Original');
 assert.equal((await DB.findByFields('receipt_rows', { row_id: deletedRow.row_id }, { includeDeleted: true }))[0].office, 'Original');
 assert.equal((await FinancialService.getOfficeBalance(office.id)).balance, beforeBalance);
 assert.deepEqual((await FinancialService.getOfficeBalances([office.id])).get(office.id), await FinancialService.getOfficeBalance(office.id));
 // Remove the artificial non-financial unrelated row before asking for a summary.
-await DB.delete('receipt_rows', unrelated.row_id, { username: U });
-const summary = await OfficesService.getOfficeFinancialSummary(U);
+await DB.delete('receipt_rows', unrelated.row_id);
+const summary = await OfficesService.getOfficeFinancialSummary();
 assert.equal(summary.rows.find(item => item.office.id === office.id).net, 200);
 assert.ok(events.some(event => event.type === 'offices:changed' && event.detail?.officeName === specialName));
 await listeners.click({ target: action('office-edit', office.id) });
@@ -149,24 +147,23 @@ console.log('PASS multiple rows renamed, other business fields preserved, summar
 
 const activePayment = async () => (await DB.findByFields('vehicle_ledger', { reference_id: row.row_id, reference_type: 'receipt_row_payment_company', is_reversed: false }))[0];
 const paymentBefore = await activePayment();
-await FinancialService.updateReceipt(U, rec1.id, payload([{ ...row, office: specialName, net: 110, weight: 125, payment_status: 'paid' }]));
+await FinancialService.updateReceipt( rec1.id, payload([{ ...row, office: specialName, net: 110, weight: 125, payment_status: 'paid' }]));
 const paymentAfter = await activePayment();
 assert.equal(paymentAfter.client_id, office.id);
 assert.equal(paymentAfter.date, paymentBefore.date);
 assert.notEqual(paymentAfter.id, paymentBefore.id);
-await FinancialService.setReceiptRowPaymentStatus(U, row.row_id, 'unpaid');
+await FinancialService.setReceiptRowPaymentStatus( row.row_id, 'unpaid');
 assert.equal(await activePayment(), undefined);
-await FinancialService.deleteReceipt(U, rec1.id);
+await FinancialService.deleteReceipt( rec1.id);
 assert.equal(await DB.getById('receipt_rows', row.row_id), null);
-await FinancialService.setReceiptRowPaymentStatus(U, row2.row_id, 'paid');
+await FinancialService.setReceiptRowPaymentStatus( row2.row_id, 'paid');
 assert.equal((await FinancialService.getOfficeBalance(office.id)).balance, 25.5);
 console.log('PASS paid receipt edit preserves payment date and office; reversal, deletion and later payment succeed');
-await assert.rejects(OfficesService.updateOffice(U, office.id, { name: '  oThEr  ' }), /duplicate/);
-await assert.rejects(OfficesService.updateOffice(U, office.id, { name: 'Global collision' }), /duplicate/);
-const auditEdit = await OfficesService.updateOffice('audit-origin', office.id, { phone: '456' });
-assert.equal(auditEdit.username, U);
-assert.equal(auditEdit.updated_by, 'audit-origin');
-assert.equal((await OfficesService.getOfficeById(office.id, 'audit-origin')).phone, '456');
+await assert.rejects(OfficesService.updateOffice( office.id, { name: '  oThEr  ' }), /duplicate/);
+await assert.rejects(OfficesService.updateOffice( office.id, { name: 'Global collision' }), /duplicate/);
+const auditEdit = await OfficesService.updateOffice(office.id, { phone: '456' });
+assert.equal(!('username' in auditEdit), true, 'offices have no username');
+assert.equal((await DB.getById('offices', office.id)).phone, '456');
 assert.equal((await DB.getById('offices', office.id)).name, specialName);
 console.log('PASS duplicate names rejected and edits preserve the original audit username');
 

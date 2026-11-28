@@ -28,15 +28,15 @@ await DB.init();
 const OWNER = uuid();
 const OFFICE = { id: uuid(), username: U, name: 'شركة الحالة', phone: null };
 const VEHICLE_REC = { id: uuid(), username: U, plate: '123 أ ب', owner_id: OWNER, owner_name: 'مالك اختبار' };
-await DB.add('offices', OFFICE, { username: U });
-await ClientRepository.saveVehicle(VEHICLE_REC, { username: U });
+await DB.add('offices', OFFICE);
+await ClientRepository.saveVehicle(VEHICLE_REC);
 const row = {
   _type: 'data', row_id: uuid(), owner_id: OWNER, owner_name: 'مالك اختبار',
   driver_id: null, vehicle_id: VEHICLE_REC.id, vehicle_plate: VEHICLE_REC.plate,
   driver_price: 0, loading: 'طنطا', destination: 'القاهرة', office: OFFICE.name,
   advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 86, net: 11, sarf: 75, date: DateUtils.todayLocal(), payment_status: 'paid',
 };
-const created = await FinancialService.createReceipt(U, {
+const created = await FinancialService.createReceipt( {
   receipt_date: DateUtils.todayLocal(), client_id: OWNER, client_type: 'owner', client_name: 'مالك اختبار', total: 11, rows: [row],
 });
 const stored = (await DB.findByFields('receipt_rows', { receipt_id: created.receipt.id }))[0];
@@ -64,7 +64,7 @@ ok((await companyCents()) === -8600 && (await vehicleCents()) === 1100,
 'new unpaid row changes company by -net-sarf and vehicle by +net');
 
 console.log('\n— paid state machine —');
-let result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'paid');
+let result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'paid');
 state = await effects();
 ok(result.changed && result.vehicle_id === VEHICLE_REC.id && result.office_id === OFFICE.id,
 'paid transition returns authoritative row, vehicle, and office metadata after commit');
@@ -75,10 +75,10 @@ ok(state.creation.length === 1 && state.company.length === 1 && state.vehicle.le
 ok((await companyCents()) === 0 && (await vehicleCents()) === 1100,
 'company creation/payment effects offset while vehicle balance remains at its creation-side net');
 const paymentIds = state.company.map(entry => entry.id).sort().join(',');
-result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'paid');
+result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'paid');
 ok(!result.changed && (await effects()).company.map(entry => entry.id).sort().join(',') === paymentIds,
 'paid → paid is a no-op with no duplicate company payment effects');
-result = await FinancialService.setReceiptRowPaymentStatus(U, stored.row_id, 'unpaid');
+result = await FinancialService.setReceiptRowPaymentStatus( stored.row_id, 'unpaid');
 state = await effects();
 ok(result.changed && state.creation.length === 1 && state.company.length === 0 && state.vehicle.length === 1,
 'paid → unpaid reverses only the company payment and leaves creation-side effects active');
@@ -88,7 +88,7 @@ ok((await companyCents()) === -8600 && (await vehicleCents()) === 1100,
 console.log('\n— UI and namespace contract —');
 ok(RECEIPTS_SRC.includes('data-action="set-row-payment-status"')
   && ALL_RECEIPTS_SRC.includes("new CustomEvent('receipt-financial:changed'")
-  && ALL_RECEIPTS_SRC.includes('FinancialService.setReceiptRowPaymentStatus(username, rowId, target)'),
+  && ALL_RECEIPTS_SRC.includes('FinancialService.setReceiptRowPaymentStatus(rowId, target)'),
 'All Receipts status UI delegates to FinancialService and emits refresh only after success');
 ok(FINANCIAL_SRC.includes("receipt_row_company_charge")
   && FINANCIAL_SRC.includes("receipt_row_vehicle_balance")

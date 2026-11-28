@@ -32,11 +32,11 @@ const DRIVER_B = { id: uuid(), username: U, name: 'السائق ب', phone: null
 const VA = { id: uuid(), username: U, plate: '111 أ ب', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const VB = { id: uuid(), username: U, plate: '333 ج د', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
 const VC = { id: uuid(), username: U, plate: '777 هـ و', owner_id: OWNER_ID, owner_name: 'مالك اختبار' };
-await ClientRepository.saveDriver(DRIVER_A, { username: U });
-await ClientRepository.saveDriver(DRIVER_B, { username: U });
-await ClientRepository.saveVehicle(VA, { username: U });
-await ClientRepository.saveVehicle(VB, { username: U });
-await ClientRepository.saveVehicle(VC, { username: U });
+await ClientRepository.saveDriver(DRIVER_A);
+await ClientRepository.saveDriver(DRIVER_B);
+await ClientRepository.saveVehicle(VA);
+await ClientRepository.saveVehicle(VB);
+await ClientRepository.saveVehicle(VC);
 
 const mkRow = ({ row_id = uuid(), driver = DRIVER_A, vehicle = VA, price = null, kartano = row_id }) => ({
   _type: 'data', row_id,
@@ -52,7 +52,7 @@ const mkRow = ({ row_id = uuid(), driver = DRIVER_A, vehicle = VA, price = null,
 
 async function createRows(rows) {
   const receiptId = uuid();
-  await FinancialService.createReceipt(U, {
+  await FinancialService.createReceipt( {
     id: receiptId,
     receipt_date: '2026-09-30',
     client_id: OWNER_ID,
@@ -100,7 +100,7 @@ const basicBeforeVC = await vehicleCents(VC.id);
 ok(basicBeforeVA === 1000 && basicBeforeVB === 2000 && basicBeforeVC === 1000
   && (await Promise.all([A, B, BLANK, C].map(row => hasExactlyOneCreation(row.row_id)))).every(Boolean),
   'receipt creation contributes exactly one active vehicle deposit equal to net (10.00) for each batch fixture row');
-const basic = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [A.row_id, B.row_id, BLANK.row_id, C.row_id]);
+const basic = await FinancialService.createKartaSettlementBatch( DRIVER_A.id, [A.row_id, B.row_id, BLANK.row_id, C.row_id]);
 ok(basic.success === true && basic.settled_count === 2 && basic.total === 800
   && basic.affected_vehicle_count === 2 && basic.batch_id,
   'batch settles exactly the positive-price rows with total 800 across two vehicles');
@@ -137,7 +137,7 @@ const SAME_C = mkRow({ vehicle: VB, price: 200, kartano: 'VB-200' });
 await createRows([SAME_A, SAME_B, SAME_C]);
 const beforeSameA = await vehicleCents(VA.id);
 const beforeSameB = await vehicleCents(VB.id);
-const sameVehicleBatch = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [SAME_A.row_id, SAME_B.row_id, SAME_C.row_id]);
+const sameVehicleBatch = await FinancialService.createKartaSettlementBatch( DRIVER_A.id, [SAME_A.row_id, SAME_B.row_id, SAME_C.row_id]);
 const sameVehicleCharges = await batchChargeEntries(VA.id, [SAME_A.row_id, SAME_B.row_id]);
 ok(sameVehicleBatch.settled_count === 3
   && sameVehicleCharges.length === 2
@@ -151,11 +151,11 @@ console.log('\n— already-settled rows are skipped, never duplicated —');
 const ALREADY = mkRow({ vehicle: VC, price: 50, kartano: 'ALREADY' });
 const FRESH = mkRow({ vehicle: VC, price: 500, kartano: 'FRESH' });
 await createRows([ALREADY, FRESH]);
-await FinancialService.createKartaSettlement(U, {
+await FinancialService.createKartaSettlement( {
   row_id: ALREADY.row_id, driver_id: DRIVER_A.id, vehicle_id: VC.id, amount: 50, date: '2026-09-30', note: 'تسوية فردية قائمة',
 });
 const alreadyLegsBefore = await activeByRow(ALREADY.row_id);
-const mixed = await FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [ALREADY.row_id, FRESH.row_id]);
+const mixed = await FinancialService.createKartaSettlementBatch( DRIVER_A.id, [ALREADY.row_id, FRESH.row_id]);
 ok(mixed.settled_count === 1 && mixed.skipped_row_ids.includes(ALREADY.row_id)
   && (await activeByRow(ALREADY.row_id)).length === alreadyLegsBefore.length
   && (await activeKartaByRow(ALREADY.row_id)).length === 2
@@ -176,9 +176,9 @@ await DB.add('receipt_rows', {
   net: 1000,
   sarf: 0,
   payment_status: 'unpaid',
-}, { username: U });
+});
 const beforeMissingFailure = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
-ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [VALID.row_id, MISSING_VEHICLE.row_id])),
+ok(await rejects(() => FinancialService.createKartaSettlementBatch( DRIVER_A.id, [VALID.row_id, MISSING_VEHICLE.row_id])),
   'positive-price row without vehicle rejects the entire batch');
 ok(JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true })) === JSON.stringify(beforeMissingFailure)
   && (await activeKartaByRow(VALID.row_id)).length === 0
@@ -187,16 +187,16 @@ ok(JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true }
 
 const NEGATIVE = mkRow({ vehicle: VB, price: 10, kartano: 'NEGATIVE' });
 await createRows([NEGATIVE]);
-await DB.update('receipt_rows', NEGATIVE.row_id, { driver_settlement_price: -100 }, { username: U });
+await DB.update('receipt_rows', NEGATIVE.row_id, { driver_settlement_price: -100 });
 const beforeNegativeFailure = await DB.getAll('vehicle_ledger', {}, { includeDeleted: true });
-ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [NEGATIVE.row_id])),
+ok(await rejects(() => FinancialService.createKartaSettlementBatch( DRIVER_A.id, [NEGATIVE.row_id])),
   'corrupt negative persisted price rejects the batch');
 ok(JSON.stringify(await DB.getAll('vehicle_ledger', {}, { includeDeleted: true })) === JSON.stringify(beforeNegativeFailure),
   'negative-price rejection creates no driver or vehicle settlement leg');
 
 const DUPLICATE = mkRow({ vehicle: VB, price: 100, kartano: 'DUPLICATE' });
 await createRows([DUPLICATE]);
-ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [DUPLICATE.row_id, DUPLICATE.row_id])),
+ok(await rejects(() => FinancialService.createKartaSettlementBatch( DRIVER_A.id, [DUPLICATE.row_id, DUPLICATE.row_id])),
   'duplicate row_id input is rejected before batch writes');
 ok((await activeKartaByRow(DUPLICATE.row_id)).length === 0
   && (await hasExactlyOneCreation(DUPLICATE.row_id)),
@@ -204,7 +204,7 @@ ok((await activeKartaByRow(DUPLICATE.row_id)).length === 0
 
 const OTHER_DRIVER = mkRow({ driver: DRIVER_B, vehicle: VB, price: 150, kartano: 'OTHER-DRIVER' });
 await createRows([OTHER_DRIVER]);
-ok(await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [OTHER_DRIVER.row_id])),
+ok(await rejects(() => FinancialService.createKartaSettlementBatch( DRIVER_A.id, [OTHER_DRIVER.row_id])),
   'selected driver cannot settle another driver’s Karta');
 ok((await activeKartaByRow(OTHER_DRIVER.row_id)).length === 0
   && (await hasExactlyOneCreation(OTHER_DRIVER.row_id)),
@@ -223,7 +223,7 @@ ledgerStore.add = function failingSecondLedgerAdd(record) {
   if (attemptedAdds === 2) throw new Error('simulated ledger write failure');
   return originalAdd.call(this, record);
 };
-const writeFailed = await rejects(() => FinancialService.createKartaSettlementBatch(U, DRIVER_A.id, [FAIL_A.row_id, FAIL_B.row_id]));
+const writeFailed = await rejects(() => FinancialService.createKartaSettlementBatch( DRIVER_A.id, [FAIL_A.row_id, FAIL_B.row_id]));
 ledgerStore.add = originalAdd;
 ok(writeFailed && attemptedAdds >= 2,
   'simulated failure occurs after the first batch ledger write is attempted');
@@ -243,9 +243,9 @@ ok(ENTITIES_SRC.includes('عدد الكارتات: ${eligible.length}')
   && ENTITIES_SRC.includes('إجمالي التسوية: ${_fmt(Money.toDecimal(totalCents))}')
   && ENTITIES_SRC.includes('السيارات المتأثرة: ${affectedVehicles}'),
   'confirmation is computed from eligible rows with count, amount total, and vehicle count');
-ok(FINANCIAL_SRC.includes('async function createKartaSettlement(username, data)')
-  && FINANCIAL_SRC.includes('async function updateKartaSettlement(username, data)')
-  && FINANCIAL_SRC.includes('async function createKartaSettlementBatch(username, driverId, rowIds)'),
+ok(FINANCIAL_SRC.includes('async function createKartaSettlement(data)')
+  && FINANCIAL_SRC.includes('async function updateKartaSettlement(data)')
+  && FINANCIAL_SRC.includes('async function createKartaSettlementBatch(driverId, rowIds)'),
   'existing single-row Karta settlement APIs remain alongside the batch API');
 ok(DATABASE_SRC.includes('const DB_VERSION = 17;')
   && !DATABASE_SRC.includes('batch_id')
@@ -257,7 +257,7 @@ console.log('\n— driver movements refresh after settlement —');
 // service and IndexedDB shim. Only browser DOM/dialogs and Karta loading are doubles.
 const { Money } = await import('./money.js');
 const refreshDriver = { id: uuid(), username: U, name: 'Refresh driver' };
-await ClientRepository.saveDriver(refreshDriver, { username: U });
+await ClientRepository.saveDriver(refreshDriver);
 const firstRefreshRow = mkRow({ driver: refreshDriver, vehicle: VA, price: 50 });
 await createRows([firstRefreshRow]);
 const elements = {

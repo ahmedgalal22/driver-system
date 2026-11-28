@@ -43,10 +43,10 @@ const DRIVER_ID = uuid();
 const OFFICE = { id: uuid(), username: U, name: 'شركة صيانة الاختبار', phone: null };
 const V1 = { id: uuid(), username: U, plate: '111 ص ي', owner_id: OWNER_ID, owner_name: 'مالك الصيانة' };
 const V2 = { id: uuid(), username: U, plate: '222 ص ي', owner_id: OWNER_ID, owner_name: 'مالك الصيانة' };
-await DB.add('offices', OFFICE, { username: U });
-await ClientRepository.saveDriver({ id: DRIVER_ID, username: U, name: 'سائق الصيانة', phone: null }, { username: U });
-await ClientRepository.saveVehicle(V1, { username: U });
-await ClientRepository.saveVehicle(V2, { username: U });
+await DB.add('offices', OFFICE);
+await ClientRepository.saveDriver({ id: DRIVER_ID, username: U, name: 'سائق الصيانة', phone: null });
+await ClientRepository.saveVehicle(V1);
+await ClientRepository.saveVehicle(V2);
 
 console.log('\n— no schema/store or standalone Treasury regression —');
 ok(DB_SRC.includes('const DB_VERSION = 17;') && !DB.STORES.maintenance && !/name\s*:\s*'maintenance'/.test(DB_SRC),
@@ -61,7 +61,7 @@ ok(FINANCIAL_SRC.includes("const MANUAL_VEHICLE_REF_TYPE = 'manual_vehicle_balan
 
 console.log('\n— existing receipt/payment and Karta Settlement baseline —');
 const rowId = uuid();
-await FinancialService.createReceipt(U, {
+await FinancialService.createReceipt( {
   receipt_date: '2026-08-29',
   client_id: OWNER_ID,
   client_type: 'owner',
@@ -74,8 +74,8 @@ await FinancialService.createReceipt(U, {
     office: OFFICE.name, advance: 0, weight: 0, deficit: 0, officeAmount: 0, discount: 0, add: 1000, net: 1000, sarf: 0,
   }],
 });
-await FinancialService.setReceiptRowPaymentStatus(U, rowId, 'paid');
-await FinancialService.createKartaSettlement(U, {
+await FinancialService.setReceiptRowPaymentStatus( rowId, 'paid');
+await FinancialService.createKartaSettlement( {
   row_id: rowId, driver_id: DRIVER_ID, vehicle_id: V1.id, amount: 50, date: '2026-08-29', note: 'تسوية اختبار',
 });
 const officeBefore = await FinancialService.getOfficeBalance(OFFICE.id);
@@ -88,7 +88,7 @@ ok(kartaLegsBefore.length === 2,
   'existing Karta Settlement still has its exact two active ledger legs');
 
 console.log('\n— maintenance creation is one total vehicle withdrawal —');
-const maintenance = await FinancialService.createManualVehicleBalanceEntry(U, {
+const maintenance = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id,
   entry_type: 'withdraw',
   maintenance_type: 'زيت',
@@ -125,7 +125,7 @@ ok(vehicleMovements.filter(isActiveMaintenance).some(entry => entry.reference_id
   'maintenance qualifies for the separate active Maintenance tab projection');
 
 console.log('\n— optional informational quantity —');
-const emptyQuantityMaintenance = await FinancialService.createManualVehicleBalanceEntry(U, {
+const emptyQuantityMaintenance = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id,
   entry_type: 'withdraw',
   maintenance_type: 'فلاتر',
@@ -137,7 +137,7 @@ const emptyQuantityMaintenance = await FinancialService.createManualVehicleBalan
 const emptyQuantityRaw = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', emptyQuantityMaintenance.reference_id))[0];
 ok(emptyQuantityRaw.maintenance_quantity === null && emptyQuantityRaw.amount === 2500 && (await cents(V1.id)) === 12500,
   'empty quantity is accepted and persisted as null while amount remains the total withdrawal');
-const emptyQuantityEdited = await FinancialService.updateVehicleMaintenanceEntry(U, emptyQuantityMaintenance.reference_id, {
+const emptyQuantityEdited = await FinancialService.updateVehicleMaintenanceEntry( emptyQuantityMaintenance.reference_id, {
   vehicle_id: V1.id,
   maintenance_type: 'فلاتر',
   maintenance_quantity: null,
@@ -149,14 +149,14 @@ const emptyQuantityEditRaw = (await DB.getByIndex('vehicle_ledger', 'by_referenc
 ok(emptyQuantityEditRaw.maintenance_quantity === null && emptyQuantityEditRaw.amount === 3000
    && (await cents(V1.id)) === 12000,
   'editing a maintenance entry accepts an empty quantity without changing total-amount semantics');
-await FinancialService.deleteManualVehicleBalanceEntry(U, emptyQuantityEdited.reference_id);
+await FinancialService.deleteManualVehicleBalanceEntry( emptyQuantityEdited.reference_id);
 ok((await cents(V1.id)) === 15000,
   'reversing the optional-quantity maintenance restores only its total withdrawal');
 
 console.log('\n— maintenance reversal/delete audit behavior —');
-await FinancialService.deleteManualVehicleBalanceEntry(U, maintenance.reference_id);
+await FinancialService.deleteManualVehicleBalanceEntry( maintenance.reference_id);
 const maintenanceAudit = (await DB.getByIndex('vehicle_ledger', 'by_reference_id', maintenance.reference_id))[0];
-ok(maintenanceAudit.is_reversed === true && maintenanceAudit.reversed_at && maintenanceAudit.reversed_by === U,
+ok(maintenanceAudit.is_reversed === true && maintenanceAudit.reversed_at && !('reversed_by' in maintenanceAudit),
   'maintenance delete preserves audit history through the existing manual reversal mechanism');
 ok((await cents(V1.id)) === 95000
    && !(await FinancialService.getVehicleLedger(V1.id)).some(entry => entry.reference_id === maintenance.reference_id),
@@ -166,11 +166,11 @@ ok(!(await FinancialService.getVehicleLedger(V1.id)).filter(isActiveMaintenance)
   'reversed maintenance is excluded from the active Maintenance projection');
 
 console.log('\n— atomic edit: reverse old entry and create one corrected entry —');
-const original = await FinancialService.createManualVehicleBalanceEntry(U, {
+const original = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V1.id, entry_type: 'withdraw', maintenance_type: 'جاز', maintenance_quantity: 4,
   amount: 800, date: '2026-08-29', note: '',
 });
-const amountEdited = await FinancialService.updateVehicleMaintenanceEntry(U, original.reference_id, {
+const amountEdited = await FinancialService.updateVehicleMaintenanceEntry( original.reference_id, {
   vehicle_id: V1.id, maintenance_type: 'فلاتر', maintenance_quantity: 5,
   amount: 900, date: '2026-08-30', note: '',
 });
@@ -185,7 +185,7 @@ ok(v1ActiveMaintenance.length === 1 && v1ActiveMaintenance[0].reference_id === a
 ok((await cents(V1.id)) === 5000,
   'editing amount from 800.00 to 900.00 updates Vehicle Balance through reversal plus replacement only');
 
-const vehicleEdited = await FinancialService.updateVehicleMaintenanceEntry(U, amountEdited.reference_id, {
+const vehicleEdited = await FinancialService.updateVehicleMaintenanceEntry( amountEdited.reference_id, {
   vehicle_id: V2.id, maintenance_type: 'صيانة مخصصة', maintenance_quantity: 6,
   amount: 123, date: '2026-08-31', note: 'ملاحظة مخصصة',
 });
@@ -201,7 +201,7 @@ ok((await cents(V1.id)) === 95000 && (await cents(V2.id)) === -12300,
   'vehicle edit moves only the corrected financial withdrawal to the newly selected vehicle');
 
 console.log('\n— existing manual vehicle behavior and UI contracts —');
-const ordinaryManual = await FinancialService.createManualVehicleBalanceEntry(U, {
+const ordinaryManual = await FinancialService.createManualVehicleBalanceEntry( {
   vehicle_id: V2.id, entry_type: 'deposit', amount: 20, date: '2026-08-31', note: 'إيداع يدوي قائم',
 });
 ok(ordinaryManual.type === 'deposit' && !('maintenance_type' in ordinaryManual)
