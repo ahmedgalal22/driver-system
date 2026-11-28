@@ -268,18 +268,17 @@ function _buildServicePayload(n) {
 
 // ─── PUBLIC: create ───────────────────────────────────────────────────────────
 
-async function create(username, rawData) {
-  if (!username) throw new Error('[ReceiptsModule:create] username is required.');
+async function create(rawData) {
 
   _validate(rawData);
 
   const normalized     = _normalize(rawData);
   const servicePayload = _buildServicePayload(normalized);
 
-  const result = await FinancialService.createReceipt(username, servicePayload);
+  const result = await FinancialService.createReceipt(servicePayload);
 
   try {
-    await _syncCompanyLoadDetailsFromReceipt(username, normalized);
+    await _syncCompanyLoadDetailsFromReceipt(normalized);
   } catch (syncErr) {
     console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
   }
@@ -290,8 +289,7 @@ async function create(username, rawData) {
 
 // ─── PUBLIC: update ───────────────────────────────────────────────────────────
 
-async function update(username, id, rawData) {
-  if (!username) throw new Error('[ReceiptsModule:update] username is required.');
+async function update(id, rawData) {
   if (!id)       throw new Error('[ReceiptsModule:update] id is required.');
 
   _validate(rawData);
@@ -299,10 +297,10 @@ async function update(username, id, rawData) {
   const normalized     = _normalize({ ...rawData, id });
   const servicePayload = _buildServicePayload(normalized);
 
-  const result = await FinancialService.updateReceipt(username, id, servicePayload);
+  const result = await FinancialService.updateReceipt(id, servicePayload);
 
   try {
-    await _syncCompanyLoadDetailsFromReceipt(username, normalized);
+    await _syncCompanyLoadDetailsFromReceipt(normalized);
   } catch (syncErr) {
     console.error('[ReceiptsModule] company load-details sync failed:', syncErr);
   }
@@ -313,10 +311,8 @@ async function update(username, id, rawData) {
 
 // ─── PUBLIC: getAll ───────────────────────────────────────────────────────────
 
-async function getAll(username) {
-  if (!username) throw new Error('[ReceiptsModule:getAll] username is required.');
-
-  return await ReceiptRepository.getAll(username);
+async function getAll() {
+  return await ReceiptRepository.getAll();
 }
 
 async function getVehicleById(vehicle_id) {
@@ -330,13 +326,12 @@ async function getVehiclesByPlate(plate) {
   return ClientRepository.getVehiclesByPlate(p);
 }
 
-async function getOfficesForUser(username) {
-  if (!username) throw new Error('[ReceiptsModule:getOfficesForUser] username is required.');
-  return OfficesService.getOffices(username);
+async function getOfficesForUser() {
+  return OfficesService.getOffices();
 }
 
-async function getOffices(username) {
-  return getOfficesForUser(username);
+async function getOffices() {
+  return getOfficesForUser();
 }
 
 // ─── SYNC company load details (hamola) from receipt rows ───────────────────
@@ -352,8 +347,8 @@ function _hamolaKey(row) {
   return [loading, destination, itemType].join('|');
 }
 
-async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
-  if (!username || !rawData) return;
+async function _syncCompanyLoadDetailsFromReceipt(rawData) {
+  if (!rawData) return;
 
   const dataRows = Array.isArray(rawData.rows) ? rawData.rows : [];
 
@@ -382,7 +377,7 @@ async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
 
   if (byCompany.size === 0) return;
 
-  const offices = await OfficesService.getOffices(username);
+  const offices = await OfficesService.getOffices();
   const officeByName = new Map(
     (offices || []).map((o) => [String(o.name || '').trim().toLowerCase(), o])
   );
@@ -392,7 +387,7 @@ async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
     if (!office?.id) continue;
 
     // Fresh office for current hamolaRows
-    const full = await OfficesService.getOfficeById(office.id, username);
+    const full = await OfficesService.getOfficeById(office.id);
     if (!full) continue;
 
     const existing = Array.isArray(full.hamolaRows) ? full.hamolaRows : [];
@@ -404,7 +399,7 @@ async function _syncCompanyLoadDetailsFromReceipt(username, rawData) {
       const key = _hamolaKey(cand);
       if (existingKeys.has(key) || seenNew.has(key)) continue;
       seenNew.add(key);
-      await OfficesService.addHamolaRow(username, full.id, cand);
+      await OfficesService.addHamolaRow(full.id, cand);
       existingKeys.add(key);
     }
   }
@@ -501,14 +496,6 @@ const COL_DEFS = [
 const DATA_COL_COUNT = COL_DEFS.filter(c => c.key !== '_actions').length;
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-function _currentUsername() {
-  const session = AuthModule.getSession();
-  if (!session?.username) {
-    throw new Error('Username required');
-  }
-  return session.username;
-}
 
 function _field(row, cls) {
   const el = row.querySelector('.' + cls);
@@ -1108,8 +1095,8 @@ function setCurrentDate() {
   if (el) el.value = today;
 }
 
-function _assertCriticalSaveInputs(username, rawData) {
-  if (!username) throw new Error('username missing');
+function _assertCriticalSaveInputs(rawData) {
+  if (!rawData) throw new Error('rawData missing');
   if (!rawData?.client_id) throw new Error('client_id missing');
   if (!Array.isArray(rawData?.rows) || rawData.rows.length === 0) throw new Error('rows missing');
 }
@@ -1211,9 +1198,7 @@ function _refreshRenamedOfficeInDraft(detail) {
 }
 
 async function loadOfficesForReceipt() {
-  const username = _currentUsername();
-  if (!username) return;
-  const offices = await ReceiptsModule.getOffices(username);
+  const offices = await ReceiptsModule.getOffices();
   const dl      = document.getElementById('officesList');
   if (dl) dl.innerHTML = offices.map(o => `<option value="${_escapeOfficeOption(o.name)}">`).join('');
 }
@@ -1239,8 +1224,6 @@ async function loadOfficesForReceipt() {
 let _receiptDriversCache = []; // [{ id, name, norm, meta }] — refreshed at page boot / after quick-create
 
 async function _receiptLoadDriverOptions() {
-  const username = _currentUsername();
-  if (!username) return;
   // ONE pass over receipt_rows groups usage per driver (karta count, last
   // vehicle, last use date); phone comes free from the driver record. A
   // driver with no usage data renders the suggestion as name-only.
@@ -1604,7 +1587,7 @@ async function _promptCreateDriverForRow(row, driverName) {
   // NORMALIZED lookup happens INSIDE createDriverUnique (trim + collapsed
   // spaces + diacritics/tatweel strip + أ/إ/آ→ا): a visually identical
   // existing driver is reused, never duplicated.
-  const record = await ClientRepository.createDriverUnique(_currentUsername(), driverName);
+  const record = await ClientRepository.createDriverUnique(driverName);
   // Immediately refresh the autocomplete source so the new driver is suggested.
   await _receiptLoadDriverOptions();
   // Auto-select the newly created driver on this row, close the popup, and let
@@ -1975,9 +1958,7 @@ function attachRowCalculation(row) {
 
   async function getOfficeHamolaForRow(officeName) {
     if (!officeName) return [];
-    const username = _currentUsername();
-    if (!username) return [];
-    const offices = await ReceiptsModule.getOffices(username);
+    const offices = await ReceiptsModule.getOffices();
     const office  = offices.find(o => o.name.trim() === officeName.trim());
     if (!office?.id) return [];
     return office?.hamolaRows || [];
@@ -2394,8 +2375,7 @@ async function _onOfficeValidation(input) {
     input.parentElement.querySelector('.office-warning-msg')?.remove();
     return;
   }
-  const username = _currentUsername();
-  const offices  = await ReceiptsModule.getOffices(username);
+  const offices  = await ReceiptsModule.getOffices();
   const found    = offices.some(o => o.name === officeName);
   input.parentElement.querySelector('.office-warning-msg')?.remove();
   if (!found) {
@@ -2599,7 +2579,7 @@ async function collectReceiptRows() {
     if (!clientOwner && client) {
       clientOwner = { id: client.id, name: client.name };
     }
-    const vehicle = await VehiclesModule.resolveVehicle(_currentUsername(), plate, clientOwner);
+    const vehicle = await VehiclesModule.resolveVehicle( plate, clientOwner);
     if (!vehicle?.owner_id) {
       throw new Error('يجب أن تكون كل مركبة مرتبطة بمالك مركبة مسجل');
     }
@@ -2639,7 +2619,7 @@ async function collectReceiptRows() {
         await DBProvider.update('vehicles', vehicle.id, {
           owner_id: String(clientOwner.id),
           owner_name: clientOwner.name || null,
-        }, { username: _currentUsername() });
+        });
       } catch (_) {}
     }
     if (!vehicleOwner) {
@@ -2742,7 +2722,7 @@ async function validateBeforeSave(rawData) {
   // from getAll() never embed rows).
   // kartano is persisted on ReceiptRows, so this duplicate
   // check is fully active against all previously saved receipts.
-  const allSavedReceipts = await ReceiptsModule.getAll(_currentUsername());
+  const allSavedReceipts = await ReceiptsModule.getAll();
   const savedKartas = new Set();
   for (const receipt of allSavedReceipts) {
     if (ReceiptState.isEditing && receipt.id === ReceiptState.editingReceiptId) continue;
@@ -2759,11 +2739,8 @@ async function validateBeforeSave(rawData) {
       return false;
     }
   }
-
-  const username = _currentUsername();
-
   // office validation
-  const offices        = await ReceiptsModule.getOffices(username);
+  const offices        = await ReceiptsModule.getOffices();
   const allOfficeNames = offices.map(o => o.name);
   const invalidOffices = [...new Set(
     rawData.rows
@@ -2837,9 +2814,8 @@ async function saveReceipt() {
     return;
   }
 
-  const username = _currentUsername();
   try {
-    _assertCriticalSaveInputs(username, rawData);
+    _assertCriticalSaveInputs(rawData);
   } catch (err) {
     _isSaving = false;
     alert(err.message || '❌ بيانات الحفظ غير مكتملة');
@@ -2849,7 +2825,7 @@ async function saveReceipt() {
   // EDIT MODE — no modal
   if (ReceiptState.isEditing && ReceiptState.editingReceiptId) {
     try {
-      await ReceiptsModule.update(username, ReceiptState.editingReceiptId, rawData);
+      await ReceiptsModule.update(ReceiptState.editingReceiptId, rawData);
       _vehicleAnalysisCache.clear();
       _exitEditMode();
       window.dispatchEvent(new CustomEvent('receipts:changed'));
@@ -2868,7 +2844,7 @@ async function saveReceipt() {
   // CREATE MODE
 
   try {
-    const saveResult = await ReceiptsModule.create(username, rawData);
+    const saveResult = await ReceiptsModule.create(rawData);
 
     _vehicleAnalysisCache.clear();
     // Drivers stay id-keyed per row; unknown names were already quick-created

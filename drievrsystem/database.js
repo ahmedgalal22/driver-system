@@ -13,12 +13,12 @@
  *   DB.getAll(store, filters?)       → Promise<Array>
  *   DB.getById(store, id)            → Promise<Object|null>
  *   DB.getByIndex(store, index, val) → Promise<Array>
- *   DB.add(store, payload, meta)     → Promise<Object>       ← injects meta fields
- *   DB.update(store, id, patch, meta)→ Promise<Object>
- *   DB.delete(store, id, meta)       → Promise<Object>       ← soft-delete
+ *   DB.add(store, payload)           → Promise<Object>       ← injects timestamps
+ *   DB.update(store, id, patch)      → Promise<Object>
+ *   DB.delete(store, id)             → Promise<Object>       ← soft-delete
  *   DB.hardDelete(store, id)         → Promise<void>         ← permanent (rare)
- *   DB.transaction(ops, meta)        → Promise<Array>        ← atomic batch
- *   DB.transaction(async (tx) => {}, meta)
+ *   DB.transaction(ops)              → Promise<Array>        ← atomic batch
+ *   DB.transaction(async (tx) => {})
  *                                      → Promise<*>          ← scoped reads/writes
  *   DB.findByFields(store, filters)  → Promise<Array>
  *
@@ -129,7 +129,6 @@ const DB = (() => {
       keyPath       : 'id',
       autoIncrement : false,
       indexes: [
-        { name: 'by_username', keyPath: 'username', options: { unique: false } },
         { name: 'by_name',     keyPath: 'name',     options: { unique: false } },
         { name: 'by_deleted',  keyPath: 'deleted_at' },
       ],
@@ -143,7 +142,6 @@ const DB = (() => {
       keyPath       : 'id',
       autoIncrement : true,
       indexes: [
-        { name: 'by_username', keyPath: 'username', options: { unique: false } },
         { name: 'by_name',     keyPath: 'name',     options: { unique: false } },
         { name: 'by_phone',    keyPath: 'phone',    options: { unique: false } },
         { name: 'by_deleted',  keyPath: 'deleted_at' },
@@ -173,7 +171,6 @@ const DB = (() => {
       keyPath       : 'id',
       autoIncrement : false,
       indexes: [
-        { name: 'by_username', keyPath: 'username',   options: { unique: false } },
         { name: 'by_type',     keyPath: 'type',       options: { unique: false } },
         { name: 'by_deleted',  keyPath: 'deleted_at',  options: { unique: false } },
       ],
@@ -416,33 +413,45 @@ const DB = (() => {
   }
 
   /**
-   * Inject required meta fields on every record.
-   * username MUST be provided via meta parameter — no globals.
+   * Inject required timestamp fields on every record.
+   * Single-admin: no ownership attribution, only timestamps.
+   * For users store, validates admin username and session match (preserving hardening).
    */
-  function _inject_meta(payload, isNew, meta) {
-    if (!meta || !meta.username) {
-      throw new Error('[DB] meta.username is required');
-    }
-    if ('created_by' in payload || 'updated_by' in payload) {
-      throw new Error('[DB] payload must not contain audit fields');
-    }
-    if (isNew && 'username' in payload && payload.username !== meta.username) {
-      throw new Error('[DB] username must match session user');
-    }
-
+  function _inject_timestamps(payload, isNew) {
     const now = Date.now();
     const next = { ...payload };
-
     next.updated_at = now;
-    next.updated_by = meta.username;
-
     if (isNew) {
       next.created_at = now;
-      next.created_by = meta.username;
       next.deleted_at = null;
     }
-
     return next;
+  }
+
+  function _assertUsersAddPayload(payload, storeName, meta) {
+    if (storeName !== 'users') return;
+    // Users store requires admin session for any write
+    if (!meta || meta.username !== 'admin') {
+      throw new Error('[DB] only the admin account is supported');
+    }
+    // Read payload.username once for inject check (counts as first getter read).
+    let rawUsername;
+    let hasUsername = false;
+    try {
+      hasUsername = payload != null && typeof payload === 'object' && 'username' in payload;
+      if (hasUsername) rawUsername = payload.username;
+    } catch (err) {
+      throw new Error('[DB] username must match session user');
+    }
+    if (hasUsername) {
+      // Inject check: payload username must match session username
+      if (rawUsername !== meta.username) {
+        throw new Error('[DB] username must match session user');
+      }
+      if (rawUsername !== 'admin') {
+        throw new Error('[DB] only the admin account is supported');
+      }
+    }
   }
 
   function _assertAdminAccount(storeName, record) {
@@ -457,12 +466,8 @@ const DB = (() => {
     }
   }
 
-  // Keep the original username snapshot on edits; the acting user is recorded
-  // separately in updated_by. Receipt updates may include a new username.
   function _mergeUpdate(existing, patch) {
     const merged = { ...existing, ...patch };
-    if (Object.prototype.hasOwnProperty.call(existing, 'username')) merged.username = existing.username;
-    else delete merged.username;
     return merged;
   }
 
@@ -569,16 +574,15 @@ const DB = (() => {
   }
 
   /**
-   * DB.add(store, payload, meta)
-   * Inserts a new record. Injects meta fields automatically.
+   * DB.add(store, payload)
+   * Inserts a new record. Injects timestamp fields automatically.
    * Returns the saved record (including auto-generated id).
-   * meta: { username } — REQUIRED.
    */
   async function add(storeName, payload, meta) {
-    if (!meta?.username) throw new Error('[DB.add] username required');
     await _ensure_ready();
     _assert_ready();
-    const record    = _inject_meta(payload, true, meta);
+    _assertUsersAddPayload(payload, storeName, meta);
+    const record    = _inject_timestamps(payload, true);
     _assertAdminAccount(storeName, record);
     const { store } = _open_tx(storeName, 'readwrite');
     const id        = await _req(store.add(record));
@@ -595,7 +599,6 @@ const DB = (() => {
    * FIX: get() + put() share ONE readwrite transaction — no race condition window.
    */
   async function update(storeName, id, patch, meta) {
-    if (!meta?.username) throw new Error('[DB.update] username required');
     _assertAccountPatch(storeName, patch);
     await _ensure_ready();
     _assert_ready();
@@ -617,19 +620,12 @@ const DB = (() => {
           return reject(_wrap_error('update', `Record ${id} is soft-deleted`));
         }
 
-        if (patch && ('created_by' in patch || 'updated_by' in patch)) {
-          tx.abort();
-          return reject(_wrap_error('update', '[DB] payload must not contain audit fields'));
-        }
-
         const merged = _mergeUpdate(existing, patch);
         if (storeName === 'users' && merged.username !== 'admin') {
           tx.abort();
           return reject(_wrap_error('update', '[DB] only the admin account is supported'));
         }
-        const { created_by, updated_by, ...clean } = merged;
-        const updated = _inject_meta(clean, false, meta);
-        if (created_by !== undefined) updated.created_by = created_by;
+        const updated = _inject_timestamps(merged, false);
         const putReq  = store.put(updated);
 
         putReq.onsuccess = () => resolve(updated);
@@ -650,7 +646,6 @@ const DB = (() => {
    * FIX: get() + put() share ONE readwrite transaction — no race condition window.
    */
   async function softDelete(storeName, id, meta) {
-    if (!meta?.username) throw new Error('[DB.delete] username required');
     await _ensure_ready();
     _assert_ready();
     return new Promise((resolve, reject) => {
@@ -675,7 +670,6 @@ const DB = (() => {
         const deleted = {
           ...existing,
           updated_at: now,
-          updated_by: meta.username,
           deleted_at: now,
         };
 
@@ -711,17 +705,15 @@ const DB = (() => {
    * to one SQL transaction with locked reads.
    */
   async function transactionCallback(callback, meta) {
-    if (!meta?.username) throw new Error('[DB.transaction] username required');
     if (typeof callback !== 'function') {
       throw new Error('[DB.transaction] callback must be a function');
     }
+    const storesHint = meta && Array.isArray(meta.stores) && meta.stores.length > 0 ? meta.stores : null;
 
     await _ensure_ready();
     _assert_ready();
 
-    const explicitStores = Array.isArray(meta.stores) && meta.stores.length > 0
-      ? meta.stores
-      : Object.keys(STORES);
+    const explicitStores = storesHint ? storesHint : Object.keys(STORES);
     const storeNames = [...new Set(explicitStores)];
 
     for (const name of storeNames) {
@@ -814,9 +806,17 @@ const DB = (() => {
         },
 
         async add(storeName, payload) {
+          // For users store, inject-time validation (counts as first username read)
+          try {
+            _assertUsersAddPayload(payload, storeName, meta);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            finishReject(err);
+            throw err;
+          }
           let staged;
           try {
-            staged = _inject_meta(payload, true, meta);
+            staged = _inject_timestamps(payload, true);
           } catch (err) {
             try { tx.abort(); } catch (_) {}
             finishReject(err);
@@ -830,22 +830,43 @@ const DB = (() => {
         async update(storeName, id, patch, options = {}) {
           guardAccount(_assertAccountPatch, storeName, patch);
           const store = txStore(storeName);
-          const existing = await txReq(store.get(id), `tx:update:get:${storeName}`);
+          let existing;
+          try {
+            existing = await txReq(store.get(id), `tx:update:get:${storeName}`);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            throw err;
+          }
           if (!existing) {
-            throw _wrap_error('tx:update', `Record ${id} not found in ${storeName}`);
+            try { tx.abort(); } catch (_) {}
+            const err = _wrap_error('tx:update', `Record ${id} not found in ${storeName}`);
+            finishReject(err);
+            throw err;
           }
           if (options?.includeDeleted !== true && existing.deleted_at !== null) {
-            throw _wrap_error('tx:update', `Record ${id} is soft-deleted`);
-          }
-          if (patch && ('created_by' in patch || 'updated_by' in patch)) {
-            throw _wrap_error('tx:update', '[DB] payload must not contain audit fields');
+            try { tx.abort(); } catch (_) {}
+            const err = _wrap_error('tx:update', `Record ${id} is soft-deleted`);
+            finishReject(err);
+            throw err;
           }
 
-          const merged = _mergeUpdate(existing, patch);
+          let merged;
+          try {
+            merged = _mergeUpdate(existing, patch);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            finishReject(err);
+            throw err;
+          }
           guardAccount(_assertAdminAccount, storeName, merged);
-          const { created_by, updated_by, ...clean } = merged;
-          const updated = _inject_meta(clean, false, meta);
-          if (created_by !== undefined) updated.created_by = created_by;
+          let updated;
+          try {
+            updated = _inject_timestamps(merged, false);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            finishReject(err);
+            throw err;
+          }
           await txReq(store.put(updated), `tx:update:put:${storeName}`);
           return updated;
         },
@@ -853,19 +874,30 @@ const DB = (() => {
         async delete(storeName, id, patch = null) {
           guardAccount(_assertAccountPatch, storeName, patch);
           const store = txStore(storeName);
-          const existing = await txReq(store.get(id), `tx:delete:get:${storeName}`);
+          let existing;
+          try {
+            existing = await txReq(store.get(id), `tx:delete:get:${storeName}`);
+          } catch (err) {
+            try { tx.abort(); } catch (_) {}
+            throw err;
+          }
           if (!existing) {
-            throw _wrap_error('tx:delete', `Record ${id} not found in ${storeName}`);
+            try { tx.abort(); } catch (_) {}
+            const err = _wrap_error('tx:delete', `Record ${id} not found in ${storeName}`);
+            finishReject(err);
+            throw err;
           }
           if (existing.deleted_at !== null) {
-            throw _wrap_error('tx:delete', `Record ${id} already deleted`);
+            try { tx.abort(); } catch (_) {}
+            const err = _wrap_error('tx:delete', `Record ${id} already deleted`);
+            finishReject(err);
+            throw err;
           }
           const now = _now();
           const deleted = {
             ...existing,
             ...(patch || {}),
             updated_at: now,
-            updated_by: meta.username,
             deleted_at: now,
           };
           guardAccount(_assertAdminAccount, storeName, deleted);
@@ -941,7 +973,6 @@ const DB = (() => {
    * ─────────────────────────────────────────────────────────────────────────────
    */
   async function transactionBatch(ops, meta) {
-    if (!meta?.username) throw new Error('[DB.transaction] username required');
     await _ensure_ready();
     return new Promise((resolve, reject) => {
       _assert_ready();
@@ -986,12 +1017,9 @@ const DB = (() => {
         switch (op.op) {
 
           case 'add': {
-            _debug_log('transaction:add:pre_inject', {
-              store: op.store,
-              metaUser: meta.username,
-            });
             try {
-              staged = _inject_meta(op.payload, true, meta);
+              _assertUsersAddPayload(op.payload, op.store, meta);
+              staged = _inject_timestamps(op.payload, true);
               _assertAdminAccount(op.store, staged);
             } catch (err) {
               tx.abort();
@@ -1017,18 +1045,7 @@ const DB = (() => {
                 tx.abort();
                 return reject(_wrap_error('transaction:update', `Record ${op.id} not found in ${op.store}`));
               }
-              _debug_log('transaction:update:existing', {
-                store: op.store,
-                id: op.id,
-                metaUser: meta.username,
-                existingUser: existing?.username,
-                existingCreatedBy: existing?.created_by,
-              });
               try {
-                if (op.patch && ('created_by' in op.patch || 'updated_by' in op.patch)) {
-                  tx.abort();
-                  return reject(_wrap_error('transaction:update', '[DB] payload must not contain audit fields'));
-                }
                 _assertAccountPatch(op.store, op.patch);
               } catch (err) {
                 tx.abort();
@@ -1046,27 +1063,13 @@ const DB = (() => {
                 tx.abort();
                 return reject(_wrap_error('transaction:update', '[DB] only the admin account is supported'));
               }
-              _debug_log('transaction:update:merged', {
-                store: op.store,
-                id: op.id,
-                metaUser: meta.username,
-                mergedUser: merged?.username,
-              });
-              const { created_by, updated_by, ...clean } = merged;
-              _debug_log('transaction:update:pre_inject', {
-                store: op.store,
-                id: op.id,
-                metaUser: meta.username,
-                cleanUser: clean?.username,
-              });
-              const updated = _inject_meta(clean, false, meta);
-              _debug_log('transaction:update:post_inject', {
-                store: op.store,
-                id: op.id,
-                metaUser: meta.username,
-                updatedUser: updated?.username,
-              });
-              if (created_by !== undefined) updated.created_by = created_by;
+              let updated;
+              try {
+                updated = _inject_timestamps(merged, false);
+              } catch (err) {
+                tx.abort();
+                return reject(_wrap_error('transaction:update', err));
+              }
               const putReq  = store.put(updated);
               putReq.onsuccess = () => {
                 results.push(updated);
@@ -1106,7 +1109,6 @@ const DB = (() => {
                   ...existing,
                   ...(op.patch || {}),
                   updated_at: now,
-                  updated_by: meta.username,
                   deleted_at: now,
                 };
               } catch (err) {

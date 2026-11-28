@@ -26,11 +26,6 @@ function _uuid() {
   throw new Error('[OfficesService] crypto.randomUUID is required');
 }
 
-function _requireUsername(username, ctx) {
-  if (!username) throw new Error(`[OfficesService:${ctx}] username is required.`);
-  return username;
-}
-
 function _toText(value) {
   if (value === undefined || value === null) return '';
   return String(value);
@@ -105,13 +100,12 @@ function _applyHamolaPatch(existing, patch) {
   return next;
 }
 
-async function createOffices(username, rows) {
-  _requireUsername(username, 'createOffices');
+async function createOffices(rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new Error('[OfficesService] rows must be a non-empty array.');
   }
 
-  const existing = await OfficeRepository.getAll(username);
+  const existing = await OfficeRepository.getAll();
   const existingNames = new Set(
     existing.map((o) => String(o.name || '').trim().toLowerCase()).filter(Boolean)
   );
@@ -132,7 +126,6 @@ async function createOffices(username, rows) {
 
     return {
       id: _uuid(),
-      username,
       name,
       phone: _optionalText(row.phone),
     };
@@ -144,14 +137,13 @@ async function createOffices(username, rows) {
     payload,
   }));
 
-  const saved = await OfficeRepository.transaction(ops, { username });
+  const saved = await OfficeRepository.transaction(ops, {});
 
   window.dispatchEvent(new CustomEvent('offices:changed'));
   return saved;
 }
 
-async function updateOffice(username, id, patch) {
-  _requireUsername(username, 'updateOffice');
+async function updateOffice(id, patch) {
   if (!id) throw new Error('[OfficesService:updateOffice] id is required.');
   if (!patch || typeof patch !== 'object') {
     throw new Error('[OfficesService] patch must be a plain object.');
@@ -175,7 +167,7 @@ async function updateOffice(username, id, patch) {
       if (dup) throw new Error(`[OfficesService] duplicate office name: ${nextPatch.name}`);
 
       if (nextPatch.name !== office.name) {
-        renameDetail = { username, previousName: office.name, officeName: nextPatch.name };
+        renameDetail = { previousName: office.name, officeName: nextPatch.name };
         const receipts = await tx.getAll('receipts');
         const receiptIds = new Set(receipts.map((receipt) => String(receipt.id)));
         const rows = await tx.getAll('receipt_rows');
@@ -189,30 +181,27 @@ async function updateOffice(username, id, patch) {
       }
     }
     return tx.update(STORE, String(id), nextPatch);
-  }, { username, stores: [STORE, 'receipts', 'receipt_rows'] });
+  }, { stores: [STORE, 'receipts', 'receipt_rows'] });
   if (renameDetail) window.dispatchEvent(new CustomEvent('receipts:changed'));
   window.dispatchEvent(new CustomEvent('offices:changed', { detail: renameDetail }));
   return updated;
 }
 
-async function deleteOffice(username, id) {
-  _requireUsername(username, 'deleteOffice');
+async function deleteOffice(id) {
   if (!id) throw new Error('[OfficesService:deleteOffice] id is required.');
-  const office = await getOfficeById(id, username);
+  const office = await getOfficeById(id);
   if (!office) throw new Error('[OfficesService] office not found.');
-  const deleted = await OfficeRepository.delete(String(id), { username });
+  const deleted = await OfficeRepository.delete(String(id));
   window.dispatchEvent(new CustomEvent('offices:changed'));
   return deleted;
 }
 
-async function getOffices(username) {
-  _requireUsername(username, 'getOffices');
-  const offices = await OfficeRepository.getAll(username);
+async function getOffices() {
+  const offices = await OfficeRepository.getAll();
   return offices;
 }
 
-async function getOfficeById(id, username) {
-  _requireUsername(username, 'getOfficeById');
+async function getOfficeById(id) {
   if (!id) throw new Error('[OfficesService:getOfficeById] id is required.');
   const office = await OfficeRepository.getById(String(id));
   if (!office || office.deleted_at !== null) return null;
@@ -224,29 +213,27 @@ async function getOfficeById(id, username) {
 // They never touch receipts, receipt rows, FinancialService, or any financial
 // calculation.
 
-async function addHamolaRow(username, office_id, row) {
-  _requireUsername(username, 'addHamolaRow');
+async function addHamolaRow(office_id, row) {
   if (!office_id) throw new Error('[OfficesService:addHamolaRow] office_id is required.');
-  const office = await getOfficeById(office_id, username);
+  const office = await getOfficeById(office_id);
   if (!office) throw new Error('[OfficesService] office not found.');
 
   const nextRow = _normalizeHamolaRow(row, false);
   const hamolaRows = [...(office.hamolaRows || []), nextRow];
 
-  const updated = await OfficeRepository.update(String(office_id), { hamolaRows }, { username });
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows });
   window.dispatchEvent(new CustomEvent('offices:changed'));
   return updated;
 }
 
-async function updateHamolaRow(username, office_id, row_id, patch) {
-  _requireUsername(username, 'updateHamolaRow');
+async function updateHamolaRow(office_id, row_id, patch) {
   if (!office_id) throw new Error('[OfficesService:updateHamolaRow] office_id is required.');
   if (!row_id) throw new Error('[OfficesService:updateHamolaRow] row_id is required.');
   if (!patch || typeof patch !== 'object') {
     throw new Error('[OfficesService] patch must be a plain object.');
   }
 
-  const office = await getOfficeById(office_id, username);
+  const office = await getOfficeById(office_id);
   if (!office) throw new Error('[OfficesService] office not found.');
 
   const rows = office.hamolaRows || [];
@@ -257,17 +244,16 @@ async function updateHamolaRow(username, office_id, row_id, patch) {
   const nextRows = rows.slice();
   nextRows[idx] = updatedRow;
 
-  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows }, { username });
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows });
   window.dispatchEvent(new CustomEvent('offices:changed'));
   return updated;
 }
 
-async function deleteHamolaRow(username, office_id, row_id) {
-  _requireUsername(username, 'deleteHamolaRow');
+async function deleteHamolaRow(office_id, row_id) {
   if (!office_id) throw new Error('[OfficesService:deleteHamolaRow] office_id is required.');
   if (!row_id) throw new Error('[OfficesService:deleteHamolaRow] row_id is required.');
 
-  const office = await getOfficeById(office_id, username);
+  const office = await getOfficeById(office_id);
   if (!office) throw new Error('[OfficesService] office not found.');
 
   const rows = office.hamolaRows || [];
@@ -276,7 +262,7 @@ async function deleteHamolaRow(username, office_id, row_id) {
     throw new Error('[OfficesService] hamola row not found.');
   }
 
-  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows }, { username });
+  const updated = await OfficeRepository.update(String(office_id), { hamolaRows: nextRows });
   window.dispatchEvent(new CustomEvent('offices:changed'));
   return updated;
 }
@@ -372,10 +358,8 @@ function _persistedRowToOfficeShape(row) {
   };
 }
 
-async function getOfficeFinancialSummary(username, filters = null) {
-  _requireUsername(username, 'getOfficeFinancialSummary');
-
-  const offices = await getOffices(username);
+async function getOfficeFinancialSummary(filters = null) {
+  const offices = await getOffices();
   const nameMap = new Map(
     offices.map((o) => [String(o.name || '').trim().toLowerCase(), o])
   );
@@ -391,7 +375,7 @@ async function getOfficeFinancialSummary(username, filters = null) {
 
   const range = _resolveRange(filters);
 
-  const receipts = await ReceiptRepository.getAll(username);
+  const receipts = await ReceiptRepository.getAll();
   const filteredReceipts = range
     ? receipts.filter((r) => {
         const ts = new Date(r.receipt_date || 0).getTime();
@@ -457,27 +441,19 @@ const OfficesService = Object.freeze({
 // Module — OfficesModule
 // ========================================
 
-function _moduleSessionUsername() {
-  const session = AuthModule.getSession();
-  if (!session?.username) {
-    throw new Error('Username required');
-  }
-  return session.username;
-}
-
 const OfficesModule = Object.freeze({
-  createOffices: (rows) => OfficesService.createOffices(_moduleSessionUsername(), rows),
-  updateOffice: (id, patch) => OfficesService.updateOffice(_moduleSessionUsername(), id, patch),
-  deleteOffice: (id) => OfficesService.deleteOffice(_moduleSessionUsername(), id),
+  createOffices: (rows) => OfficesService.createOffices(rows),
+  updateOffice: (id, patch) => OfficesService.updateOffice(id, patch),
+  deleteOffice: (id) => OfficesService.deleteOffice(id),
   addHamolaRow: (office_id, row) =>
-    OfficesService.addHamolaRow(_moduleSessionUsername(), office_id, row),
+    OfficesService.addHamolaRow(office_id, row),
   updateHamolaRow: (office_id, row_id, patch) =>
-    OfficesService.updateHamolaRow(_moduleSessionUsername(), office_id, row_id, patch),
+    OfficesService.updateHamolaRow(office_id, row_id, patch),
   deleteHamolaRow: (office_id, row_id) =>
-    OfficesService.deleteHamolaRow(_moduleSessionUsername(), office_id, row_id),
-  getOfficeDetails: (id) => OfficesService.getOfficeById(id, _moduleSessionUsername()),
+    OfficesService.deleteHamolaRow(office_id, row_id),
+  getOfficeDetails: (id) => OfficesService.getOfficeById(id),
   getOfficeSummary: (filters = null) =>
-    OfficesService.getOfficeFinancialSummary(_moduleSessionUsername(), filters),
+    OfficesService.getOfficeFinancialSummary(filters),
 });
 
 
@@ -879,7 +855,7 @@ async function loadOffices() {
   const searchEl = document.getElementById('officeSearch');
   if (searchEl) searchEl.value = _searchQuery || '';
 
-  const offices = await OfficesService.getOffices(session.username);
+  const offices = await OfficesService.getOffices();
 
   const tbody = document.getElementById('officesTableBody');
   if (!tbody) return;
@@ -1069,7 +1045,7 @@ async function _saveOfficeBalanceEntry() {
   }
 
   try {
-    await FinancialService.createManualOfficeBalanceEntry(_moduleSessionUsername(), {
+    await FinancialService.createManualOfficeBalanceEntry({
       office_id: _detailsOfficeId,
       entry_type: _officeBalanceEntryType,
       amount,

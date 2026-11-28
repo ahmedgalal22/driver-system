@@ -70,7 +70,7 @@ async function createInitialAdmin() {
     username: 'admin',
     password_hash: await hashPassword('admin123'),
   };
-  await AuthRepository.saveUser(adminPayload, { username: adminPayload.username });
+  await AuthRepository.saveUser(adminPayload);
   return adminPayload;
 }
 

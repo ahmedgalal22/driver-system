@@ -48,21 +48,17 @@ function getPage() {
   return document.getElementById(PAGE_ID);
 }
 
-function getSessionUsername() {
-  return window.__APP_CONTEXT__?.username || '';
-}
-
 /* ─── GENERAL NOTE AUTO-SAVE ─────────────────────────────────────────────── */
 const _noteSaveTimers = new Map();
 
-function _debouncedNoteSave(receiptId, value, username) {
-  if (!receiptId || !username) return;
+function _debouncedNoteSave(receiptId, value) {
+  if (!receiptId) return;
   if (_noteSaveTimers.has(receiptId)) {
     clearTimeout(_noteSaveTimers.get(receiptId));
   }
   const timer = setTimeout(async () => {
     try {
-      await ReceiptRepository.update(receiptId, { notes: value.trim() || null }, { username });
+      await ReceiptRepository.update(receiptId, { notes: value.trim() || null });
     } catch (err) {
       console.error('[allReceipts] note auto-save failed:', err);
     } finally {
@@ -644,12 +640,11 @@ function setDatalist(id, values) {
 
 
 async function loadAllReceiptsData() {
-  const username = getSessionUsername();
-  if (!username) return;
+  if (!_requireSession()) return;
   if (STATE.loading) return;
   STATE.loading = true;
   try {
-    const receipts = await ReceiptsModule.getAll(username);
+    const receipts = await ReceiptsModule.getAll();
     STATE.receipts = receipts.slice();
     // Preload the normalized ReceiptRows through ReceiptReadRepository
     // (persisted receipts are headers only — rows live in receipt_rows).
@@ -1296,14 +1291,13 @@ async function printCurrentView(tab = 'receipts') {
  * remains the sole owner of the atomic posting/reversal state transition.
  */
 async function _handleRowPaymentStatusChange(select) {
-  const username = getSessionUsername();
-  if (!username) return;
+  if (!_requireSession()) return;
   const rowId = select.dataset.rowId;
   const target = select.value === 'paid' ? 'paid' : 'unpaid';
   if (!rowId) return;
   select.disabled = true;
   try {
-    const result = await FinancialService.setReceiptRowPaymentStatus(username, rowId, target);
+    const result = await FinancialService.setReceiptRowPaymentStatus(rowId, target);
     if (result.changed) {
       // FinancialService is DOM-free. Notify read models only after its
       // transaction committed and include authoritative affected identities.
@@ -1318,8 +1312,7 @@ async function _handleRowPaymentStatusChange(select) {
 }
 
 async function handleCardAction(action, id, tab) {
-  const username = getSessionUsername();
-  if (!username) return;
+  if (!_requireSession()) return;
 
   if (tab === 'receipts' || tab === 'receipt') {
     const record = STATE.receipts.find((item) => String(item.id) === String(id));
@@ -1337,7 +1330,7 @@ async function handleCardAction(action, id, tab) {
 
     if (action === 'delete-receipt') {
       if (!window.confirm('هل تريد حذف هذا النموذج؟')) return;
-      await FinancialService.deleteReceipt(username, id);
+      await FinancialService.deleteReceipt(id);
       window.dispatchEvent(new CustomEvent('receipts:changed'));
       return;
     }
@@ -1459,7 +1452,7 @@ function bindPageEvents() {
       const value = noteField.value;
       const receipt = STATE.receipts.find((r) => String(r.id) === String(receiptId));
       if (receipt) receipt.notes = value;
-      _debouncedNoteSave(receiptId, value, getSessionUsername());
+      _debouncedNoteSave(receiptId, value);
     }
   });
 

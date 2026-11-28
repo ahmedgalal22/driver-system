@@ -5,7 +5,7 @@ export const OfficeRepository = {
     const normId = typeof id === 'string' && !isNaN(Number(id)) ? Number(id) : id;
     return (tx ? tx.getById('offices', normId) : DBProvider.get('offices', normId));
   },
-  async getAll(username) {
+  async getAll() {
     return DBProvider.getAll('offices');
   },
   // Company name is the offices master-data identity (unique by_name index);
@@ -13,11 +13,11 @@ export const OfficeRepository = {
   async findByName(name) {
     return DBProvider.findByFields('offices', { name });
   },
-  async update(id, patch, meta) {
-    return DBProvider.update('offices', String(id), patch, meta);
+  async update(id, patch) {
+    return DBProvider.update('offices', String(id), patch);
   },
-  async delete(id, meta) {
-    return DBProvider.delete('offices', String(id), meta);
+  async delete(id) {
+    return DBProvider.delete('offices', String(id));
   },
   async transaction(ops, meta) {
     return DBProvider.transaction(ops, meta);

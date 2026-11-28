@@ -1,6 +1,7 @@
 /**
  * dbProvider.js — Unified Mid-layer DB Provider
  * Decouples database storage internals from repositories.
+ * Single-admin: no ownership filtering, timestamps only.
  */
 
 import { DB } from '../database.js';

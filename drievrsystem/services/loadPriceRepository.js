@@ -23,18 +23,17 @@ export const LoadPriceRepository = {
     });
   },
 
-  async updatePrice(id, price, meta) {
-    return DBProvider.update('loadPrices', id, { price }, meta);
+  async updatePrice(id, price) {
+    return DBProvider.update('loadPrices', id, { price });
   },
 
-  async delete(id, meta) {
-    if (!meta?.username) throw new Error('[LoadPriceRepository:delete] username is required.');
+  async delete(id) {
     return DBProvider.transaction(async (tx) => {
       const route = await tx.getById('loadPrices', id);
       if (!route) throw new Error('[LoadPriceRepository:delete] route not found.');
       // `undefined` removes the record from the unique active-route index while
       // preserving the soft-deleted audit record for future recreation.
       return tx.delete('loadPrices', id, { canonical_route: undefined });
-    }, { username: meta.username, stores: ['loadPrices'] });
+    }, { stores: ['loadPrices'] });
   },
 };

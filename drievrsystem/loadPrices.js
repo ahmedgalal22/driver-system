@@ -1,16 +1,9 @@
-import { AuthModule } from './auth.js';
 import { Money } from './money.js';
 import { LoadPriceRepository } from './services/loadPriceRepository.js';
 
 const PAGE_ID = 'loadPricesPage';
 let _editingId = null;
 let _bound = false;
-
-function _username() {
-  const session = AuthModule.getSession();
-  if (!session?.username) throw new Error('Username required');
-  return session.username;
-}
 
 function _esc(value) {
   return String(value ?? '')
@@ -124,14 +117,14 @@ function _bind() {
         if (msg) { msg.textContent = '❌ السعر لا يمكن أن يكون سالباً'; msg.classList.add('is-visible'); }
         return;
       }
-      await LoadPriceRepository.updatePrice(id, price, { username: _username() });
+      await LoadPriceRepository.updatePrice(id, price);
       _editingId = null;
       await loadLoadPrices();
       return;
     }
     if (event.target.closest('[data-action="delete-load-price"]')) {
       if (!confirm('هل تريد حذف هذا المسار؟')) return;
-      await LoadPriceRepository.delete(id, { username: _username() });
+      await LoadPriceRepository.delete(id);
       _editingId = null;
       await loadLoadPrices();
     }

@@ -21,21 +21,19 @@ export const ReceiptRepository = {
       : DBProvider.get('receipts', id);
   },
 
-  async getAll(username, { tx } = {}) {
+  async getAll({ tx } = {}) {
     return tx
       ? tx.getAll('receipts')
       : DBProvider.getAll('receipts');
   },
 
-  async update(id, patch, meta) {
-    return DBProvider.update('receipts', id, patch, meta);
+  async update(id, patch) {
+    return DBProvider.update('receipts', id, patch);
   },
 
   // ── Persistence Command Preparation (Frozen Architecture) ───────────
   // type defaults to ADD so create-flow call sites stay unchanged.
   // Update carries a sanitized patch; Delete carries id only.
-  // (Previously hard-coded 'Add' — which made update flows collide on
-  // existing keys and made delete flows INSERT phantom records.)
   prepareReceiptOperation(receipt, meta = {}, type = PersistenceCommandType.ADD) {
     if (type === PersistenceCommandType.UPDATE) {
       return createPersistenceCommand(type, 'Receipt', receipt.id, { patch: _toPatch(receipt), meta });

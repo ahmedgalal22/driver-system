@@ -24,8 +24,7 @@ function _normalizePlate(rawPlate) {
     .replace(/\s+/g, ' ');
 }
 
-async function resolveVehicle(username, rawPlate, owner = null) {
-  if (!username) throw new Error('[VehiclesModule:resolveVehicle] username is required.');
+async function resolveVehicle(rawPlate, owner = null) {
   const normalizedPlate = _normalizePlate(rawPlate);
 
   if (!normalizedPlate) {
@@ -40,7 +39,7 @@ async function resolveVehicle(username, rawPlate, owner = null) {
       return ClientRepository.updateVehicle(vehicle.id, {
         owner_id: String(owner.id),
         owner_name: owner.name || null,
-      }, { username });
+      });
     }
     return vehicle;
   }
@@ -55,7 +54,7 @@ async function resolveVehicle(username, rawPlate, owner = null) {
     owner_id: String(owner.id),
     owner_name: owner.name || null,
     notes: null,
-  }, { username });
+  });
 
   return vehicle;
 }
@@ -89,8 +88,7 @@ function _emitOwnersChanged() {
   window.dispatchEvent(new CustomEvent('owners:changed'));
 }
 
-async function createOwner(username, payload) {
-  if (!username) throw new Error('[OwnersModule:createOwner] username is required.');
+async function createOwner(payload) {
   const vehicle_number = _toText(payload?.vehicle_number).trim();
   const notes = _toText(payload?.notes).trim();
 
@@ -105,11 +103,10 @@ async function createOwner(username, payload) {
 
   const record = await ClientRepository.saveOwner({
     id: _uuid(),
-    username,
     vehicle_number,
     name: vehicle_number,
     notes: notes || null,
-  }, { username });
+  });
 
   _emitOwnersChanged();
   return record;
@@ -119,8 +116,7 @@ async function getAllOwners() {
   return ClientRepository.getAllOwners();
 }
 
-async function updateOwner(username, id, patch) {
-  if (!username) throw new Error('[OwnersModule:updateOwner] username is required.');
+async function updateOwner(id, patch) {
   if (!id) throw new Error('معرّف المركبة مطلوب');
   const vehicle_number = patch?.vehicle_number === undefined
     ? undefined
@@ -139,18 +135,17 @@ async function updateOwner(username, id, patch) {
   const updated = await ClientRepository.updateOwner(id, {
     ...(vehicle_number !== undefined ? { vehicle_number, name: vehicle_number } : {}),
     ...(notes !== undefined ? { notes: notes || null } : {}),
-  }, { username });
+  });
 
   _emitOwnersChanged();
   return updated;
 }
 
-async function deleteOwner(username, id) {
-  if (!username) throw new Error('[OwnersModule:deleteOwner] username is required.');
+async function deleteOwner(id) {
   if (!id) throw new Error('معرّف المركبة مطلوب');
 
   // Receipts contain immutable snapshots with owner_name — safe to delete entity
-  const deleted = await ClientRepository.deleteOwner(id, { username });
+  const deleted = await ClientRepository.deleteOwner(id);
   _emitOwnersChanged();
   return deleted;
 }
@@ -180,15 +175,14 @@ async function getOwnerVehicles(owner_id) {
   return vehicles.filter(v => String(v.owner_id || '') === String(owner_id));
 }
 
-async function addAccount(username, kind, payload) {
-  if (!username) throw new Error('[OwnersModule:addAccount] username is required.');
+async function addAccount(kind, payload) {
   if (kind && kind !== 'owner') {
     throw new Error('[OwnersModule:addAccount] only vehicle owners are supported.');
   }
   const vehicle_number = _toText(payload?.vehicle_number).trim();
   const notes = _toText(payload?.notes).trim();
   if (!vehicle_number) throw new Error('❌ رقم المركبة مطلوب');
-  await createOwner(username, { vehicle_number, notes });
+  await createOwner({ vehicle_number, notes });
 }
 
 
@@ -278,14 +272,6 @@ function _balanceClass(balance) {
   if (Number(balance) < 0) return 'balance-negative';
   if (Number(balance) > 0) return 'balance-positive';
   return '';
-}
-
-function _currentUsername() {
-  const session = AuthModule.getSession();
-  if (!session?.username) {
-    throw new Error('Username required');
-  }
-  return session.username;
 }
 
 function _renderShell() {
@@ -457,7 +443,7 @@ async function _saveFromAddModal() {
     const numberVal = (document.querySelector('#addModalRows .add-m-vehicle-number')?.value || '').trim();
     if (!numberVal) { if (msg) { msg.textContent = '❌ رقم المركبة مطلوب'; msg.classList.add('is-visible'); } return; }
     try {
-      await OwnersModule.updateOwner(_currentUsername(), _editingAccountId, {
+      await OwnersModule.updateOwner( _editingAccountId, {
         vehicle_number: numberVal,
       });
       window.dispatchEvent(new CustomEvent('owners:changed'));
@@ -479,10 +465,9 @@ async function _saveFromAddModal() {
     return;
   }
 
-  const username = _currentUsername();
   for (const entry of entries) {
     try {
-      await OwnersModule.addAccount(username, 'owner', {
+      await OwnersModule.addAccount('owner', {
         vehicle_number: entry,
       });
     } catch (err) {
@@ -658,8 +643,7 @@ async function loadOwners() {
       }).join('');
     }
   } else {
-    const username = _currentUsername();
-    const drivers = (await ClientRepository.getDrivers(username)).filter(d => d.deleted_at === null);
+    const drivers = (await ClientRepository.getDrivers()).filter(d => d.deleted_at === null);
     
     const driverSnaps = await Promise.all(drivers.map(async (d) => {
       const bal = await FinancialService.getDriverBalance(d.id);
@@ -763,7 +747,6 @@ async function _saveDriverBalanceEntry() {
     return;
   }
 
-  const username = _currentUsername();
   const data = {
     driver_id: driverId,
     entry_type: _editingDriverBalanceEntryType,
@@ -774,9 +757,9 @@ async function _saveDriverBalanceEntry() {
 
   try {
     if (_editingDriverBalanceReferenceId) {
-      await FinancialService.updateManualDriverBalanceEntry(username, _editingDriverBalanceReferenceId, data);
+      await FinancialService.updateManualDriverBalanceEntry(_editingDriverBalanceReferenceId, data);
     } else {
-      await FinancialService.createManualDriverBalanceEntry(username, data);
+      await FinancialService.createManualDriverBalanceEntry(data);
     }
 
     _closeDriverBalanceEntryModal();
@@ -1091,7 +1074,6 @@ async function _settleUnsettledKartasBatch() {
 
   try {
     const result = await FinancialService.createKartaSettlementBatch(
-      _currentUsername(),
       driverId,
       eligible.map(karta => karta.row_id)
     );
@@ -1186,7 +1168,7 @@ async function _saveInlineKartaSettlementPrice(input) {
 
   input.disabled = true;
   try {
-    await FinancialService.updateDriverKartaSettlementPrice(_currentUsername(), rowId, input.value);
+    await FinancialService.updateDriverKartaSettlementPrice( rowId, input.value);
     const driverId = _getCurrentDriverId();
     if (driverId) await _loadDriverKartasTab(driverId);
   } catch (err) {
@@ -1268,7 +1250,6 @@ async function _saveKartaSettlementPriceModal() {
   const msgEl = document.getElementById('kartaSettlementPriceMsg');
   try {
     await FinancialService.updateDriverKartaSettlementPrice(
-      _currentUsername(),
       _editingKartaSettlementPriceRowId,
       priceEl?.value ?? ''
     );
@@ -1348,18 +1329,16 @@ async function _saveDriver() {
     return;
   }
 
-  const username = _currentUsername();
   try {
     const savedDriver = _editingDriverId
       ? await ClientRepository.updateDriver(_editingDriverId, {
         name,
         phone: phone || null,
-      }, { username })
+      })
       : await ClientRepository.saveDriver({
-        username,
         name,
         phone: phone || null,
-      }, { username });
+      });
 
     // Narrow post-persistence notification: receipt autocomplete owns the
     // in-place cache refresh; FinancialService and page navigation stay out of it.
@@ -1430,7 +1409,7 @@ async function _resolveDetailVehicle(owner, preferredVehicleId = null) {
   // rather than silently falling back to another vehicle owned by the same owner.
   const vehicleNumber = String(owner?.vehicle_number || owner?.name || '').trim();
   if (!vehicleNumber) return null;
-  return resolveVehicle(_currentUsername(), vehicleNumber, owner);
+  return resolveVehicle(vehicleNumber, owner);
 }
 
 // ── Vehicle Details tabs + structured manual maintenance metadata ────────────
@@ -2018,9 +1997,9 @@ async function _saveVehicleMaintenance() {
   try {
     const data = { vehicle_id, entry_type: 'withdraw', amount, date, note, maintenance_type, maintenance_quantity };
     if (_editingMaintenanceReferenceId) {
-      await FinancialService.updateVehicleMaintenanceEntry(_currentUsername(), _editingMaintenanceReferenceId, data);
+      await FinancialService.updateVehicleMaintenanceEntry( _editingMaintenanceReferenceId, data);
     } else {
-      await FinancialService.createManualVehicleBalanceEntry(_currentUsername(), data);
+      await FinancialService.createManualVehicleBalanceEntry( data);
     }
     _vehicleDetailsTab = 'maintenance';
     _closeVehicleMaintenanceModal();
@@ -2268,7 +2247,7 @@ async function _saveVehicleBalanceEntry() {
   }
 
   try {
-    await FinancialService.createManualVehicleBalanceEntry(_currentUsername(), {
+    await FinancialService.createManualVehicleBalanceEntry( {
       vehicle_id: vehicleId,
       entry_type: _vehicleBalanceEntryType,
       amount,
@@ -2524,7 +2503,6 @@ function _handleImportOwnersExcel() {
   ExcelService.openFilePicker(async (file) => {
     try {
       const { owners } = await ExcelService.importEntitiesExcel(file);
-      const username = _currentUsername();
       let ownersAdded = 0, ownersSkipped = 0;
 
       for (const row of (owners || [])) {
@@ -2534,7 +2512,7 @@ function _handleImportOwnersExcel() {
           const existing = await ClientRepository.findOwnersByNumber(vehicle_number);
           const dup = (existing || []).some(o => o.deleted_at === null);
           if (dup) { ownersSkipped++; continue; }
-          await createOwner(username, { vehicle_number, notes: null });
+          await createOwner({ vehicle_number, notes: null });
           ownersAdded++;
         } catch (err) {
           console.warn('[entities] import vehicle skipped:', row, err);
@@ -2619,7 +2597,7 @@ function attachOwnersPageListeners() {
       const entry = _maintenanceEntriesCache.find(item => item.reference_id === deleteMaintenance.dataset.refId);
       if (!entry || !confirm('هل تريد حذف حركة الصيانة؟')) return;
       try {
-        await FinancialService.deleteManualVehicleBalanceEntry(_currentUsername(), entry.reference_id);
+        await FinancialService.deleteManualVehicleBalanceEntry( entry.reference_id);
         _vehicleDetailsTab = 'maintenance';
         if (_selectedClient?.id) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
       } catch (err) {
@@ -2709,8 +2687,7 @@ function attachOwnersPageListeners() {
       if (!txEntry || txEntry.reference_type !== 'manual_driver_balance'
         || txEntry.effect !== 'manual_driver_balance' || !confirm('هل تريد حذف هذه الحركة؟')) return;
       try {
-        const username = _currentUsername();
-        await FinancialService.deleteManualDriverBalanceEntry(username, refId);
+        await FinancialService.deleteManualDriverBalanceEntry(refId);
         const driverId = _getCurrentDriverId();
         if (driverId) await showDriverDetails(driverId);
       } catch (err) {
@@ -2762,7 +2739,7 @@ function attachOwnersPageListeners() {
       const id = delDriverBtn.dataset.id;
       if (!confirm('هل تريد حذف هذا السائق؟')) return;
       try {
-        await ClientRepository.deleteDriver(String(id), { username: _currentUsername() });
+        await ClientRepository.deleteDriver(String(id));
         await loadOwners();
       } catch (err) {
         alert(err.message || '❌ فشل الحذف');
@@ -2824,7 +2801,7 @@ function attachOwnersPageListeners() {
       if (kind !== 'owner') return;
       if (!confirm('هل تريد حذف هذا الحساب؟')) return;
       try {
-        await OwnersModule.deleteOwner(_currentUsername(), String(id));
+        await OwnersModule.deleteOwner( String(id));
         window.dispatchEvent(new CustomEvent('owners:changed'));
         await loadOwners();
       } catch (err) {
@@ -2920,7 +2897,7 @@ function attachOwnersPageListeners() {
     if (delVeh) {
       if (!confirm('حذف المركبة؟')) return;
       try {
-        await ClientRepository.deleteVehicle(delVeh.dataset.id, { username: _currentUsername() });
+        await ClientRepository.deleteVehicle(delVeh.dataset.id);
         if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);
       } catch (err) {
         alert(err.message || '❌ فشل حذف المركبة');
@@ -2942,14 +2919,13 @@ function attachOwnersPageListeners() {
         return;
       }
       try {
-        const username = _currentUsername();
         // Vehicles carry NO driver attribute (Phase 6 — driver per receipt row):
         // the driver relationship lives exclusively on receipt_rows.driver_id.
         const vehiclePayload = { plate, owner_id: String(ownerId) };
         if (editId) {
-          await ClientRepository.updateVehicle(editId, vehiclePayload, { username });
+          await ClientRepository.updateVehicle(editId, vehiclePayload);
         } else {
-          await ClientRepository.saveVehicle({ username, ...vehiclePayload }, { username });
+          await ClientRepository.saveVehicle(vehiclePayload);
         }
         modal.classList.add('hidden');
         if (_selectedClient) await showOwnerDetails(_selectedClient.id, 'owner', _selectedVehicle?.id);

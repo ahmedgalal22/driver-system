@@ -5,7 +5,6 @@
  */
 
 import { Money } from './money.js';
-import { AuthModule } from './auth.js';
 import { printHTML, buildPrintDocument } from './printEngine.js';
 import { ReceiptRepository } from './services/receiptRepository.js';
 import { ReceiptReadRepository } from './services/receiptReadRepository.js';
@@ -31,12 +30,6 @@ const STATE = {
 };
 
 let _isSavingCapital = false; // module-scoped submit lock to prevent double-click submissions
-
-function _currentUsername() {
-  const session = AuthModule.getSession();
-  if (!session?.username) throw new Error('Username required');
-  return session.username;
-}
 
 function _todayISO() {
   return DateUtils.todayLocal();
@@ -103,29 +96,28 @@ async function _loadReceiptRowsProjection(receipts) {
 
 // ─── PRIMARY CAPITAL TREASURY STORAGE LAYER ──────────────────────────────────
 
-async function _getCapitalTransactions(username) {
-  return DashboardRepository.getCapitalTransactions(username);
+async function _getCapitalTransactions() {
+  return DashboardRepository.getCapitalTransactions();
 }
 
-async function _addCapitalTransaction(username, type, amount, note, date) {
+async function _addCapitalTransaction(type, amount, note, date) {
   const cents = Money.toCents(amount);
   if (cents <= 0) throw new Error('❌ يجب أن يكون المبلغ أكبر من صفر');
 
   const payload = {
     id: _uuid(),
-    username,
     type, // 'deposit' | 'withdraw'
     amount: cents,
     note: String(note || '').trim() || (type === CAPITAL_ENTRY_TYPE.DEPOSIT ? 'إيداع رأس مال' : 'سحب رأس مال'),
     date: date || _todayISO(),
   };
 
-  await DashboardRepository.saveTransaction(payload, { username });
+  await DashboardRepository.saveTransaction(payload);
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.CAPITAL_CHANGED));
 }
 
-async function _deleteCapitalTransaction(username, id) {
-  await DashboardRepository.deleteTransaction(id, { username });
+async function _deleteCapitalTransaction(id) {
+  await DashboardRepository.deleteTransaction(id);
   window.dispatchEvent(new CustomEvent(DOMAIN_EVENT.CAPITAL_CHANGED));
 }
 
@@ -841,7 +833,6 @@ function _renderShell() {
                       <th style="text-align:center;">النوع</th>
                       <th>المبلغ</th>
                       <th>البيان / الملاحظات</th>
-                      <th style="text-align:center;">المسؤول</th>
                       <th style="text-align:center;" class="no-print">إجراءات</th>
                     </tr>
                   </thead>
@@ -898,10 +889,8 @@ function _renderShell() {
 }
 
 async function _refreshDashboard() {
-  const username = _currentUsername();
-
   // 1. Read raw tables via repositories
-  const allReceipts = await ReceiptRepository.getAll(username);
+  const allReceipts = await ReceiptRepository.getAll();
 
   // 2. Filter datasets based on selected dates with defense guards
   const activeReceipts = (allReceipts || []).filter(r => {
@@ -936,7 +925,7 @@ async function _refreshDashboard() {
   // ─── RENDER STATISTICS CARDS ────────────────────────────────────────────────
 
   _renderSummaryCards(totalOfficeVal);
-  await _renderCapitalTreasury(username);
+  await _renderCapitalTreasury();
 }
 
 function _renderSummaryCards(office) {
@@ -959,12 +948,12 @@ function _renderSummaryCards(office) {
   `;
 }
 
-async function _renderCapitalTreasury(username) {
+async function _renderCapitalTreasury() {
   const tableBody = document.getElementById('capitalTableBody');
   const balanceValEl = document.getElementById('capitalBalanceVal');
   if (!tableBody || !balanceValEl) return;
 
-  const transactions = await _getCapitalTransactions(username);
+  const transactions = await _getCapitalTransactions();
 
   // Calculate Running Balance
   let totalBalanceCents = 0;
@@ -991,7 +980,6 @@ async function _renderCapitalTreasury(username) {
           typeLabel,
           String(Money.toDecimal(t.amount)),
           t.note,
-          t.created_by,
         ].join(' ').toLowerCase();
         return hay.includes(query);
       })
@@ -1005,7 +993,7 @@ async function _renderCapitalTreasury(username) {
   });
 
   if (filtered.length === 0) {
-    tableBody.innerHTML = `<tr><td colspan="6" class="text-center text-gray-400 p-6 font-bold" style="background:#f9fafb;">لا توجد حركات مطابقة في سجل الخزنة الرئيسية</td></tr>`;
+    tableBody.innerHTML = `<tr><td colspan="5" class="text-center text-gray-400 p-6 font-bold" style="background:#f9fafb;">لا توجد حركات مطابقة في سجل الخزنة الرئيسية</td></tr>`;
     return;
   }
 
@@ -1022,7 +1010,6 @@ async function _renderCapitalTreasury(username) {
         <td style="text-align:center;"><span class="${labelClass}">${typeLabel}</span></td>
         <td class="font-bold ${isDeposit ? 'text-success' : 'text-danger'}" style="direction:ltr;unicode-bidi:embed;text-align:right;">${isDeposit ? '+' : '-'}${amountFormatted}</td>
         <td style="color:#4b5563; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${_esc(t.note)}">${_esc(t.note)}</td>
-        <td style="text-align:center; color:#6b7280;">${_esc(t.created_by)}</td>
         <td style="text-align:center;" class="no-print">
           <button type="button" data-action="delete-capital" data-id="${t.id}" style="background:none;border:none;cursor:pointer;font-size:0.875rem;" title="حذف الحركة">
             🗑️
@@ -1055,8 +1042,6 @@ function _printCapitalTreasury() {
     const type = (cells[1]?.textContent || '').trim();
     const amountText = (cells[2]?.textContent || '').trim();
     const notes = (cells[3]?.textContent || '').trim();
-    const creator = (cells[4]?.textContent || '').trim();
-
     const amount = parseFloat(amountText.replace(/[^0-9.\-]/g, '')) || 0;
     if (amountText.startsWith('+')) totalIn += Math.abs(amount);
     else totalOut += Math.abs(amount);
@@ -1067,7 +1052,6 @@ function _printCapitalTreasury() {
         <td style="padding:6px;border:1px solid #000;text-align:center;">${type}</td>
         <td style="padding:6px;border:1px solid #000;text-align:center;font-weight:700;">${amountText}</td>
         <td style="padding:6px;border:1px solid #000;text-align:right;">${notes}</td>
-        <td style="padding:6px;border:1px solid #000;text-align:center;">${creator}</td>
       </tr>`;
   });
 
@@ -1101,7 +1085,7 @@ function _printCapitalTreasury() {
           <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">النوع</th>
           <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">المبلغ</th>
           <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:right;">الملاحظات / البيان</th>
-          <th style="background:#1e3a8a;color:#fff;padding:8px;border:1px solid #000;font-size:9pt;text-align:center;">المسؤول</th>
+
         </tr>
       </thead>
       <tbody>${tableRows}</tbody>
@@ -1173,8 +1157,7 @@ async function _saveCapitalTransactionFromModal() {
   }
 
   try {
-    const username = _currentUsername();
-    await _addCapitalTransaction(username, _modalTransactionType, amount, note, date);
+    await _addCapitalTransaction(_modalTransactionType, amount, note, date);
     _closeCapitalModal();
     await _refreshDashboard();
   } catch (err) {
@@ -1307,7 +1290,7 @@ function _attachListeners() {
       if (!confirm('هل تريد حذف هذه الحركة من سجل الخزنة الرئيسية؟')) return;
       const entryId = e.target.dataset.id;
       if (entryId) {
-        await _deleteCapitalTransaction(_currentUsername(), entryId);
+        await _deleteCapitalTransaction(entryId);
         await _refreshDashboard();
       }
       return;
@@ -1327,7 +1310,7 @@ function _attachListeners() {
 
     if (e.target.id === 'capitalSearchInput') {
       STATE.capitalSearchQuery = e.target.value || '';
-      await _renderCapitalTreasury(_currentUsername());
+      await _renderCapitalTreasury();
     }
   });
 

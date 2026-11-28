@@ -2,10 +2,6 @@ import { DBProvider } from './dbProvider.js';
 import { PersistenceCommandType } from './persistenceCommand.js';
 
 // ── Explicit aggregate → physical store map ────────────────────────────────
-// Store names are a data-layer detail and MUST NOT be derived from aggregate
-// names (the previous `aggregate.toLowerCase() + 's'` derivation produced
-// 'receiptrows' / 'ledgers', which do not exist — every
-// transaction was rejected with "[DB] Invalid store").
 const AGGREGATE_STORES = Object.freeze({
   Receipt    : 'receipts',
   ReceiptRow : 'receipt_rows',
@@ -41,9 +37,6 @@ function _toDbOp(cmd) {
 export const WriteDataSource = {
   /**
    * Execute an ordered list of PersistenceCommands atomically.
-   * - Commands are converted to DB batch ops via the explicit store map.
-   * - One DB.transaction() per execute() call (single atomic commit).
-   * - meta ({ username }) is propagated to the DB layer for audit injection.
    */
   async execute(commands, meta) {
     if (!Array.isArray(commands) || commands.length === 0) {
@@ -57,8 +50,7 @@ export const WriteDataSource = {
 
   /**
    * Execute the existing PersistenceCommand contract inside a transaction
-   * already opened by a FinancialService lifecycle guard. This avoids a
-   * check-then-write gap while preserving the same aggregate/store mapping.
+   * already opened by a FinancialService lifecycle guard.
    */
   async executeWithinTransaction(tx, commands) {
     if (!tx || typeof tx.runOps !== 'function') {

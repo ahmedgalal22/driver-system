@@ -134,10 +134,9 @@ function _validateReceiptRows(rows) {
   return dataRows;
 }
 
-function _buildReceiptHeaderEntity(cleanHeader, username, receiptId = null) {
+function _buildReceiptHeaderEntity(cleanHeader, receiptId = null) {
   return {
     id: receiptId || _uuid(),
-    username,
     client_id: cleanHeader.client_id,
     client_type: cleanHeader.client_type,
     client_name: cleanHeader.client_name || null,
@@ -440,10 +439,9 @@ function _receiptCompanyAmount(row) {
   return amount;
 }
 
-function _buildReceiptPaymentCompanyLeg(username, row, office, paymentDate, appliedAt = DateUtils.nowLocal()) {
+function _buildReceiptPaymentCompanyLeg(row, office, paymentDate, appliedAt = DateUtils.nowLocal()) {
   const amount = _receiptCompanyAmount(row);
   return {
-    username,
     owner_id: String(office.id),
     owner_name: office.name || null,
     client_id: String(office.id),
@@ -463,10 +461,10 @@ function _buildReceiptPaymentCompanyLeg(username, row, office, paymentDate, appl
   };
 }
 
-function _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
+function _buildReceiptRowVehicleBalancePayload(row, vehicle, receiptDate = null, appliedAt = DateUtils.nowLocal()) {
   const netCents = Number(row.net) || 0;
   return {
-    username,
+
     owner_id: String(vehicle.owner_id || ''),
     owner_name: vehicle.owner_name || null,
     client_id: String(vehicle.id),
@@ -486,21 +484,21 @@ function _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDa
   };
 }
 
-async function _receiptPaymentAddCommands(username, row, paymentDate, { tx } = {}) {
+async function _receiptPaymentAddCommands(row, paymentDate, { tx } = {}) {
   const office = await _resolveReceiptPaymentOffice(row, { tx });
-  const payload = _buildReceiptPaymentCompanyLeg(username, row, office, paymentDate);
+  const payload = _buildReceiptPaymentCompanyLeg(row, office, paymentDate);
   return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
 }
 
-async function _receiptRowVehicleBalanceAddCommands(username, row, receiptDate = null, { tx } = {}) {
+async function _receiptRowVehicleBalanceAddCommands(row, receiptDate = null, { tx } = {}) {
   const vehicle = await _resolveReceiptVehicle(row, { tx });
-  const payload = _buildReceiptRowVehicleBalancePayload(username, row, vehicle, receiptDate);
+  const payload = _buildReceiptRowVehicleBalancePayload(row, vehicle, receiptDate);
   return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
 }
 
-function _receiptPaymentReverseCommands(entries, username) {
+function _receiptPaymentReverseCommands(entries) {
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   return entries.map(entry =>
     createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
   );
@@ -544,13 +542,12 @@ async function _resolveReceiptRowCompany(row, { tx } = {}) {
   return _resolveReceiptPaymentOffice(row, { tx });
 }
 
-function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
+function _receiptRowCompanyChargePayload(row, office, receiptDate) {
   const now = DateUtils.nowLocal();
   const date = receiptDate;
   const amount = _receiptCompanyAmount(row);
 
   return {
-    username,
     owner_id: String(office.id),
     owner_name: office.name || null,
     client_id: String(office.id),
@@ -569,10 +566,10 @@ function _receiptRowCompanyChargePayload(username, row, office, receiptDate) {
   };
 }
 
-async function _receiptRowCompanyChargeAddCommands(username, row, receiptDate, { tx } = {}) {
+async function _receiptRowCompanyChargeAddCommands(row, receiptDate, { tx } = {}) {
   const office = await _resolveReceiptRowCompany(row, { tx });
   if (!office) return [];
-  const payload = _receiptRowCompanyChargePayload(username, row, office, receiptDate);
+  const payload = _receiptRowCompanyChargePayload(row, office, receiptDate);
   return [createPersistenceCommand(PersistenceCommandType.ADD, 'Ledger', null, { payload })];
 }
 
@@ -597,9 +594,9 @@ function _assertReceiptRowCompanyCreationEffects(entries, row, operation) {
   );
 }
 
-function _receiptRowCompanyChargeReverseCommands(entries, username) {
+function _receiptRowCompanyChargeReverseCommands(entries) {
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   return entries.map(entry =>
     createPersistenceCommand(PersistenceCommandType.UPDATE, 'Ledger', entry.id, { patch: reversePatch })
   );
@@ -643,7 +640,7 @@ function _assertReceiptRowSetMatches(expectedRows, currentRows, operation) {
 // ─── LOAD PRICE ROUTE DISCOVERY ──────────────────────────────────────────────
 // Reference/master-data only. It neither posts financial entries nor changes a
 // user-managed price. Duplicate rows in one receipt collapse to one route key.
-async function _loadPriceDiscoveryCommands(username, receiptRows) {
+async function _loadPriceDiscoveryCommands(receiptRows) {
   const candidates = new Map();
 
   for (const row of receiptRows) {
@@ -654,7 +651,6 @@ async function _loadPriceDiscoveryCommands(username, receiptRows) {
 
     candidates.set(canonical_route, {
       id: _uuid(),
-      username,
       loading,
       destination,
       canonical_loading: canonicalizeRoutePlace(loading),
@@ -668,20 +664,19 @@ async function _loadPriceDiscoveryCommands(username, receiptRows) {
   for (const route of candidates.values()) {
     const existing = await LoadPriceRepository.findActiveByCanonicalRoute(route.canonical_route);
     if (existing) continue;
-    commands.push(LoadPriceRepository.prepareCreate(route, { username }));
+    commands.push(LoadPriceRepository.prepareCreate(route, {}));
   }
 
   return commands;
 }
 
-async function createReceipt(username, data) {
-  if (!username) throw new Error('[FinancialService:create] username is required.');
-
+async function createReceipt(...args) {
+  const data = args.length === 2 ? args[1] : args[0];
   const receiptId = data.id || _uuid();
   const clean = _validate(data);
 
   // Build Receipt header
-  const receiptHeader = _buildReceiptHeaderEntity(clean, username, receiptId);
+  const receiptHeader = _buildReceiptHeaderEntity(clean, receiptId);
 
   // Build ReceiptRow entities
   const receiptRows = _buildReceiptRowEntities(clean.rows, receiptId, { forceUnpaid: true });
@@ -694,14 +689,14 @@ async function createReceipt(username, data) {
   };
 
   // Prepare PersistenceCommands via ReceiptRepository (Add)
-  const receiptCommand = ReceiptRepository.prepareReceiptOperation(receiptRecord, { username });
+  const receiptCommand = ReceiptRepository.prepareReceiptOperation(receiptRecord, {});
 
-  const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, { username });
+  const receiptRowCommands = ReceiptRepository.prepareReceiptRowOperations(receiptRows, {});
 
   // New routes are master-data discoveries. Include their commands in the same
   // receipt write batch so receipt rows and newly discovered routes commit or
   // roll back together.
-  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, receiptRows);
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(receiptRows);
 
   // New receipt rows always begin unpaid. Creation-side office and vehicle
   // movements are built from authoritative office/vehicle reads inside the
@@ -711,10 +706,10 @@ async function createReceipt(username, data) {
     const vehicleBalanceAddCommands = [];
     for (const row of receiptRows) {
       companyChargeAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
-        username, row, receiptRecord.receipt_date, { tx }
+        row, receiptRecord.receipt_date, { tx }
       )));
       vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
-        username, row, receiptRecord.receipt_date, { tx }
+        row, receiptRecord.receipt_date, { tx }
       )));
     }
 
@@ -725,7 +720,7 @@ async function createReceipt(username, data) {
       ...companyChargeAddCommands,
       ...vehicleBalanceAddCommands,
     ]);
-  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
+  }, { stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
 
   const receipt = Money.decimalizeRecord(results[0]);
 
@@ -766,14 +761,14 @@ function _receiptPaymentIdentity(row) {
   });
 }
 
-async function updateReceipt(username, id, data) {
-  if (!username) throw new Error('[FinancialService:update] username is required.');
+async function updateReceipt(...args) {
+  const [id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
   if (!id) throw new Error('[FinancialService:update] id is required.');
 
   const clean = _validate(data);
   const existingReceipt = await ReceiptRepository.getById(id);
   if (!existingReceipt) throw new Error('[FinancialService:update] receipt not found.');
-  const receiptHeader = _buildReceiptHeaderEntity(clean, username, id);
+  const receiptHeader = _buildReceiptHeaderEntity(clean, id);
   const nextRows = _buildReceiptRowEntities(clean.rows, id);
   const receiptRecord = {
     ...receiptHeader,
@@ -795,7 +790,7 @@ async function updateReceipt(username, id, data) {
     }
   }
 
-  const loadPriceCommands = await _loadPriceDiscoveryCommands(username, nextRows);
+  const loadPriceCommands = await _loadPriceDiscoveryCommands(nextRows);
   const creationReverseCommands = [];
   const paymentReverseCommands = [];
   const creationAddRows = [];
@@ -822,7 +817,7 @@ async function updateReceipt(username, id, data) {
       const creation = await _getActiveReceiptRowCompanyCharges(oldRow.row_id);
       expectedCreationEffectIds.set(rowKey, creation.map(entry => String(entry.id)).sort());
       if (creation.length > 0) {
-        creationReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(creation, username));
+        creationReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(creation));
       }
       if (nextRow) creationAddRows.push(nextRow);
     }
@@ -837,7 +832,7 @@ async function updateReceipt(username, id, data) {
       expectedPaymentEffectIds.set(rowKey, payment.companyLegs.map(entry => String(entry.id)).sort());
       if (oldPaid) {
         _assertCompleteReceiptPaymentCompanyEffect(payment, 'updateReceipt', oldRow);
-        paymentReverseCommands.push(..._receiptPaymentReverseCommands(payment.companyLegs, username));
+        paymentReverseCommands.push(..._receiptPaymentReverseCommands(payment.companyLegs));
       } else {
         _assertNoActiveReceiptPaymentEffects(payment, 'updateReceipt', oldRow.row_id);
       }
@@ -853,13 +848,13 @@ async function updateReceipt(username, id, data) {
   }
 
   const receiptCommand = ReceiptRepository.prepareReceiptOperation(
-    receiptRecord, { username }, PersistenceCommandType.UPDATE
+    receiptRecord, {}, PersistenceCommandType.UPDATE
   );
   const rowCommands = [];
   for (const oldRow of existingRows) {
     if (!nextById.has(String(oldRow.row_id))) {
       rowCommands.push(ReceiptRepository.prepareReceiptRowOperations(
-        [{ row_id: oldRow.row_id }], { username }, PersistenceCommandType.DELETE
+        [{ row_id: oldRow.row_id }], {}, PersistenceCommandType.DELETE
       )[0]);
     }
   }
@@ -867,7 +862,7 @@ async function updateReceipt(username, id, data) {
     const type = existingById.has(String(nextRow.row_id))
       ? PersistenceCommandType.UPDATE
       : PersistenceCommandType.ADD;
-    rowCommands.push(ReceiptRepository.prepareReceiptRowOperations([nextRow], { username }, type)[0]);
+    rowCommands.push(ReceiptRepository.prepareReceiptRowOperations([nextRow], {}, type)[0]);
   }
 
   const results = await DB.transaction(async (tx) => {
@@ -904,7 +899,7 @@ async function updateReceipt(username, id, data) {
     const creationAddCommands = [];
     for (const row of creationAddRows) {
       creationAddCommands.push(...(await _receiptRowCompanyChargeAddCommands(
-        username, row, receiptRecord.receipt_date, { tx }
+        row, receiptRecord.receipt_date, { tx }
       )));
     }
     const paymentAddCommands = [];
@@ -920,7 +915,7 @@ async function updateReceipt(username, id, data) {
           throw new Error('[FinancialService:updateReceipt] existing company payment has no posting date; reconcile it before editing.');
         }
       }
-      const commands = await _receiptPaymentAddCommands(username, row, paymentDate, { tx });
+      const commands = await _receiptPaymentAddCommands(row, paymentDate, { tx });
       paymentAddCommands.push(...commands);
       if (!oldPaid) newPaymentCommands.push(...commands);
     }
@@ -935,16 +930,16 @@ async function updateReceipt(username, id, data) {
           + 'reconcile legacy accounting explicitly before editing.'
         );
       }
-      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(active, username));
+      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(active));
       if (nextRow) {
         vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
-          username, nextRow, receiptRecord.receipt_date, { tx }
+          nextRow, receiptRecord.receipt_date, { tx }
         )));
       }
     }
     for (const row of vehicleBalanceNewRows) {
       vehicleBalanceAddCommands.push(...(await _receiptRowVehicleBalanceAddCommands(
-        username, row, receiptRecord.receipt_date, { tx }
+        row, receiptRecord.receipt_date, { tx }
       )));
     }
 
@@ -965,15 +960,15 @@ async function updateReceipt(username, id, data) {
       ...vehicleBalanceAddCommands,
       ...paymentAddCommands,
     ]);
-  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
+  }, { stores: ['receipts', 'receipt_rows', STORE.LEDGER, 'loadPrices', 'vehicles', 'offices'] });
 
   return { receipt: Money.decimalizeRecord(results[0]) };
 }
 
 // ─── PUBLIC: deleteReceipt ─────────────────────────────────────────────────────
 
-async function deleteReceipt(username, id) {
-  if (!username) throw new Error('[FinancialService:delete] username is required.');
+async function deleteReceipt(...args) {
+  const id = args.length === 2 ? args[1] : args[0];
   if (!id) throw new Error('[FinancialService:delete] id is required.');
 
   const existingRows = await _getExistingReceiptRows(id);
@@ -984,11 +979,11 @@ async function deleteReceipt(username, id) {
     await _assertReceiptRowsHaveNoActiveKartaSettlement(tx, currentRows, 'deleteReceipt');
 
     const receiptDeleteCommand = ReceiptRepository.prepareReceiptOperation(
-      { id }, { username }, PersistenceCommandType.DELETE
+      { id }, {}, PersistenceCommandType.DELETE
     );
     const receiptRowDeleteCommands = currentRows.map(row =>
       ReceiptRepository.prepareReceiptRowOperations(
-        [{ row_id: row.row_id }], { username }, PersistenceCommandType.DELETE
+        [{ row_id: row.row_id }], {}, PersistenceCommandType.DELETE
       )[0]
     );
     const companyChargeReverseCommands = [];
@@ -1009,11 +1004,11 @@ async function deleteReceipt(username, id) {
 
       const companyCreation = await _getActiveReceiptRowCompanyCharges(row.row_id, { tx });
       _assertReceiptRowCompanyCreationEffects(companyCreation, row, 'deleteReceipt');
-      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(companyCreation, username));
+      companyChargeReverseCommands.push(..._receiptRowCompanyChargeReverseCommands(companyCreation));
 
       const vehicleCreation = await _getActiveReceiptRowVehicleBalances(row.row_id, { tx });
       _assertExactlyOneActiveReceiptRowVehicleBalance(vehicleCreation, 'deleteReceipt', row.row_id);
-      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(vehicleCreation, username));
+      vehicleBalanceReverseCommands.push(..._receiptPaymentReverseCommands(vehicleCreation));
     }
 
     await WriteDataSource.executeWithinTransaction(tx, [
@@ -1022,7 +1017,7 @@ async function deleteReceipt(username, id) {
       ...companyChargeReverseCommands,
       ...vehicleBalanceReverseCommands,
     ]);
-  }, { username, stores: ['receipts', 'receipt_rows', STORE.LEDGER] });
+  }, { stores: ['receipts', 'receipt_rows', STORE.LEDGER] });
 
   return { id, deleted: true };
 }
@@ -1412,8 +1407,7 @@ async function getOfficeBalances(officeIds) {
  * maintenance metadata is absent, the existing manual deposit/withdraw
  * contract remains unchanged.
  */
-async function _prepareManualVehicleBalancePayload(username, data) {
-  if (!username) throw new Error('[FinancialService:createManualVehicleBalanceEntry] username is required.');
+async function _prepareManualVehicleBalancePayload(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createManualVehicleBalanceEntry] data must be a plain object.');
   }
@@ -1459,7 +1453,6 @@ async function _prepareManualVehicleBalancePayload(username, data) {
 
   const now = DateUtils.nowLocal();
   return {
-    username,
     owner_id: String(vehicle.owner_id || ''),
     owner_name: vehicle.owner_name || null,
     client_id: String(vehicle.id),
@@ -1503,13 +1496,14 @@ async function _getActiveManualVehicleBalanceEntries(reference_id) {
  * This is intentionally a single vehicle leg: it has no receipt-row, company,
  * driver, or Karta Settlement side effect.
  */
-async function createManualVehicleBalanceEntry(username, data) {
-  const payload = await _prepareManualVehicleBalancePayload(username, data);
+async function createManualVehicleBalanceEntry(...args) {
+  const data = args.length === 2 ? args[1] : args[0];
+  const payload = await _prepareManualVehicleBalancePayload(data);
   const [saved] = await DB.transaction([{
     op: 'add',
     store: STORE.LEDGER,
     payload,
-  }], { username });
+  }]);
 
   return Money.decimalizeRecord(saved);
 }
@@ -1519,15 +1513,16 @@ async function createManualVehicleBalanceEntry(username, data) {
  * manual record is audit-reversed and a fresh record is created, so an amount
  * or vehicle correction never leaves duplicate active withdrawals.
  */
-async function updateVehicleMaintenanceEntry(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateVehicleMaintenanceEntry] username is required.');
+async function updateVehicleMaintenanceEntry(...args) {
+  const [reference_id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+
   const active = await _getActiveManualVehicleBalanceEntries(reference_id);
   const previous = active.find(entry => entry.type === 'withdraw' && String(entry.maintenance_type || '').trim());
   if (!previous) {
     throw new Error('[FinancialService:updateVehicleMaintenanceEntry] maintenance transaction not found or already reversed.');
   }
 
-  const payload = await _prepareManualVehicleBalancePayload(username, {
+  const payload = await _prepareManualVehicleBalancePayload({
     ...data,
     entry_type: 'withdraw',
   });
@@ -1536,11 +1531,11 @@ async function updateVehicleMaintenanceEntry(username, reference_id, data) {
   }
 
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   const results = await DB.transaction([
     ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
     { op: 'add', store: STORE.LEDGER, payload },
-  ], { username });
+  ]);
 
   return Money.decimalizeRecord(results[results.length - 1]);
 }
@@ -1548,18 +1543,18 @@ async function updateVehicleMaintenanceEntry(username, reference_id, data) {
 /**
  * Reverse one logical manual vehicle movement without removing its audit row.
  */
-async function deleteManualVehicleBalanceEntry(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] username is required.');
+async function deleteManualVehicleBalanceEntry(...args) {
+  const reference_id = args.length === 2 ? args[1] : args[0];
+
   const active = await _getActiveManualVehicleBalanceEntries(reference_id);
   if (active.length === 0) {
     throw new Error('[FinancialService:deleteManualVehicleBalanceEntry] manual vehicle transaction not found or already reversed.');
   }
 
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   return DB.transaction(
-    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
-    { username }
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch }))
   );
 }
 
@@ -1569,8 +1564,8 @@ async function deleteManualVehicleBalanceEntry(username, reference_id) {
  * Create one manual company movement in the existing vehicle_ledger. This is
  * company-only and cannot affect a vehicle, receipt row, driver, or settlement.
  */
-async function createManualOfficeBalanceEntry(username, data) {
-  if (!username) throw new Error('[FinancialService:createManualOfficeBalanceEntry] username is required.');
+async function createManualOfficeBalanceEntry(...args) {
+  const data = args.length === 2 ? args[1] : args[0];
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createManualOfficeBalanceEntry] data must be a plain object.');
   }
@@ -1600,7 +1595,6 @@ async function createManualOfficeBalanceEntry(username, data) {
     op: 'add',
     store: STORE.LEDGER,
     payload: {
-      username,
       owner_id: String(office.id),
       owner_name: office.name || null,
       client_id: String(office.id),
@@ -1618,7 +1612,7 @@ async function createManualOfficeBalanceEntry(username, data) {
       is_reversed: false,
       note,
     },
-  }], { username });
+  }]);
 
   return Money.decimalizeRecord(saved);
 }
@@ -1626,8 +1620,9 @@ async function createManualOfficeBalanceEntry(username, data) {
 /**
  * Reverse one logical manual company movement while retaining its audit row.
  */
-async function deleteManualOfficeBalanceEntry(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] username is required.');
+async function deleteManualOfficeBalanceEntry(...args) {
+  const reference_id = args.length === 2 ? args[1] : args[0];
+
   const referenceKey = String(reference_id || '').trim();
   if (!referenceKey) throw new Error('[FinancialService:deleteManualOfficeBalanceEntry] reference_id is required.');
 
@@ -1643,10 +1638,9 @@ async function deleteManualOfficeBalanceEntry(username, reference_id) {
   }
 
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   return DB.transaction(
-    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
-    { username }
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch }))
   );
 }
 
@@ -1678,8 +1672,7 @@ async function _fetchLedgerEntries(id, label) {
  * intentionally driver-only: no vehicle, office, capital-book, receipt, or Karta
  * posting is created alongside this ledger row.
  */
-async function _prepareManualDriverBalancePayload(username, data) {
-  if (!username) throw new Error('[FinancialService:createManualDriverBalanceEntry] username is required.');
+async function _prepareManualDriverBalancePayload(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createManualDriverBalanceEntry] data must be a plain object.');
   }
@@ -1710,7 +1703,6 @@ async function _prepareManualDriverBalancePayload(username, data) {
   }
 
   return {
-    username,
     owner_id: String(driver.id),
     owner_name: driver.name || null,
     client_id: String(driver.id),
@@ -1747,13 +1739,14 @@ async function _getActiveManualDriverBalanceEntries(reference_id) {
  * Create exactly one direct driver balance movement. A deposit raises the
  * driver's balance and a withdrawal lowers it; neither posts to a vehicle.
  */
-async function createManualDriverBalanceEntry(username, data) {
-  const payload = await _prepareManualDriverBalancePayload(username, data);
+async function createManualDriverBalanceEntry(...args) {
+  const data = args.length === 2 ? args[1] : args[0];
+  const payload = await _prepareManualDriverBalancePayload(data);
   const [saved] = await DB.transaction([{
     op: 'add',
     store: STORE.LEDGER,
     payload,
-  }], { username });
+  }]);
 
   return Money.decimalizeRecord(saved);
 }
@@ -1762,24 +1755,25 @@ async function createManualDriverBalanceEntry(username, data) {
  * Edit a direct driver movement through the established audit convention:
  * reverse its active row, then atomically add a replacement row.
  */
-async function updateManualDriverBalanceEntry(username, reference_id, data) {
-  if (!username) throw new Error('[FinancialService:updateManualDriverBalanceEntry] username is required.');
+async function updateManualDriverBalanceEntry(...args) {
+  const [reference_id, data] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+
   const active = await _getActiveManualDriverBalanceEntries(reference_id);
   if (active.length === 0) {
     throw new Error('[FinancialService:updateManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
   }
 
   const previous = active[0];
-  const payload = await _prepareManualDriverBalancePayload(username, {
+  const payload = await _prepareManualDriverBalancePayload({
     ...data,
     driver_id: data?.driver_id || previous.owner_id,
   });
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   const results = await DB.transaction([
     ...active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
     { op: 'add', store: STORE.LEDGER, payload },
-  ], { username });
+  ]);
 
   return Money.decimalizeRecord(results[results.length - 1]);
 }
@@ -1787,18 +1781,18 @@ async function updateManualDriverBalanceEntry(username, reference_id, data) {
 /**
  * Reverse one direct driver movement while retaining its audit history.
  */
-async function deleteManualDriverBalanceEntry(username, reference_id) {
-  if (!username) throw new Error('[FinancialService:deleteManualDriverBalanceEntry] username is required.');
+async function deleteManualDriverBalanceEntry(...args) {
+  const reference_id = args.length === 2 ? args[1] : args[0];
+
   const active = await _getActiveManualDriverBalanceEntries(reference_id);
   if (active.length === 0) {
     throw new Error('[FinancialService:deleteManualDriverBalanceEntry] manual driver transaction not found or already reversed.');
   }
 
   const now = DateUtils.nowLocal();
-  const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+  const reversePatch = { is_reversed: true, reversed_at: now };
   return DB.transaction(
-    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch })),
-    { username }
+    active.map(entry => ({ op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch }))
   );
 }
 
@@ -1933,7 +1927,6 @@ function _assertNoActiveKartaSettlementPair(context, operation) {
 }
 
 function _buildKartaSettlementLegPayloads({
-  username,
   row,
   driverId,
   vehicle,
@@ -1952,7 +1945,6 @@ function _buildKartaSettlementLegPayloads({
 
   return [
     {
-      username,
       owner_id: driverId,
       owner_name: null,
       client_id: null,
@@ -1970,7 +1962,6 @@ function _buildKartaSettlementLegPayloads({
       note,
     },
     {
-      username,
       owner_id: String(vehicle.owner_id || ''),
       owner_name: vehicle.owner_name || null,
       client_id: String(vehicle.owner_id || ''),
@@ -2119,8 +2110,9 @@ async function getDriverKartasSummary(driverId) {
  * Patch only the persisted Driver Details settlement price of one receipt row.
  * This write never creates or changes vehicle_ledger records.
  */
-async function updateDriverKartaSettlementPrice(username, rowId, value) {
-  if (!username) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] username is required.');
+async function updateDriverKartaSettlementPrice(...args) {
+  const [rowId, value] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+
   const rowKey = String(rowId ?? '').trim();
   if (!rowKey) throw new Error('[FinancialService:updateDriverKartaSettlementPrice] row_id is required.');
 
@@ -2138,7 +2130,7 @@ async function updateDriverKartaSettlementPrice(username, rowId, value) {
     store: 'receipt_rows',
     id: rowKey,
     patch: { driver_settlement_price },
-  }], { username });
+  }]);
 
   const decimalized = Money.decimalizeRecord(saved);
   return {
@@ -2154,8 +2146,9 @@ async function updateDriverKartaSettlementPrice(username, rowId, value) {
  * its own receipt-row reference and vehicle withdrawal; batch_id only groups
  * the audit records created together.
  */
-async function createKartaSettlementBatch(username, driverId, rowIds) {
-  if (!username) throw new Error('[FinancialService:createKartaSettlementBatch] username is required.');
+async function createKartaSettlementBatch(...args) {
+  const [driverId, rowIds] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+
   const driverKey = String(driverId ?? '').trim();
   if (!driverKey) throw new Error('[FinancialService:createKartaSettlementBatch] driver_id is required.');
   if (!Array.isArray(rowIds) || rowIds.length === 0) {
@@ -2256,7 +2249,6 @@ async function createKartaSettlementBatch(username, driverId, rowIds) {
     const ops = [];
     for (const { row, vehicle, priceCents } of eligible) {
       const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
-        username,
         row,
         driverId: driverKey,
         vehicle,
@@ -2283,7 +2275,7 @@ async function createKartaSettlementBatch(username, driverId, rowIds) {
       total: Money.toDecimal(totalCents),
       affected_vehicle_count: new Set(eligible.map(item => String(item.vehicle.id))).size,
     };
-  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'drivers'] });
+  }, { stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'drivers'] });
 }
 
 async function getKartaSettlementHistory(rowId) {
@@ -2298,8 +2290,7 @@ async function getKartaSettlementHistory(rowId) {
     .map(Money.decimalizeRecord);
 }
 
-async function createKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:createKartaSettlement] username is required.');
+async function createKartaSettlement(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:createKartaSettlement] data must be a plain object.');
   }
@@ -2327,7 +2318,6 @@ async function createKartaSettlement(username, data) {
     _assertNoActiveKartaSettlementPair(context, 'createKartaSettlement');
 
     const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
-      username,
       row: context.row,
       driverId: context.driverId,
       vehicle: context.vehicle,
@@ -2339,7 +2329,7 @@ async function createKartaSettlement(username, data) {
       { op: 'add', store: STORE.LEDGER, payload: driverLeg },
       { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
     ]);
-  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
+  }, { stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
@@ -2352,8 +2342,7 @@ async function createKartaSettlement(username, data) {
  * Replace one complete active Karta settlement with a corrected pair. The row
  * driver and vehicle remain authoritative; old legs are audit-reversed.
  */
-async function updateKartaSettlement(username, data) {
-  if (!username) throw new Error('[FinancialService:updateKartaSettlement] username is required.');
+async function updateKartaSettlement(data) {
   if (!data || typeof data !== 'object') {
     throw new Error('[FinancialService:updateKartaSettlement] data must be a plain object.');
   }
@@ -2380,9 +2369,8 @@ async function updateKartaSettlement(username, data) {
     }
     _assertCompleteKartaSettlementPair(context, 'updateKartaSettlement');
 
-    const reversePatch = { is_reversed: true, reversed_at: DateUtils.nowLocal(), reversed_by: username };
+    const reversePatch = { is_reversed: true, reversed_at: DateUtils.nowLocal() };
     const [driverLeg, vehicleLeg] = _buildKartaSettlementLegPayloads({
-      username,
       row: context.row,
       driverId: context.driverId,
       vehicle: context.vehicle,
@@ -2396,7 +2384,7 @@ async function updateKartaSettlement(username, data) {
       { op: 'add', store: STORE.LEDGER, payload: driverLeg },
       { op: 'add', store: STORE.LEDGER, payload: vehicleLeg },
     ]);
-  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
+  }, { stores: [STORE.LEDGER, 'receipt_rows', 'drivers', 'vehicles'] });
 
   return {
     success: true,
@@ -2406,8 +2394,9 @@ async function updateKartaSettlement(username, data) {
   };
 }
 
-async function reverseKartaSettlement(username, settlementReferenceId) {
-  if (!username) throw new Error('[FinancialService:reverseKartaSettlement] username is required.');
+async function reverseKartaSettlement(...args) {
+  const settlementReferenceId = args.length === 2 ? args[1] : args[0];
+
   const rowId = String(settlementReferenceId || '').trim();
   if (!rowId) throw new Error('[FinancialService:reverseKartaSettlement] settlementReferenceId is required.');
 
@@ -2420,14 +2409,14 @@ async function reverseKartaSettlement(username, settlementReferenceId) {
     _assertCompleteKartaSettlementPair(context, 'reverseKartaSettlement');
 
     const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    const reversePatch = { is_reversed: true, reversed_at: now };
     await tx.runOps(context.pair.activeLegs.map(leg => ({
       op: 'update',
       store: STORE.LEDGER,
       id: leg.id,
       patch: reversePatch,
     })));
-  }, { username, stores: [STORE.LEDGER, 'receipt_rows'] });
+  }, { stores: [STORE.LEDGER, 'receipt_rows'] });
 
   return {
     success: true,
@@ -2444,8 +2433,9 @@ async function reverseKartaSettlement(username, settlementReferenceId) {
 // paid   → unpaid : reverse that company posting exactly once
 // Vehicle net is a separate creation-side effect and never changes here.
 // Status write and company posting commit in ONE atomic DB.transaction.
-async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
-  if (!username) throw new Error('[FinancialService:setReceiptRowPaymentStatus] username is required.');
+async function setReceiptRowPaymentStatus(...args) {
+  const [rowId, targetStatus] = args.length === 3 ? [args[1], args[2]] : [args[0], args[1]];
+
   const rowKey = String(rowId ?? '').trim();
   if (!rowKey) throw new Error('[FinancialService:setReceiptRowPaymentStatus] row_id is required.');
   const target = targetStatus === PAYMENT_STATUS.PAID ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.UNPAID;
@@ -2484,7 +2474,7 @@ async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
 
     if (target === PAYMENT_STATUS.PAID) {
       _assertNoActiveReceiptPaymentEffects(payment, 'setReceiptRowPaymentStatus', rowKey);
-      const legs = await _receiptPaymentAddCommands(username, row, null, { tx });
+      const legs = await _receiptPaymentAddCommands(row, null, { tx });
       const transitionDate = DateUtils.cairoTodayStrict();
       for (const leg of legs) leg.payload.date = transitionDate;
       await tx.runOps([
@@ -2503,7 +2493,7 @@ async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
 
     _assertCompleteReceiptPaymentCompanyEffect(payment, 'setReceiptRowPaymentStatus', row);
     const now = DateUtils.nowLocal();
-    const reversePatch = { is_reversed: true, reversed_at: now, reversed_by: username };
+    const reversePatch = { is_reversed: true, reversed_at: now };
     await tx.runOps([
       ...payment.companyLegs.map(entry => ({
         op: 'update', store: STORE.LEDGER, id: entry.id, patch: reversePatch,
@@ -2518,7 +2508,7 @@ async function setReceiptRowPaymentStatus(username, rowId, targetStatus) {
       vehicle_id: row.vehicle_id,
       office_id: payment.companyLegs[0].client_id,
     };
-  }, { username, stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'offices'] });
+  }, { stores: [STORE.LEDGER, 'receipt_rows', 'vehicles', 'offices'] });
 }
 
 export const FinancialService = Object.freeze({

@@ -147,12 +147,9 @@ async function boot() {
       return;
     }
 
-    const username = session.username;
-    if (!username) {
-      throw new Error('Session username is required');
+    if (!session || session.username !== 'admin') {
+      throw new Error('Valid admin session is required');
     }
-
-    window.__APP_CONTEXT__ = Object.freeze({ username });
 
     await DB.init();
 
@@ -289,7 +286,7 @@ async function _exportFullBackup() {
     const snapshot = await createBackupSnapshot(db, {
       canonicalStoreNames: _backupCanonicalStoreNames(),
       exportedAt: DateUtils.nowLocal(),
-      exportedBy: window.__APP_CONTEXT__?.username || 'unknown',
+      exportedBy: 'admin',
     });
     // Validate the exact JSON representation that will be downloaded. This
     // rejects values that JSON would omit or transform before any download is requested.

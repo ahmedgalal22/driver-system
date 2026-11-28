@@ -2,18 +2,16 @@ import { DBProvider } from './dbProvider.js';
 
 /**
  * Persistence boundary for the embedded Dashboard Capital Treasury section.
- * It intentionally does not expose the removed standalone Treasury subsystem
- * and does not interact with vehicle_ledger.
  */
 export const DashboardRepository = {
-  async getCapitalTransactions(username) {
+  async getCapitalTransactions() {
     const all = await DBProvider.getAll('mainCapitalTreasury');
     return all.filter(t => t && t.deleted_at === null);
   },
-  async saveTransaction(payload, meta) {
-    return DBProvider.save('mainCapitalTreasury', payload, meta);
+  async saveTransaction(payload) {
+    return DBProvider.save('mainCapitalTreasury', payload);
   },
-  async deleteTransaction(id, meta) {
-    return DBProvider.delete('mainCapitalTreasury', id, meta);
+  async deleteTransaction(id) {
+    return DBProvider.delete('mainCapitalTreasury', id);
   },
 };
