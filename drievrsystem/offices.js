@@ -165,18 +165,18 @@ async function updateOffice(username, id, patch) {
   let renameDetail = null;
   const updated = await OfficeRepository.transaction(async (tx) => {
     const office = await tx.getById(STORE, String(id));
-    if (!office || office.username !== username) {
-      throw new Error('[OfficesService] office not found or cross-user access forbidden.');
+    if (!office) {
+      throw new Error('[OfficesService] office not found.');
     }
     if (nextPatch.name !== undefined) {
-      const offices = await tx.getAll(STORE, { username });
+      const offices = await tx.getAll(STORE);
       const dup = offices.some((o) => String(o.id) !== String(id)
         && String(o.name || '').trim().toLowerCase() === nextPatch.name.toLowerCase());
       if (dup) throw new Error(`[OfficesService] duplicate office name: ${nextPatch.name}`);
 
       if (nextPatch.name !== office.name) {
         renameDetail = { username, previousName: office.name, officeName: nextPatch.name };
-        const receipts = await tx.getAll('receipts', { username });
+        const receipts = await tx.getAll('receipts');
         const receiptIds = new Set(receipts.map((receipt) => String(receipt.id)));
         const rows = await tx.getAll('receipt_rows');
         const oldName = String(office.name || '').trim().toLowerCase();
@@ -216,9 +216,6 @@ async function getOfficeById(id, username) {
   if (!id) throw new Error('[OfficesService:getOfficeById] id is required.');
   const office = await OfficeRepository.getById(String(id));
   if (!office || office.deleted_at !== null) return null;
-  if (office.username !== username) {
-    throw new Error('[OfficesService] cross-user access is forbidden.');
-  }
   return office;
 }
 

@@ -27,7 +27,7 @@
 <script type="module">
 const DB_NAME = 'Operating System';
 const TARGET_VERSION = 17;
-const USER = 'migration-harness';
+const USER = 'admin';
 const logEl = document.getElementById('log');
 const runButton = document.getElementById('run');
 const confirmBox = document.getElementById('confirm');
@@ -140,7 +140,7 @@ async function seedV16({ extraStore = false, extraIndex = false, wrongRequiredIn
   const now = 1700000000000;
   const audit = { username: USER, created_at: now, created_by: USER, updated_at: now, updated_by: USER, deleted_at: null };
   const records = {
-    users: [{ ...audit, id: 1, password_hash: 'fixture', role: 'admin' }],
+    users: [{ ...audit, id: 1, password_hash: 'fixture' }],
     vehicleOwners: [{ ...audit, id: 'owner-1', name: 'Fixture Owner' }],
     offices: [{ ...audit, id: 2, name: 'Fixture Office', phone: null }],
     vehicles: [{ ...audit, id: 10, plate: 'FIX-10', owner_id: 'owner-1', owner_name: 'Fixture Owner', office_id: 2 }],

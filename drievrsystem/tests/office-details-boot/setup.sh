@@ -19,6 +19,7 @@ cp "$(dirname "${BASH_SOURCE[0]}")/run.mjs" "$W/"
 # copied verbatim above; these simply keep unrelated page initializers inert.
 cat > "$W/auth.js" <<'EOF'
 export const AuthModule = Object.freeze({
+  initialize: async () => {},
   getSession: () => globalThis.__OFFICE_BOOT_SESSION__ || null,
   logout: () => {},
 });

@@ -257,7 +257,7 @@ ok(createdDrv && createdDrv.id != null && createdDrv.name === 'السائق أح
 const dupDrv = await ClientRepository.createDriverUnique(U, 'السائق أحمد');
 ok(String(dupDrv.id) === String(createdDrv.id),
   'duplicate prevention: normalized (trim) lookup returns the existing driver — no second record persisted');
-const drvStoreRows = (await ClientRepository.getDriversForUser(U))
+const drvStoreRows = (await ClientRepository.getDrivers())
   .filter(d => d && d.deleted_at == null && String(d.name || '').trim() === 'السائق أحمد');
 ok(drvStoreRows.length === 1,
   `drivers store holds exactly ONE «السائق أحمد» after two quick-create attempts (got ${drvStoreRows.length})`);
@@ -274,7 +274,7 @@ const h2 = await ClientRepository.createDriverUnique(U, 'أحمد   علي'); //
 const h3 = await ClientRepository.createDriverUnique(U, 'أَحْمـد عَلـي'); // diacritics + tatweel
 ok(h1.id != null && String(h2.id) === String(h1.id) && String(h3.id) === String(h1.id),
   'duplicate prevention extended: hamza-fold + collapsed spaces + diacritics/tatweel → existing record reused');
-const hamzaRows = (await ClientRepository.getDriversForUser(U))
+const hamzaRows = (await ClientRepository.getDrivers())
   .filter(d => d && d.deleted_at == null && normalizeDriverName(d.name) === 'احمد علي');
 ok(hamzaRows.length === 1,
   `drivers store holds exactly ONE «احمد علي» after three visually-identical attempts (got ${hamzaRows.length})`);

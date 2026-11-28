@@ -10,7 +10,7 @@ const { WriteDataSource } = await import('./services/writeDataSource.js');
 const { ReceiptRepository } = await import('./services/receiptRepository.js');
 const { PersistenceCommandType } = await import('./services/persistenceCommand.js');
 
-const U = 'tester';
+const U = 'admin';
 let failures = 0;
 const ok = (cond, label) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`); if (!cond) failures++; };
 const uuid = () => crypto.randomUUID();
@@ -145,6 +145,51 @@ threw = null;
 try { await FinancialService.updateReceipt(U, 'does-not-exist', makePayload({ rows: makePayload().rows })); }
 catch (e) { threw = e.message; }
 ok(!!threw, `update of missing receipt rejected atomically (${(threw || '').slice(0, 60)}…)`);
+
+// ─── STEP 7: one administrator can access and edit existing records ───────────
+console.log('\n— STEP 7: shared reads and updates preserve audit metadata —');
+const { ClientRepository } = await import('./services/clientRepository.js');
+const { OfficeRepository } = await import('./services/officeRepository.js');
+const { DashboardRepository } = await import('./services/dashboardRepository.js');
+const auditOrigin = 'audit-origin';
+const admin = 'admin';
+const auditDriver = await ClientRepository.saveDriver({ id: uuid(), username: auditOrigin, name: 'Audit driver' }, { username: auditOrigin });
+const auditOffice = await DB.add('offices', { id: uuid(), username: auditOrigin, name: 'Audit office' }, { username: auditOrigin });
+const auditTreasury = await DB.add('mainCapitalTreasury', { id: uuid(), username: auditOrigin, type: 'deposit', amount: 100 }, { username: auditOrigin });
+const auditPayload = makePayload({ rows: [{ ...makePayload().rows[0], row_id: uuid() }] });
+const auditReceipt = (await FinancialService.createReceipt(auditOrigin, auditPayload)).receipt;
+ok((await ClientRepository.getDrivers(admin)).some(d => d.id === auditDriver.id)
+  && (await OfficeRepository.getAll(admin)).some(o => o.id === auditOffice.id)
+  && (await ReceiptRepository.getAll(admin)).some(r => r.id === auditReceipt.id)
+  && (await DashboardRepository.getCapitalTransactions(admin)).some(t => t.id === auditTreasury.id),
+  'driver, office, receipt and treasury reads include active records regardless of audit username');
+const receiptReadInTx = await DB.transaction(tx => ReceiptRepository.getAll(admin, { tx }), { username: admin, stores: ['receipts'] });
+ok(receiptReadInTx.some(r => r.id === auditReceipt.id), 'transactional receipt read ignores audit username');
+const unique = await ClientRepository.createDriverUnique(admin, 'Audit driver');
+ok(unique.id === auditDriver.id, 'driver quick-add avoids duplicates across audit metadata values');
+const oldReceipt = await DB.getById('receipts', auditReceipt.id);
+const oldDriver = await DB.getById('drivers', auditDriver.id);
+await ClientRepository.updateDriver(auditDriver.id, { phone: '123', username: admin }, { username: admin });
+const updatedDriver = await DB.getById('drivers', auditDriver.id);
+ok(updatedDriver.username === auditOrigin && updatedDriver.created_by === oldDriver.created_by
+  && updatedDriver.updated_by === admin && updatedDriver.phone === '123',
+  'standalone update preserves original username and creator while recording the acting admin');
+await DB.transaction(tx => tx.update('offices', auditOffice.id, { phone: '456', username: admin }),
+  { username: admin, stores: ['offices'] });
+const updatedOffice = await DB.getById('offices', auditOffice.id);
+ok(updatedOffice.username === auditOrigin && updatedOffice.created_by === auditOrigin && updatedOffice.updated_by === admin,
+  'callback transaction update preserves historical username and creator');
+await DB.transaction([{ op: 'update', store: 'mainCapitalTreasury', id: auditTreasury.id, patch: { note: 'edited', username: admin } }], { username: admin });
+const updatedTreasury = await DB.getById('mainCapitalTreasury', auditTreasury.id);
+ok(updatedTreasury.username === auditOrigin && updatedTreasury.created_by === auditOrigin && updatedTreasury.updated_by === admin,
+  'batch transaction update preserves historical username and creator');
+await FinancialService.updateReceipt(admin, auditReceipt.id, auditPayload);
+const updatedReceipt = await DB.getById('receipts', auditReceipt.id);
+ok(updatedReceipt.username === auditOrigin && updatedReceipt.created_by === oldReceipt.created_by && updatedReceipt.updated_by === admin,
+  'financial receipt edit retains its original username and creator with admin audit metadata');
+await DashboardRepository.deleteTransaction(auditTreasury.id, { username: admin });
+ok(!(await DashboardRepository.getCapitalTransactions(admin)).some(t => t.id === auditTreasury.id),
+  'admin can delete a treasury transaction regardless of audit username through the existing soft-delete path');
 
 console.log(`\n${failures === 0 ? '✅ ALL WRITE-PATH ASSERTIONS PASSED' : '❌ FAILURES: ' + failures}`);
 process.exit(failures === 0 ? 0 : 1);

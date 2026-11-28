@@ -56,45 +56,31 @@ async function verifyPassword(password, hash) {
   return expected === hash;
 }
 
-async function createInitialUsers() {
+async function initialize() {
   await DB.init();
+}
 
-  const existing = await AuthRepository.getAllUsers();
+async function createInitialAdmin() {
+  // Never replace or reactivate a stored admin, including a soft-deleted one.
+  const existing = await DB.findByFields('users', { username: 'admin' }, { includeDeleted: true });
   if (existing.length > 0) return null;
-
-  const adminHash = await hashPassword('admin123');
-  const userHash = await hashPassword('user123');
 
   const adminPayload = {
     id: _uuid(),
     username: 'admin',
-    password_hash: adminHash,
-    role: 'admin',
+    password_hash: await hashPassword('admin123'),
   };
-
-  const userPayload = {
-    id: _uuid(),
-    username: 'user',
-    password_hash: userHash,
-    role: 'user',
-  };
-
   await AuthRepository.saveUser(adminPayload, { username: adminPayload.username });
-  await AuthRepository.saveUser(userPayload, { username: userPayload.username });
-  return { admin: adminPayload, user: userPayload };
+  return adminPayload;
 }
 
 async function login(username, password) {
   const cleanUsername = _assertString(username, 'username');
   const cleanPassword = _assertString(password, 'password');
 
-  // Temporarily disable normal user account during trial phase
-  if (cleanUsername.trim().toLowerCase() === 'user') {
-    throw new Error('هذا الحساب غير مفعل حالياً');
-  }
-
-  await DB.init();
-  await createInitialUsers();
+  await initialize();
+  if (cleanUsername !== 'admin') throw new Error('Invalid credentials');
+  await createInitialAdmin();
 
   const user = await AuthRepository.getUser(cleanUsername);
 
@@ -107,13 +93,8 @@ async function login(username, password) {
     throw new Error('Invalid credentials');
   }
 
-  if (user.role !== 'admin' && user.role !== 'user') {
-    throw new Error('[Auth] Invalid role');
-  }
-
   localStorage.setItem(SESSION_KEY, JSON.stringify({
     username: user.username,
-    role: user.role,
   }));
 
   return user;
@@ -139,11 +120,10 @@ function getSession() {
 
   if (!parsed || typeof parsed !== 'object') return null;
   if (typeof parsed.username !== 'string' || parsed.username.trim() === '') return null;
-  if (parsed.role !== 'admin' && parsed.role !== 'user') return null;
+  if (parsed.username !== 'admin') return null;
 
   return {
     username: parsed.username,
-    role: parsed.role,
   };
 }
 
@@ -158,7 +138,8 @@ function requireSession() {
 const AuthService = Object.freeze({
   hashPassword,
   verifyPassword,
-  createInitialUsers,
+  initialize,
+  createInitialAdmin,
   login,
   logout,
   getSession,
@@ -172,6 +153,7 @@ const AuthService = Object.freeze({
 // ========================================
 
 const AuthModule = Object.freeze({
+  initialize: () => AuthService.initialize(),
   login: (username, password) => AuthService.login(username, password),
   logout: () => AuthService.logout(),
   getSession: () => AuthService.getSession(),
@@ -183,12 +165,6 @@ const AuthModule = Object.freeze({
 // ========================================
 // Helpers
 // ========================================
-
-function isAdmin() {
-  return AuthModule.getSession()?.role === 'admin';
-}
-
-
 
 // ========================================
 // Login Page — Events / Boot
@@ -225,18 +201,22 @@ async function _handleSubmit(event) {
   }
 }
 
-function bootLoginPage() {
+async function bootLoginPage() {
   if (typeof document === 'undefined') return;
   const form = _byId('loginForm');
   if (!form) return;
 
-  const session = AuthModule.getSession();
-  if (session) {
-    window.location.href = 'index.html';
-    return;
-  }
-
   form.addEventListener('submit', _handleSubmit);
+  try {
+    await initialize();
+    const session = AuthModule.getSession();
+    if (session) {
+      window.location.href = 'index.html';
+      return;
+    }
+  } catch (err) {
+    _setError(err?.message || 'تعذر تهيئة تسجيل الدخول');
+  }
 }
 
 bootLoginPage();
@@ -247,4 +227,4 @@ bootLoginPage();
 // Public API
 // ========================================
 
-export { AuthService, AuthModule, isAdmin };
+export { AuthService, AuthModule };

@@ -6,7 +6,7 @@ export const OfficeRepository = {
     return (tx ? tx.getById('offices', normId) : DBProvider.get('offices', normId));
   },
   async getAll(username) {
-    return DBProvider.findByFields('offices', { username });
+    return DBProvider.getAll('offices');
   },
   // Company name is the offices master-data identity (unique by_name index);
   // the receipt-row payment engine resolves its اسم الشركة snapshot through this.

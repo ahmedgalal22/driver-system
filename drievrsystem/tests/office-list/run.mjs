@@ -67,7 +67,10 @@ const rowOfDeletedReceipt = { row_id: crypto.randomUUID(), receipt_id: deletedRe
 await DB.add('receipt_rows', rowOfDeletedReceipt, { username: U });
 await DB.delete('receipts', deletedReceipt.id, { username: U });
 const foreign = { row_id: crypto.randomUUID(), receipt_id: crypto.randomUUID(), office: 'Original' };
-await DB.add('receipt_rows', foreign, { username: 'another-user' });
+await DB.add('receipt_rows', foreign, { username: 'audit-origin' });
+const foreignReceipt = await DB.add('receipts', { id: crypto.randomUUID(), username: 'audit-origin' }, { username: 'audit-origin' });
+const foreignLinkedRow = { row_id: crypto.randomUUID(), receipt_id: foreignReceipt.id, username: 'audit-origin', office: 'Original' };
+await DB.add('receipt_rows', foreignLinkedRow, { username: 'audit-origin' });
 const beforeOffice = await DB.getById('offices', office.id);
 const beforeRows = await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id)));
 const beforeBalance = (await FinancialService.getOfficeBalance(office.id)).balance;
@@ -90,10 +93,15 @@ for (const failAt of ['after-first-row', 'office-write']) {
   assert.deepEqual(await DB.getById('offices', office.id), beforeOffice);
   assert.deepEqual(await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id))), beforeRows);
 }
-// A global unique-index collision bypasses the per-user duplicate check and
-// fails at the real final IndexedDB office put, after the row writes.
-await DB.add('offices', { id: crypto.randomUUID(), username: 'another-user', name: 'Global collision' }, { username: 'another-user' });
-await assert.rejects(OfficesService.updateOffice(U, office.id, { name: 'Global collision' }));
+// Inject a real unique-index collision at the final put after linked row writes.
+await DB.add('offices', { id: crypto.randomUUID(), username: 'audit-origin', name: 'Global collision' }, { username: 'audit-origin' });
+OfficeRepository.transaction = (callback, meta) => originalTransaction(async tx => callback({
+  ...tx, async update(store, id, patch) {
+    return tx.update(store, id, store === 'offices' ? { ...patch, name: 'Global collision' } : patch);
+  },
+}), meta);
+try { await assert.rejects(OfficesService.updateOffice(U, office.id, { name: specialName })); }
+finally { OfficeRepository.transaction = originalTransaction; }
 assert.deepEqual(await DB.getById('offices', office.id), beforeOffice);
 assert.deepEqual(await Promise.all([row.row_id, row2.row_id].map(id => DB.getById('receipt_rows', id))), beforeRows);
 console.log('PASS rollback after a row update and at the final office write, including a real index constraint error');
@@ -120,6 +128,10 @@ assert.equal(updatedOffice.name, specialName);
 for (const id of [row.row_id, row2.row_id]) assert.equal((await DB.getById('receipt_rows', id)).office, specialName);
 assert.equal((await DB.getById('receipt_rows', unrelated.row_id)).office, 'Other');
 assert.equal((await DB.getById('receipt_rows', foreign.row_id)).office, 'Original');
+const renamedForeign = await DB.getById('receipt_rows', foreignLinkedRow.row_id);
+assert.equal(renamedForeign.office, specialName);
+assert.equal(renamedForeign.username, 'audit-origin');
+assert.equal(renamedForeign.updated_by, U);
 assert.equal((await DB.getById('receipt_rows', rowOfDeletedReceipt.row_id)).office, 'Original');
 assert.equal((await DB.findByFields('receipt_rows', { row_id: deletedRow.row_id }, { includeDeleted: true }))[0].office, 'Original');
 assert.equal((await FinancialService.getOfficeBalance(office.id)).balance, beforeBalance);
@@ -150,9 +162,13 @@ await FinancialService.setReceiptRowPaymentStatus(U, row2.row_id, 'paid');
 assert.equal((await FinancialService.getOfficeBalance(office.id)).balance, 25.5);
 console.log('PASS paid receipt edit preserves payment date and office; reversal, deletion and later payment succeed');
 await assert.rejects(OfficesService.updateOffice(U, office.id, { name: '  oThEr  ' }), /duplicate/);
-await assert.rejects(OfficesService.updateOffice('another-user', office.id, { name: 'Bad' }));
+await assert.rejects(OfficesService.updateOffice(U, office.id, { name: 'Global collision' }), /duplicate/);
+const auditEdit = await OfficesService.updateOffice('audit-origin', office.id, { phone: '456' });
+assert.equal(auditEdit.username, U);
+assert.equal(auditEdit.updated_by, 'audit-origin');
+assert.equal((await OfficesService.getOfficeById(office.id, 'audit-origin')).phone, '456');
 assert.equal((await DB.getById('offices', office.id)).name, specialName);
-console.log('PASS duplicate and cross-user renames rejected');
+console.log('PASS duplicate names rejected and edits preserve the original audit username');
 
 // Exercise the actual receipt-form helper without reconstructing the user's draft.
 const src = readFileSync('./receipts.src.js', 'utf8');
@@ -172,8 +188,8 @@ scope.refresh({ username: U, previousName: 'Original', officeName: specialName }
 assert.deepEqual(draft.map(input => input.value), [specialName, 'Other', 'Original extra']);
 assert.deepEqual({ loading: draftRows[0].loading, net: draftRows[0].net, note: draftRows[0].note }, { loading: 'unsaved load', net: '42', note: 'keep me' });
 assert.equal(draftRows[1].loading, 'another unsaved value');
-scope.refresh({ username: 'another-user', previousName: specialName, officeName: 'Wrong' });
-assert.equal(draft[0].value, specialName);
+scope.refresh({ username: 'audit-origin', previousName: specialName, officeName: 'Shared name' });
+assert.equal(draft[0].value, 'Shared name');
 assert.equal(scope.escape(specialName), 'New &quot;office&quot; &amp; &lt;partners&gt; &#39;Ltd&#39;');
 await scope.load();
 assert.equal(optionsHtml, '<option value="New &quot;office&quot; &amp; &lt;partners&gt; &#39;Ltd&#39;">');

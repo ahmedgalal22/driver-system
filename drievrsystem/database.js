@@ -122,7 +122,7 @@ const DB = (() => {
     },
 
     /**
-     * vehicleOwners: vehicle owners (clients) scoped by username.
+     * vehicleOwners: vehicle owners (clients).
      */
     vehicleOwners: {
       name          : 'vehicleOwners',
@@ -413,11 +413,11 @@ const DB = (() => {
     if (!meta || !meta.username) {
       throw new Error('[DB] meta.username is required');
     }
-    if ('username' in payload && payload.username !== meta.username) {
-      throw new Error('[DB] username must match session user');
-    }
     if ('created_by' in payload || 'updated_by' in payload) {
       throw new Error('[DB] payload must not contain audit fields');
+    }
+    if (isNew && 'username' in payload && payload.username !== meta.username) {
+      throw new Error('[DB] username must match session user');
     }
 
     const now = Date.now();
@@ -433,6 +433,27 @@ const DB = (() => {
     }
 
     return next;
+  }
+
+  function _assertAdminAccount(storeName, record) {
+    if (storeName === 'users' && record?.username !== 'admin') {
+      throw new Error('[DB] only the admin account is supported');
+    }
+  }
+
+  function _assertAccountPatch(storeName, patch) {
+    if (storeName === 'users' && patch && 'username' in patch && patch.username !== 'admin') {
+      throw new Error('[DB] only the admin account is supported');
+    }
+  }
+
+  // Keep the original username snapshot on edits; the acting user is recorded
+  // separately in updated_by. Receipt updates may include a new username.
+  function _mergeUpdate(existing, patch) {
+    const merged = { ...existing, ...patch };
+    if (Object.prototype.hasOwnProperty.call(existing, 'username')) merged.username = existing.username;
+    else delete merged.username;
+    return merged;
   }
 
   /**
@@ -548,6 +569,7 @@ const DB = (() => {
     await _ensure_ready();
     _assert_ready();
     const record    = _inject_meta(payload, true, meta);
+    _assertAdminAccount(storeName, record);
     const { store } = _open_tx(storeName, 'readwrite');
     const id        = await _req(store.add(record));
 
@@ -564,6 +586,7 @@ const DB = (() => {
    */
   async function update(storeName, id, patch, meta) {
     if (!meta?.username) throw new Error('[DB.update] username required');
+    _assertAccountPatch(storeName, patch);
     await _ensure_ready();
     _assert_ready();
     return new Promise((resolve, reject) => {
@@ -589,7 +612,11 @@ const DB = (() => {
           return reject(_wrap_error('update', '[DB] payload must not contain audit fields'));
         }
 
-        const merged = { ...existing, ...patch };
+        const merged = _mergeUpdate(existing, patch);
+        if (storeName === 'users' && merged.username !== 'admin') {
+          tx.abort();
+          return reject(_wrap_error('update', '[DB] only the admin account is supported'));
+        }
         const { created_by, updated_by, ...clean } = merged;
         const updated = _inject_meta(clean, false, meta);
         if (created_by !== undefined) updated.created_by = created_by;
@@ -642,6 +669,10 @@ const DB = (() => {
           deleted_at: now,
         };
 
+        if (storeName === 'users' && deleted.username !== 'admin') {
+          tx.abort();
+          return reject(_wrap_error('delete', '[DB] only the admin account is supported'));
+        }
         const putReq = store.put(deleted);
 
         putReq.onsuccess = () => resolve(deleted);
@@ -698,6 +729,17 @@ const DB = (() => {
         if (done) return;
         done = true;
         reject(err);
+      }
+
+      function guardAccount(check, storeName, value) {
+        try {
+          check(storeName, value);
+        } catch (err) {
+          // Abort immediately, even if the callback catches the rejection.
+          try { tx.abort(); } catch (_) {}
+          finishReject(err);
+          throw err;
+        }
       }
 
       function txStore(storeName) {
@@ -763,11 +805,13 @@ const DB = (() => {
 
         async add(storeName, payload) {
           const staged = _inject_meta(payload, true, meta);
+          guardAccount(_assertAdminAccount, storeName, staged);
           const id = await txReq(txStore(storeName).add(staged), `tx:add:${storeName}`);
           return { ...staged, id };
         },
 
         async update(storeName, id, patch, options = {}) {
+          guardAccount(_assertAccountPatch, storeName, patch);
           const store = txStore(storeName);
           const existing = await txReq(store.get(id), `tx:update:get:${storeName}`);
           if (!existing) {
@@ -780,7 +824,8 @@ const DB = (() => {
             throw _wrap_error('tx:update', '[DB] payload must not contain audit fields');
           }
 
-          const merged = { ...existing, ...patch };
+          const merged = _mergeUpdate(existing, patch);
+          guardAccount(_assertAdminAccount, storeName, merged);
           const { created_by, updated_by, ...clean } = merged;
           const updated = _inject_meta(clean, false, meta);
           if (created_by !== undefined) updated.created_by = created_by;
@@ -789,6 +834,7 @@ const DB = (() => {
         },
 
         async delete(storeName, id, patch = null) {
+          guardAccount(_assertAccountPatch, storeName, patch);
           const store = txStore(storeName);
           const existing = await txReq(store.get(id), `tx:delete:get:${storeName}`);
           if (!existing) {
@@ -805,6 +851,7 @@ const DB = (() => {
             updated_by: meta.username,
             deleted_at: now,
           };
+          guardAccount(_assertAdminAccount, storeName, deleted);
           await txReq(store.put(deleted), `tx:delete:put:${storeName}`);
           return deleted;
         },
@@ -890,6 +937,10 @@ const DB = (() => {
         op: o.op || o.type,
       }));
       const storeNames = [...new Set(normalizedOps.map((o) => o.store))];
+      for (const op of normalizedOps) {
+        if (op.op === 'add') _assertAdminAccount(op.store, op.payload);
+        if (op.op === 'update' || op.op === 'delete') _assertAccountPatch(op.store, op.patch);
+      }
 
       // Validate all store names exist
       for (const name of storeNames) {
@@ -928,6 +979,12 @@ const DB = (() => {
               payloadUser: op.payload?.username,
             });
             staged  = _inject_meta(op.payload, true, meta);
+            try {
+              _assertAdminAccount(op.store, staged);
+            } catch (err) {
+              tx.abort();
+              return reject(_wrap_error('transaction:add', err.message || err));
+            }
             request = store.add(staged);
             request.onsuccess = () => {
               results.push({ ...staged, id: request.result });
@@ -961,7 +1018,11 @@ const DB = (() => {
                 return reject(_wrap_error('transaction:update', '[DB] payload must not contain audit fields'));
               }
 
-              const merged = { ...existing, ...op.patch };
+              const merged = _mergeUpdate(existing, op.patch);
+              if (op.store === 'users' && merged.username !== 'admin') {
+                tx.abort();
+                return reject(_wrap_error('transaction:update', '[DB] only the admin account is supported'));
+              }
               _debug_log('transaction:update:merged', {
                 store: op.store,
                 id: op.id,
@@ -1017,6 +1078,10 @@ const DB = (() => {
                 updated_by: meta.username,
                 deleted_at: now,
               };
+              if (op.store === 'users' && deleted.username !== 'admin') {
+                tx.abort();
+                return reject(_wrap_error('transaction:delete', '[DB] only the admin account is supported'));
+              }
               const putReq   = store.put(deleted);
               putReq.onsuccess = () => {
                 results.push(deleted);

@@ -23,8 +23,8 @@ export const ReceiptRepository = {
 
   async getAll(username, { tx } = {}) {
     return tx
-      ? tx.getAll('receipts', { username })
-      : DBProvider.getAll('receipts', { username });
+      ? tx.getAll('receipts')
+      : DBProvider.getAll('receipts');
   },
 
   async update(id, patch, meta) {

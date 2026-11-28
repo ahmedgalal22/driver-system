@@ -55,11 +55,8 @@ export const ClientRepository = {
     const normId = typeof id === 'string' && !isNaN(Number(id)) ? Number(id) : id;
     return (tx ? tx.getById('drivers', normId) : DBProvider.get('drivers', normId));
   },
-  async getDriversForUser(username) {
-    return DBProvider.findByFields('drivers', { username });
-  },
-  async getDrivers(username) {
-    return DBProvider.getByIndex('drivers', 'by_username', username);
+  async getDrivers() {
+    return DBProvider.getAll('drivers');
   },
   async saveDriver(payload, meta) {
     return DBProvider.save('drivers', payload, meta);
@@ -81,7 +78,7 @@ export const ClientRepository = {
     const trimmed = String(name ?? '').trim();
     if (!username) throw new Error('[ClientRepository:createDriverUnique] username is required.');
     if (!trimmed)  throw new Error('[ClientRepository:createDriverUnique] name is required.');
-    const list = (await this.getDriversForUser(username))
+    const list = (await this.getDrivers())
       .filter(d => d && d.deleted_at == null);
     const existing = list.find(d => String(d.name || '').trim() === trimmed)
       || list.find(d => normalizeDriverName(d.name) === normalizeDriverName(trimmed));

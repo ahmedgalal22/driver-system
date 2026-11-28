@@ -1203,7 +1203,7 @@ function _escapeOfficeOption(value) {
 }
 
 function _refreshRenamedOfficeInDraft(detail) {
-  if (!detail || detail.username !== _currentUsername() || !detail.previousName || !detail.officeName) return;
+  if (!detail || !detail.previousName || !detail.officeName) return;
   const oldName = String(detail.previousName).trim().toLowerCase();
   document.querySelectorAll('#receiptTableBody .receipt-office').forEach(input => {
     if (String(input.value || '').trim().toLowerCase() === oldName) input.value = detail.officeName;
@@ -1245,7 +1245,7 @@ async function _receiptLoadDriverOptions() {
   // vehicle, last use date); phone comes free from the driver record. A
   // driver with no usage data renders the suggestion as name-only.
   const [drivers, rows] = await Promise.all([
-    ClientRepository.getDriversForUser(username),
+    ClientRepository.getDrivers(),
     DBProvider.getAll('receipt_rows'),
   ]);
   const usageByDriver = new Map(); // driverId → { kartas, lastVehicle, lastDate, _key }
@@ -2616,7 +2616,7 @@ async function collectReceiptRows() {
     let rowDriverName = null;
     if (rowDriverText) {
       if (!driverIndex) {
-        const ds = (await ClientRepository.getDriversForUser(_currentUsername()))
+        const ds = (await ClientRepository.getDrivers())
           .filter(d => d && d.deleted_at == null);
         driverIndex = ds.map(d => ({ rec: d, trimmed: String(d.name || '').trim(), norm: normalizeDriverName(d.name) }));
       }

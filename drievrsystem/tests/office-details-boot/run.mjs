@@ -116,7 +116,7 @@ function installDom() {
 const { byId } = installDom();
 globalThis.sessionStorage = createStorage();
 globalThis.localStorage = createStorage();
-globalThis.__OFFICE_BOOT_SESSION__ = { username: USERNAME, role: 'admin' };
+globalThis.__OFFICE_BOOT_SESSION__ = { username: USERNAME };
 globalThis.window = globalThis;
 globalThis.window.addEventListener = () => {};
 globalThis.window.removeEventListener = () => {};

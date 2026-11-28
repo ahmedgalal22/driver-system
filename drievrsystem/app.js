@@ -88,19 +88,6 @@ function _resolvePageKey(pageName, targetId) {
 }
 
 async function showPage(pageName) {
-  const session = AuthModule.getSession();
-  const role = session?.role || 'user';
-
-  // Secure Navigation Layer
-  if (role !== 'admin') {
-    const targetEl = _resolvePageElement(pageName);
-    const targetId = targetEl?.id || '';
-    const pageKey = _resolvePageKey(pageName, targetId);
-    if (pageKey === 'dashboardPage' || targetId === 'dashboardPage') {
-      pageName = 'homePage';
-    }
-  }
-
   const pages = document.querySelectorAll('.page');
   pages.forEach(p => p.classList.add('hidden'));
 
@@ -132,11 +119,7 @@ async function showPage(pageName) {
     await loadLoadPrices();
   }
   if (pageName === 'dashboardPage' || targetId === 'dashboardPage') {
-    if (role === 'admin') {
-      await initDashboardPage();
-    } else {
-      await showPage('homePage');
-    }
+    await initDashboardPage();
   }
   if (pageName === 'homePage' || targetId === 'homePage') {
     initHomePage();
@@ -157,6 +140,7 @@ function _bindLogout() {
 
 async function boot() {
   try {
+    await AuthModule.initialize();
     const session = AuthModule.getSession();
     if (!session) {
       window.location.href = 'login.html';
@@ -168,20 +152,9 @@ async function boot() {
       throw new Error('Session username is required');
     }
 
-    window.__APP_CONTEXT__ = Object.freeze({
-      username,
-      role: session.role,
-    });
+    window.__APP_CONTEXT__ = Object.freeze({ username });
 
     await DB.init();
-
-    // Secure Sidebar Visibility for non-admins
-    if (session.role !== 'admin') {
-      const dbLink = document.querySelector('[data-page="dashboardPage"]');
-      if (dbLink) {
-        dbLink.remove();
-      }
-    }
 
     initSidebarLayout();
     _bindLogout();
@@ -337,11 +310,12 @@ async function _exportFullBackup() {
   }
 }
 
-function _restoreSummary(backup) {
-  const totalRecords = Object.values(backup._meta.recordCounts)
+function _restoreSummary(backup, validated) {
+  const totalRecords = Object.values(validated.recordCounts)
     .reduce((sum, count) => sum + count, 0);
   return {
-    storeCount: backup._meta.storeNames.length,
+    storeCount: validated.storeNames.length,
+    accountCount: validated.recordCounts.users,
     totalRecords,
     exportDate: backup._meta.exportedAt
       ? new Date(backup._meta.exportedAt).toLocaleString('ar-EG')
@@ -405,7 +379,7 @@ async function _importFullBackup() {
       validated = validateBackupSnapshot(db, backup, {
         canonicalStoreNames: _backupCanonicalStoreNames(),
       });
-      summary = _restoreSummary(backup);
+      summary = _restoreSummary(backup, validated);
     } catch (err) {
       console.error('[Backup] Validation failed:', err);
       alert(`❌ لم يتم استيراد النسخة الاحتياطية\n${err.message || 'ملف النسخة غير صالح'}\nلم يتم تغيير أي بيانات.`);
@@ -416,7 +390,8 @@ async function _importFullBackup() {
     const message = `⚠️ النسخة الاحتياطية اجتازت التحقق الأولي\n\n`
       + `📅 تاريخ النسخة: ${summary.exportDate}\n`
       + `📦 عدد الجداول: ${summary.storeCount}\n`
-      + `📊 عدد السجلات: ${summary.totalRecords}\n\n`
+      + `📊 عدد السجلات: ${summary.totalRecords}\n`
+      + `👤 عدد الحسابات: ${summary.accountCount}\n\n`
       + `⚠️ سيتم استبدال جميع الجداول النشطة في عملية واحدة.\n`
       + `⚠️ أغلق أي تبويبات أخرى لنظام Karta قبل المتابعة.\n\n`
       + `هل تريد المتابعة؟`;

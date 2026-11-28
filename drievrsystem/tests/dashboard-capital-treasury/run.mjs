@@ -7,8 +7,8 @@ const { DB } = await import('./database.js');
 const { Money } = await import('./money.js');
 const { DashboardRepository } = await import('./services/dashboardRepository.js');
 
-const U = 'capital-owner';
-const OTHER = 'other-owner';
+const U = 'admin';
+const AUDIT_ORIGIN = 'audit-origin';
 const CAPITAL_ENTRY_TYPE = Object.freeze({ DEPOSIT: 'deposit', WITHDRAW: 'withdraw' });
 const DOMAIN_EVENT = Object.freeze({ CAPITAL_CHANGED: 'capital:changed' });
 const DASHBOARD_SRC = readFileSync('./dashboard.js', 'utf8');
@@ -61,7 +61,7 @@ ok(DASHBOARD_SRC.includes('الخزنة الرئيسية (رأس المال ال
    && DASHBOARD_SRC.includes("capital:changed"),
   'Dashboard source contains only the approved embedded Capital Treasury surface');
 
-console.log('\n— real repository persistence / username scoping —');
+console.log('\n— real repository persistence / shared data —');
 const emitted = [];
 globalThis.CustomEvent = class CustomEvent {
   constructor(type) { this.type = type; }
@@ -79,13 +79,14 @@ const addCapital = materialize(sourceAddCapital, '_addCapitalTransaction', {
 
 await addCapital(U, CAPITAL_ENTRY_TYPE.DEPOSIT, 250.75, 'رأس مال افتتاحي', '2026-08-01');
 await addCapital(U, CAPITAL_ENTRY_TYPE.WITHDRAW, 50.25, 'سحب تشغيلي', '2026-08-02');
-await addCapital(OTHER, CAPITAL_ENTRY_TYPE.DEPOSIT, 999, 'لا يظهر للمالك الأول', '2026-08-03');
+await addCapital(AUDIT_ORIGIN, CAPITAL_ENTRY_TYPE.DEPOSIT, 999, 'قيد اختبار', '2026-08-03');
 
 const ownLive = await DashboardRepository.getCapitalTransactions(U);
 const deposit = ownLive.find(entry => entry.note === 'رأس مال افتتاحي');
 const withdrawal = ownLive.find(entry => entry.note === 'سحب تشغيلي');
-ok(ownLive.length === 2 && ownLive.every(entry => entry.username === U),
-  'getCapitalTransactions is scoped to the requested username');
+ok(ownLive.length === 3 && ownLive.some(entry => entry.username === AUDIT_ORIGIN)
+   && (await DashboardRepository.getCapitalTransactions(AUDIT_ORIGIN)).length === 3,
+  'getCapitalTransactions includes active entries regardless of audit username');
 ok(deposit?.type === 'deposit' && deposit.amount === 25075
    && withdrawal?.type === 'withdraw' && withdrawal.amount === 5025,
   'Capital deposit and withdrawal use the real dashboard source function and persist cent amounts');
@@ -113,7 +114,7 @@ const renderCapital = materialize(sourceRenderCapital, '_renderCapitalTreasury',
   _esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
 });
 await renderCapital(U);
-ok(balanceEl.textContent.includes('200.50'),
+ok(balanceEl.textContent.includes('1,199.50') || balanceEl.textContent.includes('1199.50'),
   'Capital balance is all active deposits minus all active withdrawals');
 ok(tableBody.innerHTML.includes('سحب تشغيلي') && !tableBody.innerHTML.includes('رأس مال افتتاحي'),
   'Capital search filters transaction history without changing total balance');
@@ -124,13 +125,14 @@ console.log('\n— soft deletion —');
 await DashboardRepository.deleteTransaction(deposit.id, { username: U });
 const liveAfterDelete = await DashboardRepository.getCapitalTransactions(U);
 const includingDeleted = await DB.findByFields('mainCapitalTreasury', { id: deposit.id }, { includeDeleted: true });
-ok(liveAfterDelete.length === 1 && liveAfterDelete[0].id === withdrawal.id,
-  'deleted Capital transaction is excluded from live history');
+ok(liveAfterDelete.length === 2 && liveAfterDelete.some(entry => entry.id === withdrawal.id)
+   && liveAfterDelete.some(entry => entry.username === AUDIT_ORIGIN),
+  'deleted Capital transaction is excluded while other entries remain visible');
 ok(includingDeleted.length === 1 && includingDeleted[0].deleted_at !== null,
   'Capital delete uses the existing soft-delete behavior');
 STATE.capitalSearchQuery = '';
 await renderCapital(U);
-ok(balanceEl.textContent.includes('-50.25') && tableBody.innerHTML.includes('سحب تشغيلي'),
+ok(balanceEl.textContent.includes('948.75') && tableBody.innerHTML.includes('سحب تشغيلي'),
   'soft-deleted deposit no longer contributes to Capital balance or table');
 
 console.log('\n— print data —');

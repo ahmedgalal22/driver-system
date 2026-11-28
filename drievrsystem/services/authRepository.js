@@ -5,10 +5,8 @@ export const AuthRepository = {
     const results = await DBProvider.findByFields('users', { username });
     return results[0] || null;
   },
-  async getAllUsers() {
-    return DBProvider.getAll('users');
-  },
   async saveUser(payload, meta) {
+    if (payload?.username !== 'admin') throw new Error('[AuthRepository] only admin is supported');
     return DBProvider.save('users', payload, meta);
   }
 };
